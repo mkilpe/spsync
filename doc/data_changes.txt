@@ -1,0 +1,3 @@
+
+* single change in data structure
+* possibility to aggregate multiple changes to one visible change for the outer system

@@ -1,0 +1,18 @@
+
+Goal:
+	* support multiple users
+		* multiple users with separate public keys
+		* multiple instances of the same user
+	* simple access rights (read/write/admin?)
+
+User identified by public key.
+
+
+Questions:
+* Where are the public keys stored?
+* Multiple instances of same user -- use same public key or separate? How should it work?
+
+
+Access rights:
+
+

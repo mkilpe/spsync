@@ -1,0 +1,11 @@
+
+1: File synchronisation which works well on mobile: 
+	* Allow to fetch data for individual files only
+	* support aggregated changes (i.e. allow to establish well known state in history where one can easily go back)
+	* structure where some object depend on others (think of files under directories)
+
+2: Single object synchronisation (aka synchronised remote object)
+	* One change for one object synchronised at time (still using same chain on the server)
+
+3: Multi object synchronisation
+	* Changes from multiple objects aggregated as one change

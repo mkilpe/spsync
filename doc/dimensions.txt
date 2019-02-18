@@ -1,0 +1,10 @@
+
+Dimensions
+
+client side:
+	* data structure version
+	* sequence of the data
+
+server side:
+	* sequence of the data
+	* multi server setup

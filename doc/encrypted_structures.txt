@@ -1,0 +1,40 @@
+
+needs to support following changes:
+
+* data changes
+* user changes
+* seal points
+
+All of these changes should form a chain of blocks which can be traversed and proven authentic.
+
+consider:
+* forward security
+* backward security
+* malleability
+* seal points to avoid checking full history
+
+Access structure:
+list of members:
+	* key id
+	* access rights (read/write/admin)
+	* encrypted symmetric keys
+	* do we need meta data for members?
+
+All structures in chain have:
+	* client last seen seq
+	* seq from server
+	* signature/tag
+
+Chain of structures:
+
+- Root block: -- consider how to authenticate the root block 
+	* Access structure
+	* encrypted meta data (like rules, eg. force signature instead of mac)
+
+- User change:
+	* Access structure
+
+- Object change:
+	
+
+- block seal:

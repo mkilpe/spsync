@@ -1,0 +1,2 @@
+
+No default conflict handling as the data is arbitrary. Let user provide conflict handling per data structure.
