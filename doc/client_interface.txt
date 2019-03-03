@@ -1,0 +1,10 @@
+
+* std::uint64_t current_sequence();
+
+* header_stream fetch_headers(std::uint64_t seq_start, std::uint64_t seq_end);
+* data_stream fetch_data(record_id);
+
+*
+
+//client incoming
+* void on_change();

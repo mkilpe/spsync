@@ -3,7 +3,7 @@ needs to support following changes:
 
 * data changes
 * user changes
-* seal points
+* segment end points
 
 All of these changes should form a chain of blocks which can be traversed and proven authentic.
 
@@ -11,7 +11,7 @@ consider:
 * forward security
 * backward security
 * malleability
-* seal points to avoid checking full history
+* segment end points to avoid checking full history and protecting the changes
 
 Access structure:
 list of members:
@@ -27,14 +27,45 @@ All structures in chain have:
 
 Chain of structures:
 
-- Root block: -- consider how to authenticate the root block 
+- Root block: -- consider how to authenticate the root block
+	* sequence
 	* Access structure
-	* encrypted meta data (like rules, eg. force signature instead of mac)
+	* iv for encrypted data and key id
+	* encrypted meta data (like rules, e.g. force signature instead of tag)
+	* signature/tag
 
 - User change:
+	* sequence
 	* Access structure
+	* iv for encrypted data and key id
+	* encrypted meta data
+	* signature/tag
 
 - Object change:
-	
+	- single change
+		* sequence
+		* object id
+		* iv for encrypted data and key id
+		* encrypted header
+		* signature/tag
 
-- block seal:
+	- aggregated change
+		* sequence
+		* list of object ids
+		* iv for encrypted data and key id
+		* encrypted header
+		* signature/tag
+
+- segment end:
+	* sequence
+	* start and end seq ?
+	* list of objects ids?
+	* iv for encrypted data and key id
+	* encrypted meta data
+	* signature/tag
+
+think:
+ - aggregate change?
+ - push to server rules?
+ - segment end?
+ -
