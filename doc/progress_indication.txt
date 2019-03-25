@@ -1,0 +1,17 @@
+
+TODO: how to handle other feedback, conflicts et al to the user?
+
+Design to handle correct progress indication for everything important that is vital from the beginning. Users always want to see progress!
+
+Design progress type that allow at least progress of the following:
+
+Communication layer:
+	* per entity upload/download progress
+
+Sync Engine:
+	* current seq num/progress to get to the current seq num (separate user change, special changes and data changes)
+	* local pending changes/waiting uploads
+
+FileSync:
+	* local changed files waiting processing
+	* remote changed files waiting synchronisation
