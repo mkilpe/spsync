@@ -1,0 +1,61 @@
+#ifndef SPSYNC_UTIL_METADATA_HEADER
+#define SPSYNC_UTIL_METADATA_HEADER
+
+#include <securepath/util/octet_vector.hpp>
+#include <securepath/serialisation/types.hpp>
+
+#include <string>
+#include <map>
+
+namespace securepath::sync::util {
+
+/**
+ * \brief Key value pair for metadata.
+ *
+ * Keeps arbitrary metadata as serialised, the wanted data with a type can be queried.
+**/
+class metadata {
+public:
+	using key_type = std::string;
+
+	///insert (or replace) typed data which will be serialised
+	template<typename Data>
+	void insert(key_type const& key, Data const& data) {
+		insert(key, asn_der_serialise(data));
+	}
+
+	///insert (or replace) octet vector raw data
+	void insert(key_type const& key, octet_vector const&);
+
+	///find data matching the key and return typed object
+	///\throws serialisation_error if type of the serialised object doesn't match
+	template<typename Data>
+	std::optional<Data> find(key_type const& key) const {
+		std::optional<Data> ret;
+		auto v = find(key);
+		if(v) {
+			ret = asn_der_deserialise<Data>(*v);
+		}
+		return ret;
+	}
+
+	///find data matching the key
+	std::optional<octet_vector> find(key_type const& key) const;
+
+	///remove  data assosiated with the key
+	void erase(key_type const& key);
+
+	template<typename Ar>
+	void serialise(Ar& ar) {
+		serialiation::sequence<Ar> seq(ar);
+		seq & data_ & trailing_data_;
+	}
+
+private:
+	std::map<key_type, octet_vector> data_;
+	serialisation::trailing_data trailing_data_;
+};
+
+}
+
+#endif
