@@ -3,6 +3,9 @@
 	[
 		{
 			"path": "."
+		},
+		{
+			"path": "/home/mikael/dev/sp-backup"
 		}
 	]
 }

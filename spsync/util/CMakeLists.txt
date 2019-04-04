@@ -1,2 +1,5 @@
 file(GLOB SRC *.cpp *.hpp)
 add_library(spsync_util STATIC ${SRC})
+target_link_libraries(spsync_util crypto serialisation util log)
+
+add_subdirectory(test)

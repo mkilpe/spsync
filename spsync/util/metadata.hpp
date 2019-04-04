@@ -2,7 +2,9 @@
 #define SPSYNC_UTIL_METADATA_HEADER
 
 #include <securepath/util/octet_vector.hpp>
-#include <securepath/serialisation/types.hpp>
+#include <securepath/serialisation/map.hpp>
+#include <securepath/serialisation/sequence.hpp>
+#include <securepath/serialisation/util.hpp>
 
 #include <string>
 #include <map>
@@ -21,11 +23,11 @@ public:
 	///insert (or replace) typed data which will be serialised
 	template<typename Data>
 	void insert(key_type const& key, Data const& data) {
-		insert(key, asn_der_serialise(data));
+		insert(key, serialisation::asn_der_serialise(data));
 	}
 
 	///insert (or replace) octet vector raw data
-	void insert(key_type const& key, octet_vector const&);
+	void insert(key_type const& key, octet_vector);
 
 	///find data matching the key and return typed object
 	///\throws serialisation_error if type of the serialised object doesn't match
@@ -34,7 +36,7 @@ public:
 		std::optional<Data> ret;
 		auto v = find(key);
 		if(v) {
-			ret = asn_der_deserialise<Data>(*v);
+			ret = serialisation::asn_der_deserialise<Data>(*v);
 		}
 		return ret;
 	}
@@ -47,7 +49,7 @@ public:
 
 	template<typename Ar>
 	void serialise(Ar& ar) {
-		serialiation::sequence<Ar> seq(ar);
+		serialisation::sequence<Ar> seq(ar);
 		seq & data_ & trailing_data_;
 	}
 

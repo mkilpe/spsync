@@ -1,17 +1,16 @@
 #ifndef SPSYNC_UTIL_CONTENT_AUTH_HEADER
 #define SPSYNC_UTIL_CONTENT_AUTH_HEADER
 
-#include <securepath/crypto/hash.hpp>
+#include <securepath/crypto/signature.hpp>
 #include <securepath/serialisation/types.hpp>
 
 namespace securepath::sync::util {
 
 /** content authenticity, contains for example signature to make sure a piece of data is authentic
- * This can curretly be either asymmetric cryptography signature or AES GCM tag
+ * This can has always AES GCM tag and optional asymmetric cryptography signature over this tag
  */
 class content_auth {
 public:
-
 
 	template<typename Ar>
 	void serialise(Ar& ar) {
@@ -19,6 +18,11 @@ public:
 		seq & trailing_data;
 	}
 private:
+	//AES GCM tag over the record
+	octet_vector gcm_tag_;
+
+	//optional signature over the gcm_tag
+	std::optional<crypto::signature> signature_;
 	serialisastion::trailing_data trailing_data
 };
 

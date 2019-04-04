@@ -14,6 +14,7 @@ public:
 	/// sets the server sequence number
 	void set_server_sequence(sequence_number const&);
 
+
 	template<typename Ar>
 	void serialise(Ar& ar) {
 		serialisation::sequence<Ar> seq(ar);
