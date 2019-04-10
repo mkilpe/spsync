@@ -4,6 +4,26 @@
 		"selected_items":
 		[
 			[
+				"ser",
+				"server_sequence_"
+			],
+			[
+				"record",
+				"record_type"
+			],
+			[
+				"obje",
+				"object_id_size"
+			],
+			[
+				"object",
+				"object_id"
+			],
+			[
+				"sync",
+				"sync_engine"
+			],
+			[
 				"elapse",
 				"elapsed_millis"
 			],
@@ -348,28 +368,55 @@
 	"buffers":
 	[
 		{
-			"file": "doc/client_interface.txt",
+			"file": "spsync/util/test/test_metadata.cpp",
 			"settings":
 			{
-				"buffer_size": 196,
+				"buffer_size": 1291,
 				"encoding": "UTF-8",
 				"line_ending": "Unix"
 			}
 		},
 		{
-			"file": "doc/dimensions.txt",
+			"file": "spsync/core/records/data_change_record.hpp",
 			"settings":
 			{
-				"buffer_size": 137,
+				"buffer_size": 688,
 				"encoding": "UTF-8",
 				"line_ending": "Unix"
 			}
 		},
 		{
-			"file": "doc/encrypted_structures.txt",
+			"file": "spsync/core/records/record_base.hpp",
 			"settings":
 			{
-				"buffer_size": 1430,
+				"buffer_size": 799,
+				"encoding": "UTF-8",
+				"line_ending": "Unix"
+			}
+		},
+		{
+			"file": "spsync/core/records/record.hpp",
+			"settings":
+			{
+				"buffer_size": 951,
+				"encoding": "UTF-8",
+				"line_ending": "Unix"
+			}
+		},
+		{
+			"file": "spsync/util/content_auth.hpp",
+			"settings":
+			{
+				"buffer_size": 780,
+				"encoding": "UTF-8",
+				"line_ending": "Unix"
+			}
+		},
+		{
+			"file": "spsync/util/metadata.hpp",
+			"settings":
+			{
+				"buffer_size": 1568,
 				"encoding": "UTF-8",
 				"line_ending": "Unix"
 			}
@@ -424,10 +471,56 @@
 	"expanded_folders":
 	[
 		"/home/mikael/dev/spsync",
-		"/home/mikael/dev/spsync/doc"
+		"/home/mikael/dev/spsync/doc",
+		"/home/mikael/dev/spsync/spsync",
+		"/home/mikael/dev/spsync/spsync/core",
+		"/home/mikael/dev/spsync/spsync/core/records",
+		"/home/mikael/dev/spsync/spsync/engine",
+		"/home/mikael/dev/spsync/spsync/util",
+		"/home/mikael/dev/spsync/spsync/util/test"
 	],
 	"file_history":
 	[
+		"/home/mikael/dev/sp-backup/src/securepath/serialisation/test/test_map.cpp",
+		"/home/mikael/dev/sp-backup/src/securepath/util/octet_vector.hpp",
+		"/home/mikael/dev/sp-backup/src/securepath/test_frame/test_serialisation.hpp",
+		"/home/mikael/dev/sp-backup/src/securepath/serialisation/test/util.hpp",
+		"/home/mikael/dev/sp-backup/src/securepath/serialisation/util.hpp",
+		"/home/mikael/dev/spsync/doc/client_interface.txt",
+		"/home/mikael/dev/spsync/doc/architecture.adoc",
+		"/home/mikael/dev/spsync/spsync/engine/sync_engine.hpp",
+		"/home/mikael/dev/spsync/spsync/core/records/record_base.hpp",
+		"/home/mikael/dev/spsync/spsync/util/content_auth.hpp",
+		"/home/mikael/dev/spsync/spsync/util/CMakeLists.txt",
+		"/home/mikael/dev/sp-backup/src/CMakeLists.txt",
+		"/home/mikael/dev/spsync/CMakeLists.txt",
+		"/home/mikael/dev/spsync/cmake.config",
+		"/home/mikael/dev/sp-backup/src/securepath/serialisation/test/test_serialisation.cpp",
+		"/home/mikael/dev/spsync/spsync/util/metadata.hpp",
+		"/home/mikael/dev/spsync/spsync/util/metadata.cpp",
+		"/home/mikael/dev/spsync/spsync/util/hash.hpp",
+		"/home/mikael/dev/sp-backup/src/securepath/crypto/signature.hpp",
+		"/home/mikael/dev/spsync/spsync/core/data_change_header.hpp",
+		"/home/mikael/dev/spsync/spsync/core/types.hpp",
+		"/home/mikael/dev/spsync/spsync/core/records/data_change_record.hpp",
+		"/home/mikael/dev/spsync/spsync/util/object_id.hpp",
+		"/home/mikael/dev/spsync/spsync/util/object_id.cpp",
+		"/home/mikael/dev/sp-backup/src/securepath/crypto/random.hpp",
+		"/home/mikael/dev/sp-backup/src/securepath/crypto/random.cpp",
+		"/home/mikael/dev/spsync/spsync/core/records/segment_record.hpp",
+		"/home/mikael/dev/spsync/spsync/core/records/user_change_record.hpp",
+		"/home/mikael/dev/spsync/spsync/server/server_lib/spsync_server.hpp",
+		"/home/mikael/dev/spsync/spsync/server/server_lib/spsync_server.cpp",
+		"/home/mikael/dev/spsync/spsync/server/main.cpp",
+		"/home/mikael/dev/spsync/spsync/engine/sync_engine.cpp",
+		"/home/mikael/dev/spsync/doc/testing.txt",
+		"/home/mikael/dev/spsync/doc/progress_indication.txt",
+		"/home/mikael/dev/spsync/doc/dimensions.txt",
+		"/home/mikael/dev/spsync/.gitignore",
+		"/home/mikael/.config/sublime-merge/Packages/User/Commit Message.sublime-settings",
+		"/home/mikael/dev/spsync/doc/encrypted_structures.txt",
+		"/home/mikael/dev/sp-backup/src/cmake.main",
+		"/home/mikael/dev/sp-backup/src/securepath/crypto/aes_gcm.hpp",
 		"/home/mikael/dev/sam_trunk/framework/dsp/client/startup_config.hpp",
 		"/home/mikael/dev/sam_trunk/framework/dsp/client/client_context.cpp",
 		"/home/mikael/dev/sam_trunk/framework/cryptotec/filesystem/detail/operations.ipp",
@@ -515,47 +608,7 @@
 		"/home/mikael/dev/sam_trunk/sam/contact/contact_handler.cpp",
 		"/home/mikael/dev/sam_trunk/sam/file_transfer/qt/file_transfer_request_notification.cpp",
 		"/home/mikael/dev/sam_trunk/sam/contact/qt/detail/address_change_notification.cpp",
-		"/home/mikael/dev/sam_trunk/sam/file_transfer/qt/file_transfer_request_notification.hpp",
-		"/home/mikael/dev/sam_trunk/sam/file_transfer/file_transfer_handler.cpp",
-		"/home/mikael/dev/sam_trunk/sam/file_transfer/file_transfer_handler.hpp",
-		"/home/mikael/dev/sam_trunk/sam/common/file_transfer_interface.hpp",
-		"/home/mikael/dev/sam_trunk/framework/trust_anchor/server_lib/trust_anchor_bitcoin.cpp",
-		"/home/mikael/dev/sam_trunk/framework/cryptotec/serialisation/serialisation_test/asn/coding/ber_decoding_test.cpp",
-		"/home/mikael/dev/sam_trunk/framework/cryptotec/filesystem/file_win32.cpp",
-		"/home/mikael/dev/sam_trunk/framework/cryptotec/filesystem/file.hpp",
-		"/home/mikael/dev/sam_trunk/framework/cryptotec/crypto_abstraction_layer/hash.hpp",
-		"/home/mikael/dev/sam_trunk/sam/zone/create_trustanchor.hpp",
-		"/home/mikael/dev/sam_trunk/sam/contact/qt/detail/incoming_certificate_notification.cpp",
-		"/home/mikael/dev/sam_trunk/sam/app/qt/connection_error_notification.cpp",
-		"/home/mikael/dev/sam_trunk/sam/auto_update/qt/auto_update_notification.cpp",
-		"/home/mikael/dev/sam_trunk/sam/contact/qt/detail/address_change_dialog.cpp",
-		"/home/mikael/dev/sam_trunk/framework/dsp/server/anon_pki/server_lib/anon_pki_remote_object.cpp",
-		"/home/mikael/dev/sam_trunk/sam/account_creation/qt/setup_wizard.cpp",
-		"/home/mikael/dev/sam_trunk/sam/account_creation/qt/activation_code_page.cpp",
-		"/home/mikael/dev/sam_trunk/framework/file_storage/core/sync/changeset.hpp",
-		"/home/mikael/dev/sam_trunk/framework/dsp/common/pki/anon_pki_connection.cpp",
-		"/home/mikael/dev/sam_trunk/sam/account_creation/qt/address_page.cpp",
-		"/home/mikael/dev/sam_trunk/sam/account_creation/check_address.cpp",
-		"/home/mikael/dev/sam_trunk/sam/contact/qt/add_contact_wizard/address_page.hpp",
-		"/home/mikael/dev/sam_trunk/framework/file_storage/file_storage_test/test_utils/sync_utils.hpp",
-		"/home/mikael/dev/sam_trunk/framework/file_storage/file_storage_test/system_test/setup.hpp",
-		"/home/mikael/dev/sam_trunk/framework/file_storage/file_storage_test/system_test/basic_test_cases.cpp",
-		"/home/mikael/dev/sam_trunk/framework/cryptotec/secure_network/constants.hpp",
-		"/home/mikael/dev/sam_trunk/sam/app/qt/problem_report_dialog.hpp",
-		"/home/mikael/dev/sam_trunk/sam/app/qt/problem_report_dialog.cpp",
-		"/home/mikael/dev/sam_trunk/framework/cryptotec/log/backend/util.cpp",
-		"/home/mikael/dev/sam_trunk/sam/common/sam_connection.cpp",
-		"/home/mikael/dev/sam_trunk/framework/file_storage/core/sync/sync_connection.hpp",
-		"/home/mikael/dev/sam_trunk/framework/file_storage/core/sync/sync_connections.cpp",
-		"/home/mikael/dev/sam_trunk/framework/file_storage/core/net/client_mux_connection.cpp",
-		"/home/mikael/dev/sam_trunk/framework/file_storage/core/net/client_mux_connection.hpp",
-		"/home/mikael/dev/sam_trunk/framework/cryptotec/secure_network/secure_connection_protocol.hpp",
-		"/home/mikael/dev/sam_trunk/framework/cryptotec/secure_network/detail/snm_callbacks.hpp",
-		"/home/mikael/dev/sam_trunk/framework/cryptotec/thread/post_guard.cpp",
-		"/home/mikael/dev/sam_trunk/framework/cryptotec/secure_network/protocol.hpp",
-		"/home/mikael/dev/sam_trunk/framework/file_storage/core/net/connection_list.cpp",
-		"/home/mikael/dev/sam_trunk/framework/file_storage/file_storage_test/core_test/control_test/native_access_test.cpp",
-		"/home/mikael/dev/sam_trunk/sam/zone/zone_handler.cpp"
+		"/home/mikael/dev/sam_trunk/sam/file_transfer/qt/file_transfer_request_notification.hpp"
 	],
 	"find":
 	{
@@ -566,6 +619,7 @@
 		"height": 179.0,
 		"where_history":
 		[
+			""
 		]
 	},
 	"find_state":
@@ -573,6 +627,29 @@
 		"case_sensitive": false,
 		"find_history":
 		[
+			"CHECK_THROWS",
+			"build_tests",
+			"SECUREPATH_SERIALISATION_TEST_UTIL_HEADER",
+			"SECUREPATH_TEST_FRAME_TEST_SERIALISATION_HEADER",
+			"SPSYNC_UTIL_METADATA_HEADER",
+			"SPSYNC_UTIL_OBJECT_ID_HEADER",
+			"hash",
+			"SPSYNC_CORE_RECORD_BASE_HEADER",
+			"SPSYNC_CORE_DATA_CHANGE_HEADER_HEADER",
+			"SPSYNC_CORE_RECORD_BASE_HEADER",
+			"SPSYNC_CORE_TYPES_HEADER",
+			"SPSYNC_CORE_RECORD_BASE_HEADER",
+			"SPSYNC_CORE_USER_CHANGE_RECORD_HEADER",
+			"SPSYNC_CORE_SEGMENT_RECORD_HEADER",
+			"SPSYNC_CORE_RECORD_BASE_HEADER",
+			"SPSYNC_CORE_DATA_CHANGE_RECORD_HEADER",
+			"SPSYNC_ENGINE_SYNC_ENGINE_HEADER",
+			"SPSYNC_CORE_RECORD_BASE_HEADER",
+			"SPSYNC_ENGINE_SYNC_ENGINE_HEADER",
+			"SPSYNC_SERVER_SPSYNC_SERVER_HEADER",
+			"sync_engine",
+			"SPSYNC_ENGINE_SYNC_ENGINE_HEADER",
+			"----------------+-----------|"
 		],
 		"highlight": true,
 		"in_selection": false,
@@ -590,57 +667,87 @@
 	"groups":
 	[
 		{
-			"selected": 2,
+			"selected": 3,
 			"sheets":
 			[
 				{
 					"buffer": 0,
-					"file": "doc/client_interface.txt",
+					"file": "spsync/util/test/test_metadata.cpp",
 					"semi_transient": false,
 					"settings":
 					{
-						"buffer_size": 196,
+						"buffer_size": 1291,
 						"regions":
 						{
 						},
 						"selection":
 						[
 							[
-								196,
-								196
+								845,
+								845
 							]
 						],
 						"settings":
 						{
-							"syntax": "Packages/Text/Plain text.tmLanguage"
+							"syntax": "Packages/C++/C++.sublime-syntax",
+							"translate_tabs_to_spaces": false
+						},
+						"translation.x": 0.0,
+						"translation.y": 255.0,
+						"zoom_level": 1.0
+					},
+					"stack_index": 5,
+					"type": "text"
+				},
+				{
+					"buffer": 1,
+					"file": "spsync/core/records/data_change_record.hpp",
+					"semi_transient": false,
+					"settings":
+					{
+						"buffer_size": 688,
+						"regions":
+						{
+						},
+						"selection":
+						[
+							[
+								500,
+								500
+							]
+						],
+						"settings":
+						{
+							"syntax": "Packages/C++/C++.sublime-syntax"
 						},
 						"translation.x": 0.0,
 						"translation.y": 0.0,
 						"zoom_level": 1.0
 					},
-					"stack_index": 2,
+					"stack_index": 3,
 					"type": "text"
 				},
 				{
-					"buffer": 1,
-					"file": "doc/dimensions.txt",
+					"buffer": 2,
+					"file": "spsync/core/records/record_base.hpp",
 					"semi_transient": false,
 					"settings":
 					{
-						"buffer_size": 137,
+						"buffer_size": 799,
 						"regions":
 						{
 						},
 						"selection":
 						[
 							[
-								137,
-								137
+								211,
+								211
 							]
 						],
 						"settings":
 						{
-							"syntax": "Packages/Text/Plain text.tmLanguage"
+							"syntax": "Packages/C++/C++.sublime-syntax",
+							"translate_tabs_to_spaces": false
 						},
 						"translation.x": 0.0,
 						"translation.y": 0.0,
@@ -650,32 +757,90 @@
 					"type": "text"
 				},
 				{
-					"buffer": 2,
-					"file": "doc/encrypted_structures.txt",
+					"buffer": 3,
+					"file": "spsync/core/records/record.hpp",
 					"semi_transient": false,
 					"settings":
 					{
-						"buffer_size": 1430,
+						"buffer_size": 951,
 						"regions":
 						{
 						},
 						"selection":
 						[
 							[
-								810,
-								810
+								639,
+								639
 							]
 						],
 						"settings":
 						{
-							"syntax": "Packages/Text/Plain text.tmLanguage",
+							"syntax": "Packages/C++/C++.sublime-syntax",
+							"translate_tabs_to_spaces": false
+						},
+						"translation.x": 0.0,
+						"translation.y": 51.0,
+						"zoom_level": 1.0
+					},
+					"stack_index": 0,
+					"type": "text"
+				},
+				{
+					"buffer": 4,
+					"file": "spsync/util/content_auth.hpp",
+					"semi_transient": false,
+					"settings":
+					{
+						"buffer_size": 780,
+						"regions":
+						{
+						},
+						"selection":
+						[
+							[
+								525,
+								525
+							]
+						],
+						"settings":
+						{
+							"syntax": "Packages/C++/C++.sublime-syntax",
+							"translate_tabs_to_spaces": false
+						},
+						"translation.x": 0.0,
+						"translation.y": 0.0,
+						"zoom_level": 1.0
+					},
+					"stack_index": 2,
+					"type": "text"
+				},
+				{
+					"buffer": 5,
+					"file": "spsync/util/metadata.hpp",
+					"semi_transient": false,
+					"settings":
+					{
+						"buffer_size": 1568,
+						"regions":
+						{
+						},
+						"selection":
+						[
+							[
+								1076,
+								1076
+							]
+						],
+						"settings":
+						{
+							"syntax": "Packages/C++/C++.sublime-syntax",
 							"translate_tabs_to_spaces": false
 						},
 						"translation.x": 0.0,
 						"translation.y": 153.0,
 						"zoom_level": 1.0
 					},
-					"stack_index": 0,
+					"stack_index": 4,
 					"type": "text"
 				}
 			]
@@ -683,7 +848,7 @@
 	],
 	"incremental_find":
 	{
-		"height": 27.0
+		"height": 26.0
 	},
 	"input":
 	{
@@ -724,7 +889,7 @@
 	"project": "spsync.sublime-project",
 	"replace":
 	{
-		"height": 50.0
+		"height": 48.0
 	},
 	"save_all_on_build": true,
 	"select_file":
@@ -733,6 +898,78 @@
 		"last_filter": "",
 		"selected_items":
 		[
+			[
+				"test_map",
+				"sp-backup/src/securepath/serialisation/test/test_map.cpp"
+			],
+			[
+				"metada",
+				"spsync/spsync/util/metadata.hpp"
+			],
+			[
+				"octet_ve",
+				"sp-backup/src/securepath/util/octet_vector.hpp"
+			],
+			[
+				"test_Seria",
+				"sp-backup/src/securepath/test_frame/test_serialisation.hpp"
+			],
+			[
+				"/test/util",
+				"sp-backup/src/securepath/serialisation/test/util.hpp"
+			],
+			[
+				"util.hpp",
+				"sp-backup/src/securepath/serialisation/util.hpp"
+			],
+			[
+				"metad",
+				"spsync/spsync/util/metadata.hpp"
+			],
+			[
+				"test_ser",
+				"sp-backup/src/securepath/test_frame/test_serialisation.hpp"
+			],
+			[
+				"serilisation/util",
+				"sp-backup/src/securepath/serialisation/util.hpp"
+			],
+			[
+				"test_meta",
+				"spsync/spsync/util/test/test_metadata.cpp"
+			],
+			[
+				"test_serialisation",
+				"sp-backup/src/securepath/serialisation/test/test_serialisation.cpp"
+			],
+			[
+				"serialisation/test/tu",
+				"sp-backup/src/securepath/serialisation/test/util.hpp"
+			],
+			[
+				"meta",
+				"spsync/spsync/util/metadata.hpp"
+			],
+			[
+				"random",
+				"sp-backup/src/securepath/crypto/random.hpp"
+			],
+			[
+				"object_i",
+				"spsync/spsync/util/object_id.hpp"
+			],
+			[
+				"signature",
+				"sp-backup/src/securepath/crypto/signature.hpp"
+			],
+			[
+				"gcm",
+				"sp-backup/src/securepath/crypto/aes_gcm.hpp"
+			],
+			[
+				"types",
+				"spsync/core/types.hpp"
+			],
 			[
 				"network/error.hpp",
 				"framework/cryptotec/network/error.hpp"
@@ -1172,78 +1409,6 @@
 			[
 				"sync_imp",
 				"framework/file_storage/core/sync/sync_impl.cpp"
-			],
-			[
-				"server_s",
-				"framework/file_storage/server/server_lib/server_sync.cpp"
-			],
-			[
-				"server_mux",
-				"framework/file_storage/server/server_lib/server_mux_connection.cpp"
-			],
-			[
-				"secure_conn",
-				"framework/cryptotec/secure_network/secure_connection_protocol.hpp"
-			],
-			[
-				"snm_conne",
-				"framework/cryptotec/secure_network/detail/snm_connection_base.hpp"
-			],
-			[
-				"post_gua",
-				"framework/cryptotec/thread/post_guard.cpp"
-			],
-			[
-				"snm_call",
-				"framework/cryptotec/secure_network/detail/snm_callbacks.hpp"
-			],
-			[
-				"repository",
-				"framework/file_storage/file_storage_test/system_test/repository_sync_test.cpp"
-			],
-			[
-				"client_mux_connection_test.cpp",
-				"framework/file_storage/file_storage_test/system_test/client_mux_connection_test.cpp"
-			],
-			[
-				"workroom",
-				"sam/test/system_test/test_cases/workroom_tests.cpp"
-			],
-			[
-				"secure_network",
-				"framework/cryptotec/secure_network/secure_network_manager.hpp"
-			],
-			[
-				"snm",
-				"framework/cryptotec/secure_network/detail/snm_connection_base.hpp"
-			],
-			[
-				"secure",
-				"framework/cryptotec/secure_network/secure_network_manager.hpp"
-			],
-			[
-				"network_mana",
-				"framework/cryptotec/network/network_manager.cpp"
-			],
-			[
-				"tunnel_conn",
-				"framework/cryptotec/network/tunnel/tunnel_connection_win32.cpp"
-			],
-			[
-				"fllback_Tet",
-				"framework/cryptotec/network/network_test/network_manager_fallback_test.cpp"
-			],
-			[
-				"snm_connection",
-				"framework/cryptotec/secure_network/detail/snm_connection_impl.hpp"
-			],
-			[
-				"protoo",
-				"framework/cryptotec/secure_network/protocol.hpp"
-			],
-			[
-				"secure_co",
-				"framework/cryptotec/secure_network/secure_connection_protocol.hpp"
 			]
 		],
 		"width": 0.0

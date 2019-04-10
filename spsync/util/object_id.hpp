@@ -16,11 +16,17 @@ namespace securepath::sync::util {
 **/
 class object_id {
 public:
-	///Construct object id from vector of octets
+	/// Construct object id from vector of octets
 	object_id(octet_vector = {});
 
-	///Returns true if this object id is valid
+	/// Returns true if this object id is valid
 	bool is_valid() const;
+
+	/// Returns the contained value
+	octet_vector const& value() const;
+
+	/// to hexadecimal presentation
+	std::string to_hex() const;
 
 	template<typename Ar>
 	void serialise(Ar& ar) {
@@ -33,6 +39,12 @@ private:
 
 ///Returns random object id
 object_id create_object_id();
+
+bool operator==(object_id const& left, object_id const& right);
+bool operator!=(object_id const& left, object_id const& right);
+bool operator<(object_id const& left, object_id const& right);
+
+std::ostream& operator<<(std::ostream&, object_id const&);
 
 }
 

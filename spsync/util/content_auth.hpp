@@ -12,10 +12,13 @@ namespace securepath::sync::util {
 class content_auth {
 public:
 
+	/// Returns the AES GCM tag that protects the content
+	octet_vector tag() const { return gcm_tag_; }
+
 	template<typename Ar>
 	void serialise(Ar& ar) {
 		serialiation::sequence<Ar> seq(ar);
-		seq & trailing_data;
+		seq & gcm_tag_ & signature & trailing_data;
 	}
 private:
 	//AES GCM tag over the record

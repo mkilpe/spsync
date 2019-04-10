@@ -11,34 +11,27 @@ namespace securepath::sync {
 class record_base {
 public:
 
-	/// sets the server sequence number
-	void set_server_sequence(sequence_number const&);
-
-
 	template<typename Ar>
 	void serialise(Ar& ar) {
 		serialisation::sequence<Ar> seq(ar);
-		seq & structure_version_ & iv_ & encryption_key_id_ & client_sequence_ & auth_ & server_sequence_ & trailing_data_;
+		seq & structure_version_ & client_sequence_ & tag_ & iv_ & encryption_key_id_ & trailing_data_;
 	}
 
 private:
-	//version of the current structure
+	// version of the current structure
 	int structure_version_{1};
 
-	//initialisation vector for encryption
-	octet_vector iv_;
-
-	//the sequence number for the key used to encrypt this record
-	sequence_number encryption_key_id_;
-
-	//this is the last sequene the client has seen when pushing this record
+	// this is the last sequene the client has seen when pushing this record
 	sequence_number client_sequence_;
 
-	//signature/tag that protects the data in the record
-	content_auth auth_;
+	// tag of the previous record to form a chain
+	octet_vector tag_;
 
-	//sequence from server, the only thing that is not protected as the server sets it
-	sequence_number server_sequence_;
+	// initialisation vector for encrypting the record header
+	octet_vector iv_;
+
+	// the sequence number for the key used to encrypt this record
+	sequence_number encryption_key_id_;
 
 	serialisation::trailing_data trailing_data_;
 };

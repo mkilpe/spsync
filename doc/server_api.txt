@@ -1,0 +1,9 @@
+
+
+
+Space saving strategies (parameterised)
+
+* only keep change data for current objects (i.e. no object data history)
+* remove chain history, always segment by segment
+	* problem is that server cannot know what is the size of the object and what records it needs to be rebuilt (this info is in encrypted headers and might depends on higher layer)
+* when cutting chain, give hash of the new root to people who are invited as they cannot calculate the whole chain any more

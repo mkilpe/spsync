@@ -18,7 +18,7 @@ list of members:
 	* key id
 	* access rights (read/write/admin)
 	* encrypted symmetric keys
-	* do we need meta data for members?
+	* do we need meta data for members -- yes
 
 All structures in chain have:
 	* client last seen seq
@@ -58,8 +58,8 @@ Chain of structures:
 
 - segment end:
 	* sequence
-	* start and end seq ?
-	* list of objects ids?
+	* start and end seq
+	* list of objects tags
 	* iv for encrypted data and key id
 	* encrypted meta data
 	* signature/tag
