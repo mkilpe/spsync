@@ -3,6 +3,9 @@
 
 #include <spsync/core/types.hpp>
 
+#include <securepath/serialisation/sequence.hpp>
+#include <securepath/serialisation/util.hpp>
+
 namespace securepath::sync {
 
 /**
@@ -42,6 +45,25 @@ private:
 
 	// sequence from server, the only thing that is not protected by auth_ as the server sets it
 	sequence_number server_sequence_;
+};
+
+class serialised_record {
+public:
+	template<typename RecordType>
+	serialised_record(record<RecordType> const& record)
+	: record_(serialisation::asn_der_serialise(record));
+	{
+	}
+
+	template<typename Ar>
+	void serialise(Ar& ar) {
+		serialisation::sequence<Ar> seq(ar);
+		seq & record_;
+	}
+
+private:
+	//above record class as serialised
+	octet_vector record_;
 };
 
 }

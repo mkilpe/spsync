@@ -7,7 +7,7 @@ public:
 
 };
 
-sync_engine::sync_engine()
+sync_engine::sync_engine(comm_input&)
 : impl_(std::make_unique<impl>())
 {
 }

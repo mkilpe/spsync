@@ -27,6 +27,7 @@ struct data_change_info {
 	}
 };
 
+
 /**
  * This is the encrypted header in the data_change_record
  *
@@ -37,9 +38,12 @@ public:
 	template<typename Ar>
 	void serialise(Ar& ar) {
 		serialisation::sequence<Ar> seq(ar);
-		seq & data_change_ & metadata_ & trailing_data_;
+		seq & creation_time_ & data_change_ & metadata_ & trailing_data_;
 	}
 private:
+	// time when this change was created
+	time_point creation_time_;
+
 	// contains the information about the data for the change if there is any
 	std::optional<data_change_info> data_change_;
 

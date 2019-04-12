@@ -12,10 +12,13 @@ namespace securepath::sync {
 class segment_header {
 public:
 
+	// time when this segment was created
+	time_point creation_time;
+
 	template<typename Ar>
 	void serialise(Ar& ar) {
 		serialisation::sequence<Ar> seq(ar);
-		seq & metadata_ & trailing_data_;
+		seq & creation_time & metadata_ & trailing_data_;
 	}
 private:
 

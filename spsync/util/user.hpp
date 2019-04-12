@@ -3,8 +3,8 @@
 
 #include <securepath/crypto/public_key_id.hpp>
 #include <securepath/util/octet_vector.hpp>
+#include <securepath/serialisation/decls.hpp>
 #include <securepath/serialisation/sequence.hpp>
-#include <securepath/serialisation/enum.hpp>
 
 #include <iosfwd>
 
@@ -42,6 +42,7 @@ bool operator<(user_id const& left, user_id const& right);
 
 std::ostream& operator<<(std::ostream&, user_id const&);
 
+
 /// User access type to storage
 enum class access_type {
 	no_access = 0x0,
@@ -53,11 +54,9 @@ enum class access_type {
 	all_access = data_access | user_management_access
 };
 
-template<typename Ar>
-void serialise(Ar& ar, access_type& ua) {
-	serialisation::sequence<Ar> seq(ar);
-	seq & ua;
-}
+serialisation::serialiser& serialise(serialisation::serialiser& s, access_type const& v);
+serialisation::deserialiser& serialise(serialisation::deserialiser& s, access_type& v);
+
 
 /**
  * \brief Access for specific user to a storage

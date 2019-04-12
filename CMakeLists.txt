@@ -10,3 +10,4 @@ include("/home/mikael/dev/sp-backup/src/cmake.main")
 
 # actual projects
 add_subdirectory(spsync)
+add_subdirectory(groupchat)

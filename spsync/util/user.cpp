@@ -1,5 +1,6 @@
 
 #include "user.hpp"
+#include <securepath/serialisation/enum.hpp>
 
 #include <ostream>
 
@@ -32,6 +33,14 @@ bool operator<(user_id const& left, user_id const& right) {
 
 std::ostream& operator<<(std::ostream& out, user_id const& id) {
 	return out << id.public_key_id();
+}
+
+serialisation::serialiser& serialise(serialisation::serialiser& s, access_type const& v) {
+	return securepath::serialisation::serialise(s, v);
+}
+
+serialisation::deserialiser& serialise(serialisation::deserialiser& s, access_type& v) {
+	return securepath::serialisation::serialise(s, v);
 }
 
 }

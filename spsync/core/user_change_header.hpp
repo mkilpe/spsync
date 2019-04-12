@@ -10,6 +10,9 @@ namespace securepath::sync {
  */
 struct user_change_info {
 
+	// time when this change was created
+	time_point creation_time;
+
 	//todo: old encryption keys?
 	//todo: new encryption key if user was removed?
 
@@ -18,9 +21,10 @@ struct user_change_info {
 	template<typename Ar>
 	void serialise(Ar& ar) {
 		serialisation::sequence<Ar> seq(ar);
-		seq & trailing_data;
+		seq & creation_time & trailing_data;
 	}
 };
+
 
 /**
  * This is the encrypted header in the user_change_record

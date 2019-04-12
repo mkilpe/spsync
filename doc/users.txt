@@ -11,6 +11,7 @@ User identified by public key.
 Questions:
 * Where are the public keys stored?
 * Multiple instances of same user -- use same public key or separate? How should it work?
+	* allow to log in with same key, can always use separate key if want
 
 
 Access rights:

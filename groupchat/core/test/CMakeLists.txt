@@ -1,0 +1,1 @@
+add_sp_test_application(test_groupchat_core groupchat_core)
