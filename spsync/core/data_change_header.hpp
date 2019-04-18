@@ -12,6 +12,8 @@ struct data_change_info {
 	// size of the changed data, can't be bigger than (2^39)-256 bits (64 GiB) due to AES GCM mode
 	std::uint64_t size{};
 
+	//q: support compression on this level?
+
 	// iv for encrypting the change data
 	octet_vector iv;
 

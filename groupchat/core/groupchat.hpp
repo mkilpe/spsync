@@ -22,7 +22,7 @@ struct groupchat_config {
 using message_id = sync::util::object_id;
 
 /**
- * Simple group chat interface to send and receive messages
+ * Simple group chat interface to send and receive messages using spsync as backend
  */
 class groupchat {
 public:

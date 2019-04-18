@@ -32,9 +32,11 @@ groupchat::~groupchat()
 }
 
 message_id groupchat::send_message(std::string const& message) {
-	sync::util::metadata header;
+	sync::metadata header;
 	header.insert(groupchat_message_id, message);
-	return impl_->engine->sync_object_change(sync::util::create_object_id(), std::move(header));
+	auto msg_id = sync::util::create_object_id();
+	impl_->engine->sync_object_change(msg_id, std::move(header));
+	return msg_id;
 }
 
 }

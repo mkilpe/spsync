@@ -8,6 +8,8 @@
 
 namespace securepath::sync {
 
+class progress;
+class record_storage;
 class serialised_record;
 class commit_response;
 
@@ -35,6 +37,10 @@ struct comm_input {
 
 	/// Tries to commit to a record and uploads the record data if committing was successful
 	virtual request_handle commit_record(serialised_record const&, record_data_handle = nullptr) = 0;
+
+	/// Accessors to common, shared infrastructure
+	virtual sync::progress& progress() = 0;
+	virtual record_storage& records() = 0;
 };
 
 /**
