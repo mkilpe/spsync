@@ -11,6 +11,10 @@ class encrypted_record_header {
 public:
 	using header_type = HeaderType;
 
+	encrypted_record_header(octet_vector enc_header = {})
+	: encrypted_header_(std::move(enc_header))
+	{}
+
 	template<typename Ar>
 	void serialise(Ar& ar) {
 		serialisation::sequence<Ar> seq(ar);

@@ -36,6 +36,12 @@ struct data_change_info {
  */
 class data_change_header {
 public:
+	data_change_header() {}
+	data_change_header(util::metadata meta, std::optional<data_change_info> dcinfo = std::nullopt)
+	: creation_time_(time_point::now())
+	, data_change_(std::move(dcinfo))
+	, metadata_(std::move(meta))
+	{}
 
 	template<typename Ar>
 	void serialise(Ar& ar) {

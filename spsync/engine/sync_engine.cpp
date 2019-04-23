@@ -8,13 +8,24 @@ class sync_engine::impl {
 public:
 	impl(comm_input& comm, sync_engine_config config)
 	: comm(comm)
+	, records(comm.records())
 	, config(std::move(config))
 	{}
 
+	//template<typename Header>
+	//encrypted_record_header<Header> encrypt_header(Header const& header) {
+		//find current encryption key
+		//create iv
+		//use aes-gcm to encrypt the serialised header
+	//	return {};
+	//}
+
 	mutable std::mutex mutex;
 	comm_input& comm;
+	record_storage& records;
 	sync_engine_config config;
 	engine_output* output{};
+	sequence_number last_seen_sequence;
 };
 
 sync_engine::sync_engine(comm_input& comm, sync_engine_config config)
@@ -34,7 +45,14 @@ void sync_engine::set_output(engine_output* output) {
 
 //--- engine_input interface, see interface.hpp
 
+//f: for now just implement plain record without data
 record_handle sync_engine::sync_object_change(object_id const& oid, metadata const& mdata, record_data_handle) {
+	//auto last_oid_record = impl_->records.find_last(oid);
+	//auto last_record = impl_->records.find_last();
+
+	//data_change_header header{mdata};
+
+
 	//find previous record for oid
 	//find last seen record
 	//create record with the information

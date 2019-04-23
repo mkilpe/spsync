@@ -11,7 +11,12 @@ namespace securepath::sync {
 struct single_change {
 	// id of the object this change affects
 	object_id id;
+
+	// tag of the previous record with same object id
+	octet_vector previous_oid_record_tag_;
+
 	encrypted_record_header<data_change_header> header;
+
 	serialisation::trailing_data trailing_data;
 
 	template<typename Ar>
