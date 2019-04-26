@@ -9,6 +9,8 @@
 
 namespace securepath::sync {
 
+class encryption_key_storage;
+
 /**
  * The configuration for the sync engine
  */
@@ -24,7 +26,7 @@ class sync_engine
 	, public engine_input
 {
 public:
-	sync_engine(comm_input& comm, sync_engine_config);
+	sync_engine(comm_input&, encryption_key_storage&, sync_engine_config);
 	~sync_engine();
 
 	void set_output(engine_output*);
@@ -33,7 +35,7 @@ public:
 
 
 	//--- engine_input interface, see interface.hpp
-	virtual record_handle sync_object_change(object_id const&, metadata const&, record_data_handle = {});
+	virtual record_handle sync_object_change(object_id, metadata, record_data_handle = {});
 	virtual void sync_user_change(users const&, metadata const& = {});
 	virtual void sync_segment_end(metadata const& = {});
 private:

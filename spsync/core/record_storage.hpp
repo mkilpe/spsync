@@ -17,11 +17,12 @@ public:
 	~record_storage();
 
 	// overall record chain
-	//record_handle find_last();
+	record_handle find_last() const;
 
 	// per object id operations
-	//record_handle find_last(object_id);
-	//record_handle find_first(object_id);
+	record_handle find_last(object_id const&) const;
+
+	//record_handle find_first(object_id const&) const;
 	//record_handle find(tag);
 
 private:

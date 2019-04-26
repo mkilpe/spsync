@@ -1,4 +1,7 @@
 #include "sync_engine.hpp"
+#include "record_creator.hpp"
+
+#include <spsync/core/encryption_key_storage.hpp>
 
 #include <mutex>
 
@@ -6,30 +9,24 @@ namespace securepath::sync {
 
 class sync_engine::impl {
 public:
-	impl(comm_input& comm, sync_engine_config config)
+	impl(comm_input& comm, encryption_key_storage& keys, sync_engine_config config)
 	: comm(comm)
+	, keys(keys)
 	, records(comm.records())
 	, config(std::move(config))
 	{}
 
-	//template<typename Header>
-	//encrypted_record_header<Header> encrypt_header(Header const& header) {
-		//find current encryption key
-		//create iv
-		//use aes-gcm to encrypt the serialised header
-	//	return {};
-	//}
-
 	mutable std::mutex mutex;
 	comm_input& comm;
+	encryption_key_storage& keys;
 	record_storage& records;
 	sync_engine_config config;
 	engine_output* output{};
 	sequence_number last_seen_sequence;
 };
 
-sync_engine::sync_engine(comm_input& comm, sync_engine_config config)
-: impl_(std::make_unique<impl>(comm, std::move(config)))
+sync_engine::sync_engine(comm_input& comm, encryption_key_storage& keys, sync_engine_config config)
+: impl_(std::make_unique<impl>(comm, keys, std::move(config)))
 {
 }
 
@@ -46,18 +43,23 @@ void sync_engine::set_output(engine_output* output) {
 //--- engine_input interface, see interface.hpp
 
 //f: for now just implement plain record without data
-record_handle sync_engine::sync_object_change(object_id const& oid, metadata const& mdata, record_data_handle) {
-	//auto last_oid_record = impl_->records.find_last(oid);
-	//auto last_record = impl_->records.find_last();
+record_handle sync_engine::sync_object_change(object_id oid, metadata mdata, record_data_handle) {
+	auto last_oid_record = impl_->records.find_last(oid);
+	auto last_record = impl_->records.find_last();
 
-	//data_change_header header{mdata};
+	if(!last_record) {
+		throw error(errc::invalid_record_chain_state, "Can't find last record, data change cannot be first record");
+	}
 
+	record_tag last_oid_tag = last_oid_record ? last_oid_record->tag() : record_tag{};
 
-	//find previous record for oid
-	//find last seen record
-	//create record with the information
-		//encrypted header with current key
-		//create record_handle
+	data_change_record_creator creator(impl_->keys.current_key(), last_record->tag(), impl_->last_seen_sequence);
+	creator.add_change(std::move(oid), last_oid_tag, std::move(mdata));
+
+	//creator.result();
+	//creator.authentication_tag();
+
+	//create record_handle
 	//handle record data
 	//set record state
 	//push record to comm layer

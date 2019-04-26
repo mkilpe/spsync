@@ -20,7 +20,7 @@ struct engine_input {
 	virtual ~engine_input() = default;
 
 	/// synchronise object change with given id, user metadata and data
-	virtual record_handle sync_object_change(object_id const&, metadata const&, record_data_handle = {}) = 0;
+	virtual record_handle sync_object_change(object_id, metadata, record_data_handle = {}) = 0;
 	//q: what should the return type be there? somehow one needs to know when it was success full (ie. identify the record later on)
 
 	/// synchronise user change

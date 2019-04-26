@@ -11,14 +11,17 @@ namespace securepath::sync::util {
  */
 class content_auth {
 public:
+	content_auth(octet_vector tag)
+	: gcm_tag_(std::move(tag))
+	{}
 
 	/// Returns the AES GCM tag that protects the content
 	octet_vector tag() const { return gcm_tag_; }
 
 	template<typename Ar>
 	void serialise(Ar& ar) {
-		serialiation::sequence<Ar> seq(ar);
-		seq & gcm_tag_ & signature & trailing_data;
+		serialisation::sequence<Ar> seq(ar);
+		seq & gcm_tag_ & signature_ & trailing_data_;
 	}
 private:
 	//AES GCM tag over the record
@@ -26,7 +29,8 @@ private:
 
 	//optional signature over the gcm_tag
 	std::optional<crypto::signature> signature_;
-	serialisastion::trailing_data trailing_data
+
+	serialisation::trailing_data trailing_data_;
 };
 
 }

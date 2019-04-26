@@ -1,7 +1,8 @@
 #ifndef SPSYNC_CORE_DATA_CHANGE_HEADER_HEADER
 #define SPSYNC_CORE_DATA_CHANGE_HEADER_HEADER
 
-#include <spsync/core/types.hpp>
+#include "types.hpp"
+#include <spsync/util/metadata.hpp>
 
 namespace securepath::sync {
 
@@ -38,7 +39,7 @@ class data_change_header {
 public:
 	data_change_header() {}
 	data_change_header(util::metadata meta, std::optional<data_change_info> dcinfo = std::nullopt)
-	: creation_time_(time_point::now())
+	: creation_time_(clock_type::now())
 	, data_change_(std::move(dcinfo))
 	, metadata_(std::move(meta))
 	{}

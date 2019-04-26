@@ -2,6 +2,7 @@
 #define SPSYNC_CORE_DATA_CHANGE_RECORD_HEADER
 
 #include "record_base.hpp"
+#include "encrypted_record_header.hpp"
 #include "../data_change_header.hpp"
 
 #include <deque>
@@ -13,7 +14,7 @@ struct single_change {
 	object_id id;
 
 	// tag of the previous record with same object id
-	octet_vector previous_oid_record_tag_;
+	record_tag previous_oid_record_tag;
 
 	encrypted_record_header<data_change_header> header;
 
@@ -22,12 +23,22 @@ struct single_change {
 	template<typename Ar>
 	void serialise(Ar& ar) {
 		serialisation::sequence<Ar> seq(ar);
-		seq & id & header & trailing_data;
+		seq & id & previous_oid_record_tag & header & trailing_data;
 	}
 };
 
 class data_change_record : public record_base {
 public:
+	data_change_record(record_base base, std::deque<single_change> changes)
+	: record_base(std::move(base))
+	, changes_(std::move(changes))
+	{}
+
+	template<typename Ar>
+	void serialise(Ar& ar) {
+		serialisation::sequence<Ar> seq(ar);
+		seq & static_cast<record_base&>(*this) & changes_ & trailing_data;
+	}
 private:
 	// this can be just a single change or aggregated multiple changes
 	std::deque<single_change> changes_;

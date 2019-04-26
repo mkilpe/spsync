@@ -1,17 +1,47 @@
 #ifndef SPSYNC_ENGINE_RECORD_CREATOR_HEADER
 #define SPSYNC_ENGINE_RECORD_CREATOR_HEADER
 
-
+#include <spsync/core/encryption_key_storage.hpp>
+#include <spsync/core/records/data_change_record.hpp>
+#include <spsync/util/content_auth.hpp>
+#include <securepath/crypto/auth_stream_cipher.hpp>
 
 namespace securepath::sync {
 
-//helper class to create records
+/**
+ * Base class for the record creator helpers
+ */
+class record_creator_base {
+public:
+	/// construct to create the record_base which is common to all records and initialise encryption+authentication
+	record_creator_base(encryption_key const& key, record_tag previous_tag, sequence_number last_seen);
 
-// construction with encryption_key, previous record tag, creates random iv, initialise encryption/auth
-// set client seq
-// set other data
-// set per record data, encrypt the record data
-// in the end, give out full record with correct aes-gcm tag et al
+	/// Returns authentication tag for the record, this can be called only once after constructing the record has been done
+	util::content_auth authentication_tag();
+
+protected:
+	record_base base_;
+	crypto::auth_stream_cipher_ptr encryptor_;
+};
+
+/**
+ * Helper class to create data change records
+ */
+class data_change_record_creator: public record_creator_base {
+public:
+	using record_creator_base::record_creator_base;
+
+	//todo: support change data
+	/// add single change to the data change record
+	void add_change(object_id oid, record_tag previous_oid_record_tag, metadata);
+
+	/// Returns the ready data_change_header, it can be called only once as it will move content
+	data_change_record result();
+
+private:
+	std::deque<single_change> changes_;
+};
+
 
 }
 

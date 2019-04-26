@@ -6,7 +6,7 @@ endif()
 
 project("SPSync")
 
-include("C:/development/sp/src/cmake.main")
+include("/home/mikael/dev/sp-backup/src/cmake.main")
 
 # actual projects
 add_subdirectory(spsync)
