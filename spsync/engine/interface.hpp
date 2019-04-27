@@ -24,10 +24,10 @@ struct engine_input {
 	//q: what should the return type be there? somehow one needs to know when it was success full (ie. identify the record later on)
 
 	/// synchronise user change
-	virtual void sync_user_change(users const&, metadata const& = {}) = 0;
+	virtual record_handle sync_user_change(users user_change, metadata = {}) = 0;
 
 	/// synchronise segment end structure
-	virtual void sync_segment_end(metadata const& = {}) = 0;
+	virtual record_handle sync_segment_end(metadata = {}) = 0;
 };
 
 

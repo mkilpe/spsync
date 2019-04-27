@@ -56,34 +56,56 @@ record_handle sync_engine::sync_object_change(object_id oid, metadata mdata, rec
 	data_change_record_creator creator(impl_->keys.current_key(), last_record->tag(), impl_->last_seen_sequence);
 	creator.add_change(std::move(oid), last_oid_tag, std::move(mdata));
 
-	//creator.result();
-	//creator.authentication_tag();
+	record_handle h = impl_->records.create(serialised_record(creator.result(), creator.authentication_tag()));
+	//f: handle record data
 
-	//create record_handle
-	//handle record data
-	//set record state
-	//push record to comm layer
-	return record_handle{};
+	//todo: set record state .. h->set_state(record_authenticated | commit_pending);
+	request_handle req = impl_->comm.commit_record(h);
+
+	//todo: push pending commit to queue
+
+	return h;
 }
 
-void sync_engine::sync_user_change(users const&, metadata const& mdata) {
-	//find last seen record
-	//create record with the information
-		//encrypted header with current key
-		//embed new encryption key?
-		//create record_handle
-	//set record state
-	//push record to comm layer
+record_handle sync_engine::sync_user_change(users user_change, metadata mdata) {
+	auto last_record = impl_->records.find_last();
+
+	user_change_record_creator creator(impl_->keys.current_key()
+		, last_record ? last_record->tag() : record_tag{}, impl_->last_seen_sequence);
+
+	//needs new encryption key here
+	//creator.add_change(std::move(user_change), std::move(mdata));
+
+	record_handle h = impl_->records.create(serialised_record(creator.result(), creator.authentication_tag()));
+
+	//todo: set record state .. h->set_state(record_authenticated | commit_pending);
+	request_handle req = impl_->comm.commit_record(h);
+
+	//todo: push pending commit to queue
+
+	return h;
 }
 
-void sync_engine::sync_segment_end(metadata const& mdata) {
-	//find last seen record
-	//create record with the information
-		//encrypted header with current key
-		//set the segment record tags for the segment range
-		//create record_handle
-	//set record state
-	//push record to comm layer
+record_handle sync_engine::sync_segment_end(metadata mdata) {
+	auto last_record = impl_->records.find_last();
+
+	if(!last_record) {
+		throw error(errc::invalid_record_chain_state, "Can't find last record, segment cannot be first record");
+	}
+
+	segment_record_creator creator(impl_->keys.current_key(), last_record->tag(), impl_->last_seen_sequence);
+
+	//needs the start, end sequences and the record tags
+	//creator.add_change(std::move(mdata));
+
+	record_handle h = impl_->records.create(serialised_record(creator.result(), creator.authentication_tag()));
+
+	//todo: set record state .. h->set_state(record_authenticated | commit_pending);
+	request_handle req = impl_->comm.commit_record(h);
+
+	//todo: push pending commit to queue
+
+	return h;
 }
 
 }

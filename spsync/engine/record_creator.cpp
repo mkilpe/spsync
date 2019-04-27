@@ -37,4 +37,13 @@ data_change_record data_change_record_creator::result() {
 	return data_change_record{std::move(base_), std::move(changes_)};
 }
 
+
+user_change_record user_change_record_creator::result() {
+	return user_change_record{};
+}
+
+segment_record segment_record_creator::result() {
+	return segment_record{};
+}
+
 }

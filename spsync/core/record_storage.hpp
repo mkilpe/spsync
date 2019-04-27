@@ -2,6 +2,7 @@
 #define SPSYNC_CORE_RECORD_STORAGE_HEADER
 
 #include "record_interface.hpp"
+#include <securepath/database/connection.hpp>
 
 #include <memory>
 
@@ -13,18 +14,29 @@ namespace securepath::sync {
  */
 class record_storage {
 public:
-	record_storage();
+	/// construct with database connection
+	record_storage(database::connection_ptr);
 	~record_storage();
 
-	// overall record chain
+	// -- overall record chain --
+	/// get the biggest sequence number the server has returned
+	sequence_number last_sequence_number() const;
+
+	/// find the last record in the chain
 	record_handle find_last() const;
 
-	// per object id operations
+	// -- per object operations --
+	/// find the last record with given object id
 	record_handle find_last(object_id const&) const;
 
-	//record_handle find_first(object_id const&) const;
-	//record_handle find(tag);
+	/// find the first record for given object id
+	record_handle find_first(object_id const&) const;
 
+	/// find record that has the given tag
+	record_handle find(record_tag const& tag) const;
+
+	/// create new record
+	record_handle create(serialised_record const&);
 private:
 	class impl;
 	std::unique_ptr<impl> impl_;

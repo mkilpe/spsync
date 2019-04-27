@@ -6,7 +6,7 @@
 namespace securepath::sync {
 
 /*
-	database table:
+	database table 'encryption_key_storage':
 		seq: key sequence number as integer (primary key)
 		key: encryption key as blob
 

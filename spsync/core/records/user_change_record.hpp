@@ -2,17 +2,21 @@
 #define SPSYNC_CORE_USER_CHANGE_RECORD_HEADER
 
 #include "record_base.hpp"
+#include "encrypted_record_header.hpp"
+#include "../user_change_header.hpp"
+
 #include <spsync/core/users.hpp>
 
 namespace securepath::sync {
 
 class user_change_record : public record_base {
 public:
+	static constexpr record_type_tag type = record_type_tag::user_change_record;
 
 	template<typename Ar>
 	void serialise(Ar& ar) {
 		serialisation::sequence<Ar> seq(ar);
-		seq & access_ && header_ & trailing_data_;
+		seq & access_ & header_ & trailing_data_;
 	}
 private:
 	// the change in users access

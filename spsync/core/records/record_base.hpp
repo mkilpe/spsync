@@ -2,6 +2,7 @@
 #define SPSYNC_CORE_RECORD_BASE_HEADER
 
 #include <spsync/core/types.hpp>
+#include <securepath/serialisation/enum.hpp>
 
 namespace securepath::sync {
 
@@ -46,6 +47,25 @@ private:
 
 	serialisation::trailing_data trailing_data_;
 };
+
+/**
+ * Types of the records for the serialised record
+ */
+enum class record_type_tag {
+	unknown = 0,
+	user_change_record,
+	data_change_record,
+	segment_record
+};
+
+serialisation::serialiser& serialise(serialisation::serialiser& s, record_type_tag const& v) {
+	return securepath::serialisation::serialise(s, v);
+}
+
+serialisation::deserialiser& serialise(serialisation::deserialiser& s, record_type_tag& v) {
+	return securepath::serialisation::serialise(s, v);
+}
+
 
 }
 

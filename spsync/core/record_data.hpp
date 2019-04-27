@@ -14,15 +14,22 @@ enum class record_data_state {
 	/// data not requested
 	deferred,
 
-	/// there are still data to be downloaded/uploaded
-	operation_pending,
+	/// there are still data to be uploaded
+	upload_pending,
+
+	/// there are still data to be downloaded
+	download_pending,
 
 	/// we have all the data
 	in_sync,
 
 	/// the data was removed and has to be re-queried if needed
-	removed
+	removed,
+
+	/// the data is invalid, e.g. the aes gcm tag didn't match
+	invalid
 };
+
 
 /**
  * Interface to a data for single record

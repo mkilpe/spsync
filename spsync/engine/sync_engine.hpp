@@ -36,8 +36,8 @@ public:
 
 	//--- engine_input interface, see interface.hpp
 	virtual record_handle sync_object_change(object_id, metadata, record_data_handle = {});
-	virtual void sync_user_change(users const&, metadata const& = {});
-	virtual void sync_segment_end(metadata const& = {});
+	virtual record_handle sync_user_change(users user_change, metadata = {});
+	virtual record_handle sync_segment_end(metadata = {});
 private:
 	class impl;
 	std::unique_ptr<impl> impl_;

@@ -36,7 +36,7 @@ struct comm_input {
 	virtual request_handle fetch_data(sequence_number record) = 0;
 
 	/// Tries to commit to a record and uploads the record data if committing was successful
-	virtual request_handle commit_record(serialised_record const&, record_data_handle = nullptr) = 0;
+	virtual request_handle commit_record(record_handle) = 0;
 
 	/// Accessors to common, shared infrastructure
 	virtual sync::progress& progress() = 0;
@@ -53,7 +53,7 @@ struct comm_output {
 	virtual void on_sequence_number_changed(sequence_number) = 0;
 
 	/// called when record is received as a response to fetch_record call
-	virtual void on_record_received(request_handle, result<serialised_record> const&) = 0;
+	virtual void on_record_received(request_handle, result<record_handle> const&) = 0;
 
 	/// called when record data is fully received as a response to fetch_data call
 	virtual void on_data_received(request_handle, result<record_data_handle> const&) = 0;

@@ -2,11 +2,16 @@
 #define SPSYNC_CORE_SEGMENT_RECORD_HEADER
 
 #include "record_base.hpp"
+#include "encrypted_record_header.hpp"
+#include "../segment_header.hpp"
+
+#include <deque>
 
 namespace securepath::sync {
 
 class segment_record : public record_base {
 public:
+	static constexpr record_type_tag type = record_type_tag::segment_record;
 
 	template<typename Ar>
 	void serialise(Ar& ar) {

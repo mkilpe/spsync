@@ -5,6 +5,8 @@
 #include "encrypted_record_header.hpp"
 #include "../data_change_header.hpp"
 
+#include <securepath/serialisation/deque.hpp>
+
 #include <deque>
 
 namespace securepath::sync {
@@ -29,6 +31,8 @@ struct single_change {
 
 class data_change_record : public record_base {
 public:
+	static constexpr record_type_tag type = record_type_tag::data_change_record;
+
 	data_change_record(record_base base, std::deque<single_change> changes)
 	: record_base(std::move(base))
 	, changes_(std::move(changes))
