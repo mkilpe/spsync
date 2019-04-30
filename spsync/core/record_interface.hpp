@@ -1,6 +1,7 @@
 #ifndef SPSYNC_CORE_RECORD_INTERFACE_HEADER
 #define SPSYNC_CORE_RECORD_INTERFACE_HEADER
 
+#include "record_data.hpp"
 #include "types.hpp"
 #include <spsync/core/records/record.hpp>
 
@@ -31,18 +32,27 @@ class record_interface {
 public:
 	virtual ~record_interface() = default;
 
-	//get the record structure out
-	//set/get the record state (pending commit, committed, ...?)
-	//get data handle or alternatively read/write
+	/// Get the sequence number of this record if set by server, otherwise invalid sequence_number
+	virtual sequence_number seq() const = 0;
 
-	// data size
-	// data blocks we have
-	// read/write data (plain and encrypted?)
-
-	// remove data
-
+	/// The unique tag to identify this record
 	virtual record_tag tag() const = 0;
+
+	/// The tag of previous record
+	virtual record_tag previous_tag() const = 0;
+
+	/// State of this record
 	virtual record_state state() const = 0;
+
+	/// Set the state of this record
+	virtual void set_state(record_state) = 0;
+
+	/// Handle to the record data
+	virtual record_data_handle data() = 0;
+	virtual const_record_data_handle data() const = 0;
+
+	/// Get the record in serialised format
+	virtual serialised_record record() const = 0;
 };
 
 using record_handle = std::shared_ptr<record_interface>;

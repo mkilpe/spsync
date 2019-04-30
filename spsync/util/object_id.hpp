@@ -16,13 +16,13 @@ namespace securepath::sync::util {
 **/
 class object_id {
 public:
-	/// Construct object id from vector of octets
+	/// construct object id from vector of octets
 	object_id(octet_vector = {});
 
-	/// Returns true if this object id is valid
+	/// returns true if this object id is valid
 	bool is_valid() const;
 
-	/// Returns the contained value
+	/// returns the contained value
 	octet_vector const& value() const;
 
 	/// to hexadecimal presentation
@@ -37,7 +37,7 @@ private:
 	octet_vector id_;
 };
 
-///Returns random object id
+/// returns random object id
 object_id create_object_id();
 
 bool operator==(object_id const& left, object_id const& right);

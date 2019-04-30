@@ -20,17 +20,17 @@ class metadata {
 public:
 	using key_type = std::string;
 
-	///insert (or replace) typed data which will be serialised
+	/// insert (or replace) typed data which will be serialised
 	template<typename Data>
 	void insert(key_type const& key, Data const& data) {
 		insert(key, serialisation::asn_der_serialise(data));
 	}
 
-	///insert (or replace) octet vector raw data
+	/// insert (or replace) octet vector raw data
 	void insert(key_type const& key, octet_vector);
 
-	///find data matching the key and return typed object
-	///\throws serialisation_error if type of the serialised object doesn't match
+	/// find data matching the key and return typed object
+	/// \throws serialisation_error if type of the serialised object doesn't match
 	template<typename Data>
 	std::optional<Data> find(key_type const& key) const {
 		std::optional<Data> ret;
@@ -41,10 +41,10 @@ public:
 		return ret;
 	}
 
-	///find data matching the key
+	/// find data matching the key
 	std::optional<octet_vector> find(key_type const& key) const;
 
-	///remove  data assosiated with the key
+	/// remove data assosiated with the key
 	void erase(key_type const& key);
 
 	template<typename Ar>

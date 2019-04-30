@@ -37,28 +37,36 @@ enum class record_data_state {
  */
 class record_data {
 public:
+	virtual ~record_data() = default;
 
-	// size
-	// data blocks we have
-	// read/write data (plain and encrypted?)
-	// record data state
+	/**
+	 * Returns the size of the data.
+	 * This function returns the logical size of this data, it does not related to the data we currently
+	 *  have available. For that, use \ref available_size
+	 */
+	virtual std::uint64_t size() const = 0;
 
-	// set state
-	// remove data
+	/// Size of the data that is available for use and can be read out.
+	virtual std::uint64_t available_size() const = 0;
 
-private:
+	/// Read octets out of the record data with given offset
+	virtual std::uint64_t read(std::uint64_t offset, std::uint8_t* buffer, std::uint64_t size) = 0;
 
+	/// Write octets to the record data
+	virtual std::uint64_t write(std::uint64_t offset, std::uint8_t const* buffer, std::uint64_t size) = 0;
+
+	/// State of this data record
+	virtual record_data_state state() const = 0;
+
+	/// Set the state of this data record
+	virtual void set_state(record_data_state) = 0;
+
+	/// Remove the stored data, after this available_size() == 0 and the data has to be re-queried if needed
+	virtual void remove_data() = 0;
 };
 
 using record_data_handle = std::shared_ptr<record_data>;
-
-/**
- * Provides the decrypted and authenticated data from the record_data
- *
- */
-//class decrypted_record_data {
-//public:
-//};
+using const_record_data_handle = std::shared_ptr<record_data const>;
 
 }
 

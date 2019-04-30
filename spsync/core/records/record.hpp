@@ -52,6 +52,8 @@ private:
 
 class serialised_record {
 public:
+	serialised_record() = default;
+
 	template<typename RecordType>
 	serialised_record(record<RecordType> const& record)
 	: type_(RecordType::type)
@@ -75,7 +77,7 @@ public:
 
 private:
 	//type of the record as enum
-	record_type_tag type_;
+	record_type_tag type_{record_type_tag::unknown};
 	//above record class as serialised
 	octet_vector record_;
 };
