@@ -49,11 +49,8 @@ struct comm_input {
 struct comm_output {
 	virtual ~comm_output() = default;
 
-	/// called when current sequence number changed
-	virtual void on_sequence_number_changed(sequence_number) = 0;
-
 	/// called when record is received as a response to fetch_record call
-	virtual void on_record_received(request_handle, result<record_handle> const&) = 0;
+	virtual void on_record_received(request_handle, result<serialised_record> const&) = 0;
 
 	/// called when record data is fully received as a response to fetch_data call
 	virtual void on_data_received(request_handle, result<record_data_handle> const&) = 0;

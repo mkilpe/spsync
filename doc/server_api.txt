@@ -1,5 +1,12 @@
 
 
+server needs to see:
+ * object id
+ * client last seen seq
+ * record type
+ * record tag
+ * previous record tag
+
 
 Space saving strategies (parameterised)
 

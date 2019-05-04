@@ -51,8 +51,18 @@ class user_change_record_creator: public record_creator_base {
 public:
 	using record_creator_base::record_creator_base;
 
+	/// set the user access data with the metadata
+	void set_change(users access, metadata);
+
+	//todo: add the data to user_change_info, like possible old encryption keys, new encryption key
+
 	/// Returns the ready user_change_record, it can be called only once as it will move content
 	user_change_record result();
+
+private:
+	users users_;
+	metadata meta_;
+	user_change_info info_;
 };
 
 /**

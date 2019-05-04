@@ -11,8 +11,6 @@ namespace securepath::sync {
 
 class segment_record : public record_base {
 public:
-	static constexpr record_type_tag type = record_type_tag::segment_record;
-
 	template<typename Ar>
 	void serialise(Ar& ar) {
 		serialisation::sequence<Ar> seq(ar);

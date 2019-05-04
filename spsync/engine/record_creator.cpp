@@ -38,8 +38,22 @@ data_change_record data_change_record_creator::result() {
 }
 
 
+void user_change_record_creator::set_change(users access, metadata meta) {
+	// first authenticate the unencrypted data
+	encryptor_->process_auth(serialisation::asn_der_serialise(users_));
+	users_ = std::move(access);
+
+	// the metadata is put into the encrypted header which is protected
+	meta_ = std::move(meta);
+}
+
 user_change_record user_change_record_creator::result() {
-	return user_change_record{};
+	user_change_header header{std::move(info_), std::move(meta_)};
+
+	// create encrypted header that contains the user's metadata
+	encrypted_record_header<user_change_header> enc_header(encryptor_->process(serialisation::asn_der_serialise(header)));
+
+	return user_change_record{std::move(base_), std::move(users_), std::move(enc_header)};
 }
 
 segment_record segment_record_creator::result() {

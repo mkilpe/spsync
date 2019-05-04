@@ -10,6 +10,10 @@ namespace securepath::sync {
  */
 struct user_change_info {
 
+	user_change_info()
+	: creation_time(clock_type::now())
+	{}
+
 	// time when this change was created
 	time_point creation_time;
 
@@ -32,6 +36,11 @@ struct user_change_info {
  */
 class user_change_header {
 public:
+
+	user_change_header(user_change_info uc_info, util::metadata meta)
+	: user_change_(std::move(uc_info))
+	, metadata_(std::move(meta))
+	{}
 
 	template<typename Ar>
 	void serialise(Ar& ar) {

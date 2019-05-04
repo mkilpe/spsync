@@ -11,7 +11,11 @@ namespace securepath::sync {
 
 class user_change_record : public record_base {
 public:
-	static constexpr record_type_tag type = record_type_tag::user_change_record;
+	user_change_record(record_base base, users access, encrypted_record_header<user_change_header> header)
+	: record_base(std::move(base))
+	, access_(std::move(access))
+	, header_(std::move(header))
+	{}
 
 	template<typename Ar>
 	void serialise(Ar& ar) {

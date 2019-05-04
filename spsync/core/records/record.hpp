@@ -7,6 +7,7 @@
 
 #include <securepath/serialisation/sequence.hpp>
 #include <securepath/serialisation/util.hpp>
+#include <securepath/util/typelist.hpp>
 
 namespace securepath::sync {
 
@@ -50,21 +51,46 @@ private:
 	sequence_number server_sequence_;
 };
 
+
+/**
+ * Types of the records for the serialised record
+ */
+enum record_type_tag {
+	user_change_record_tag = 1,
+	data_change_record_tag,
+	segment_record_tag
+};
+
+class user_change_record;
+class data_change_record;
+class segment_record;
+
+using serialisation::type_tag;
+
+/// typelist for serialising choice
+using record_types = typelist<
+			type_tag<record<user_change_record>, user_change_record_tag>,
+			type_tag<record<data_change_record>, data_change_record_tag>,
+			type_tag<record<segment_record>, segment_record_tag> >;
+
+
+/**
+ * Contains the serialised record<RecordType> class for easy use in network protocol
+ */
 class serialised_record {
 public:
 	serialised_record() = default;
 
 	template<typename RecordType>
 	serialised_record(record<RecordType> const& record)
-	: type_(RecordType::type)
-	, record_(serialisation::asn_der_serialise(record))
+	: record_(serialisation::asn_der_serialise_choice<record_types>(record))
 	{
 	}
 
+	/// As above but construct the record<RecordType> on the fly
 	template<typename RecordType>
 	serialised_record(RecordType rec, util::content_auth auth)
-	: type_(RecordType::type)
-	, record_(serialisation::asn_der_serialise(
+	: record_(serialisation::asn_der_serialise_choice<record_types>(
 		record<RecordType>(std::move(rec), std::move(auth))))
 	{
 	}
@@ -72,12 +98,22 @@ public:
 	template<typename Ar>
 	void serialise(Ar& ar) {
 		serialisation::sequence<Ar> seq(ar);
-		seq & type_ & record_;
+		seq & record_;
+	}
+
+	/**
+	 * Helper function to deserialise the contained record type for handling
+	 *
+	 * The visitor type needs to have call-operator for the record<RecordType> types.
+	 * Example:
+	 *  struct visitor { void operator()(record<user_change_record> rec); ... };
+	 */
+	template<typename Visitor>
+	void deserialise_record(octet_span data, Visitor& v) {
+		serialisation::asn_der_deserialise_choice<record_types>(data, v);
 	}
 
 private:
-	//type of the record as enum
-	record_type_tag type_{record_type_tag::unknown};
 	//above record class as serialised
 	octet_vector record_;
 };

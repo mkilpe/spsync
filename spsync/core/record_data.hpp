@@ -14,6 +14,9 @@ enum class record_data_state {
 	/// data not requested
 	deferred,
 
+	/// the data is not yet complete on the remote side
+	remote_not_complete,
+
 	/// there are still data to be uploaded
 	upload_pending,
 
@@ -38,6 +41,9 @@ enum class record_data_state {
 class record_data {
 public:
 	virtual ~record_data() = default;
+
+	/// Local record data id which is used to relate the data to the record structure in database
+	virtual std::uint64_t local_id() const = 0;
 
 	/**
 	 * Returns the size of the data.

@@ -3,6 +3,7 @@
 
 #include <spsync/core/encryption_key_storage.hpp>
 
+#include <map>
 #include <mutex>
 
 namespace securepath::sync {
@@ -16,13 +17,21 @@ public:
 	, config(std::move(config))
 	{}
 
+	void commit_record(record_handle h) {
+		h->set_state(record_state::pending_commit);
+		request_handle req = comm.commit_record(h);
+		commit_requests[req] = h;
+	}
+
 	mutable std::mutex mutex;
 	comm_input& comm;
 	encryption_key_storage& keys;
 	record_storage& records;
 	sync_engine_config config;
 	engine_output* output{};
+
 	sequence_number last_seen_sequence;
+	std::map<request_handle, record_handle> commit_requests;
 };
 
 sync_engine::sync_engine(comm_input& comm, encryption_key_storage& keys, sync_engine_config config)
@@ -37,6 +46,25 @@ sync_engine::~sync_engine()
 void sync_engine::set_output(engine_output* output) {
 	std::unique_lock lock{impl_->mutex};
 	impl_->output = output;
+}
+
+
+//--- comm_output interface, see comm/interface.hpp
+
+void sync_engine::on_record_received(request_handle handle, result<serialised_record> const&) {
+
+}
+
+void sync_engine::on_data_received(request_handle handle, result<record_data_handle> const&) {
+
+}
+
+void sync_engine::on_commit_response(request_handle handle, result<commit_response> const&) {
+
+}
+
+void sync_engine::on_data_uploaded(request_handle handle, std::optional<error>) {
+
 }
 
 
@@ -59,10 +87,7 @@ record_handle sync_engine::sync_object_change(object_id oid, metadata mdata, rec
 	record_handle h = impl_->records.create(serialised_record(creator.result(), creator.authentication_tag()));
 	//f: handle record data
 
-	//todo: set record state .. h->set_state(record_authenticated | commit_pending);
-	request_handle req = impl_->comm.commit_record(h);
-
-	//todo: push pending commit to queue
+	impl_->commit_record(h);
 
 	return h;
 }
@@ -73,15 +98,11 @@ record_handle sync_engine::sync_user_change(users user_change, metadata mdata) {
 	user_change_record_creator creator(impl_->keys.current_key()
 		, last_record ? last_record->tag() : record_tag{}, impl_->last_seen_sequence);
 
-	//needs new encryption key here
-	//creator.add_change(std::move(user_change), std::move(mdata));
+	creator.set_change(std::move(user_change), std::move(mdata));
+	//todo: new encryption key here and such with the change
 
 	record_handle h = impl_->records.create(serialised_record(creator.result(), creator.authentication_tag()));
-
-	//todo: set record state .. h->set_state(record_authenticated | commit_pending);
-	request_handle req = impl_->comm.commit_record(h);
-
-	//todo: push pending commit to queue
+	impl_->commit_record(h);
 
 	return h;
 }
@@ -99,11 +120,7 @@ record_handle sync_engine::sync_segment_end(metadata mdata) {
 	//creator.add_change(std::move(mdata));
 
 	record_handle h = impl_->records.create(serialised_record(creator.result(), creator.authentication_tag()));
-
-	//todo: set record state .. h->set_state(record_authenticated | commit_pending);
-	request_handle req = impl_->comm.commit_record(h);
-
-	//todo: push pending commit to queue
+	impl_->commit_record(h);
 
 	return h;
 }
