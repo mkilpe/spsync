@@ -1,0 +1,39 @@
+
+= SPSync Client New Record Handling
+
+== Activity
+
+[plantuml]
+....
+
+start
+:new local record data;
+:create signed record structure;
+note right
+	Set the last seen sequence number on server for the record
+end note
+
+while(committed on server?) is (no)
+  :try to commit to server;
+  if(server declined) then (yes)
+  	:update records from server;
+  	if(is conflicting) then (yes)
+  		:notify higher layer about the conflict
+  		 * The higher layer needs to solve the conflict and re-try the change.
+  		 * The current record won't be committed.;
+  		stop
+  	else (no)
+  		:re-create record structure
+  		 * Reset the last seen sequence number on server for the record;
+  	endif
+  else (no)
+  endif
+
+endwhile (yes)
+
+:set server sequence number on database for the record;
+:upload record data if there are any;
+
+stop
+
+....

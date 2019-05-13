@@ -57,6 +57,8 @@ enum class access_type {
 serialisation::serialiser& serialise(serialisation::serialiser& s, access_type const& v);
 serialisation::deserialiser& serialise(serialisation::deserialiser& s, access_type& v);
 
+std::ostream& operator<<(std::ostream&, access_type const&);
+
 
 /**
  * \brief Access for specific user to a storage
@@ -72,6 +74,8 @@ struct user_access {
 		seq & user & access;
 	}
 };
+
+std::ostream& operator<<(std::ostream&, user_access const&);
 
 /*
 // is this needed?

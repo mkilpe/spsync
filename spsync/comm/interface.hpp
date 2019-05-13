@@ -49,17 +49,21 @@ struct comm_input {
 struct comm_output {
 	virtual ~comm_output() = default;
 
-	/// called when record is received as a response to fetch_record call
-	virtual void on_record_received(request_handle, result<serialised_record> const&) = 0;
+	/// called when record is received as a response to fetch_records call
+	virtual void on_record_response(request_handle, result<std::deque<serialised_record>> const&) = 0;
 
 	/// called when record data is fully received as a response to fetch_data call
-	virtual void on_data_received(request_handle, result<record_data_handle> const&) = 0;
+	virtual void on_data_response(request_handle, result<record_data_handle> const&) = 0;
 
 	/// called when getting response to a commit attempt from the server
-	virtual void on_commit_response(request_handle, result<commit_response> const&) = 0;
+	virtual void on_commit_response(request_handle, result<serialised_record> const&) = 0;
 
 	/// called when all data for a record has been uploaded or error occurred
 	virtual void on_data_uploaded(request_handle, std::optional<error>) = 0;
+
+	/// called when new record is received from the server
+	virtual void on_record_received(serialised_record const&) = 0;
+
 };
 
 }

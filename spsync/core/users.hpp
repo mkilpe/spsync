@@ -22,6 +22,9 @@ public:
 	/// Merge another users object to this one
 	void merge(users const&);
 
+	/// Get the users
+	std::deque<util::user_access> const& access() const;
+
 	template<typename Ar>
 	void serialise(Ar& ar) {
 		serialisation::sequence<Ar> seq(ar);
@@ -32,6 +35,8 @@ private:
 	std::deque<util::user_access> users_;
 	serialisation::trailing_data trailing_data_;
 };
+
+std::ostream& operator<<(std::ostream&, users const&);
 
 }
 

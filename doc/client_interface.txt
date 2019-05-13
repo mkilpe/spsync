@@ -1,10 +1,8 @@
 
-* std::uint64_t current_sequence();
 
-* header_stream fetch_headers(std::uint64_t seq_start, std::uint64_t seq_end);
-* data_stream fetch_data(record_id);
-
-*
-
-//client incoming
-* void on_change();
+* how to handle connect/disconnect from network?
+* how to handle conflicts?
+	* notify the higher layer but what we do with the conflicted local record?
+* what is the threading/call strategy for the engine?
+	* eg. do we allow to higher level to call engine from the callbacks that are called from the engine?
+	* should the comm layer never call directly back?

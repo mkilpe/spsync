@@ -22,4 +22,23 @@ void users::merge(users const&) {
 	assert(false);
 }
 
+std::deque<util::user_access> const& users::access() const {
+	return users_;
+}
+
+std::ostream& operator<<(std::ostream& out, users const& u) {
+	bool first = true;
+	out << "{users: ";
+	for(auto&& v : u.access()) {
+		if(first) {
+			first = false;
+		} else {
+			out << ", ";
+		}
+		out << v;
+	}
+	out << "}";
+	return out;
+}
+
 }

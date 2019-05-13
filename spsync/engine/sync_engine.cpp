@@ -1,7 +1,11 @@
 #include "sync_engine.hpp"
 #include "record_creator.hpp"
+#include "types.hpp"
 
 #include <spsync/core/encryption_key_storage.hpp>
+#include <spsync/protocol/types.hpp>
+
+#include <securepath/log/log.hpp>
 
 #include <map>
 #include <mutex>
@@ -15,6 +19,7 @@ public:
 	, keys(keys)
 	, records(comm.records())
 	, config(std::move(config))
+	, last_seen_sequence(records.last_sequence_number())
 	{}
 
 	void commit_record(record_handle h) {
@@ -23,7 +28,11 @@ public:
 		commit_requests[req] = h;
 	}
 
-	mutable std::mutex mutex;
+	void update_record_commit_state(record_handle h, serialised_record const& record) {
+		//record.deserialise_record([]{});
+	}
+
+	mutable engine_mutex_type mutex;
 	comm_input& comm;
 	encryption_key_storage& keys;
 	record_storage& records;
@@ -48,22 +57,53 @@ void sync_engine::set_output(engine_output* output) {
 	impl_->output = output;
 }
 
+void sync_engine::set_config(sync_engine_config config) {
+	std::unique_lock lock{impl_->mutex};
+	impl_->config = std::move(config);
+}
+
 
 //--- comm_output interface, see comm/interface.hpp
 
-void sync_engine::on_record_received(request_handle handle, result<serialised_record> const&) {
+void sync_engine::on_record_response(request_handle handle, result<std::deque<serialised_record>> const& res) {
+	std::unique_lock lock{impl_->mutex};
+
+	if(res) {
+		for(auto&& rec : res.value()) {
+
+		}
+	} else {
+		LOG_INFO("fetching records failed: error='%' (%)", res.get_error(), impl_->config.log_id);
+		//network error?
+	}
+}
+
+void sync_engine::on_data_response(request_handle handle, result<record_data_handle> const&) {
 
 }
 
-void sync_engine::on_data_received(request_handle handle, result<record_data_handle> const&) {
+void sync_engine::on_commit_response(request_handle handle, result<serialised_record> const& res) {
+	std::unique_lock lock{impl_->mutex};
 
-}
-
-void sync_engine::on_commit_response(request_handle handle, result<commit_response> const&) {
-
+	auto it = impl_->commit_requests.find(handle);
+	if(it != impl_->commit_requests.end()) {
+		if(res) {
+			impl_->update_record_commit_state(it->second, res.value());
+			impl_->commit_requests.erase(it);
+		} else {
+			LOG_INFO("committing failed: error='%' (%)", res.get_error(), impl_->config.log_id);
+			//todo: handle correctly
+		}
+	} else {
+		LOG_WARN("invalid request handle from comm-layer (%)", impl_->config.log_id);
+	}
 }
 
 void sync_engine::on_data_uploaded(request_handle handle, std::optional<error>) {
+
+}
+
+void sync_engine::on_record_received(serialised_record const&) {
 
 }
 
@@ -72,6 +112,9 @@ void sync_engine::on_data_uploaded(request_handle handle, std::optional<error>) 
 
 //f: for now just implement plain record without data
 record_handle sync_engine::sync_object_change(object_id oid, metadata mdata, record_data_handle) {
+	std::unique_lock lock{impl_->mutex};
+	LOG_TRACE("sync object change: oid='%' (%)", oid.to_hex(), impl_->config.log_id);
+
 	auto last_oid_record = impl_->records.find_last(oid);
 	auto last_record = impl_->records.find_last();
 
@@ -93,6 +136,9 @@ record_handle sync_engine::sync_object_change(object_id oid, metadata mdata, rec
 }
 
 record_handle sync_engine::sync_user_change(users user_change, metadata mdata) {
+	std::unique_lock lock{impl_->mutex};
+	LOG_TRACE("sync user change: users='%' (%)", user_change, impl_->config.log_id);
+
 	auto last_record = impl_->records.find_last();
 
 	user_change_record_creator creator(impl_->keys.current_key()
@@ -108,6 +154,9 @@ record_handle sync_engine::sync_user_change(users user_change, metadata mdata) {
 }
 
 record_handle sync_engine::sync_segment_end(metadata mdata) {
+	std::unique_lock lock{impl_->mutex};
+	LOG_TRACE("sync segment end (%)", impl_->config.log_id);
+
 	auto last_record = impl_->records.find_last();
 
 	if(!last_record) {

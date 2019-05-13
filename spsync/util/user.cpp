@@ -2,6 +2,7 @@
 #include "user.hpp"
 #include <securepath/serialisation/enum.hpp>
 
+#include <cmath>
 #include <ostream>
 
 namespace securepath::sync::util {
@@ -41,6 +42,33 @@ serialisation::serialiser& serialise(serialisation::serialiser& s, access_type c
 
 serialisation::deserialiser& serialise(serialisation::deserialiser& s, access_type& v) {
 	return securepath::serialisation::serialise(s, v);
+}
+
+std::ostream& operator<<(std::ostream& out, access_type const& access) {
+	char const* const atomics[] = {"read", "write", "management"};
+	int acc = static_cast<int>(access);
+	bool first = true;
+
+	if(access == access_type::no_access) {
+		out << "no access";
+	} else {
+		do {
+			int log = std::log2(acc);
+			if(first) {
+				first = false;
+			} else {
+				out << ", ";
+			}
+			out << atomics[log];
+			acc -= std::exp2(log);
+		} while(acc);
+	}
+
+	return out;
+}
+
+std::ostream& operator<<(std::ostream& out, user_access const& access) {
+	return out << "[" << access.user << ": " << access.access << "]";
 }
 
 }

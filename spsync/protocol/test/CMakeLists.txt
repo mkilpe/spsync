@@ -1,0 +1,1 @@
+add_sp_test_application(test_spsync_protocol spsync_protocol)
