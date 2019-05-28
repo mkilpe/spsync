@@ -1,12 +1,10 @@
 cmake_minimum_required(VERSION 3.10)
 
-if(EXISTS "cmake.config")
-	include("cmake.config" OPTIONAL)
-endif()
+include("cmake.config" REQUIRED)
 
 project("SPSync")
 
-include("/home/mikael/dev/sp-backup/src/cmake.main")
+include("${sp_main_repository_path}/cmake.main")
 
 # actual projects
 add_subdirectory(spsync)
