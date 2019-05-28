@@ -1,7 +1,7 @@
 #ifndef SPSYNC_COMM_INTERFACE_HEADER
 #define SPSYNC_COMM_INTERFACE_HEADER
 
-#include <spsync/core/record_data.hpp>
+#include <spsync/core/record_interface.hpp>
 #include <spsync/util/result.hpp>
 
 #include <cstdint>
