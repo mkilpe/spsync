@@ -1,8 +1,65 @@
 
 
 * how to handle connect/disconnect from network?
+
 * how to handle conflicts?
-	* notify the higher layer but what we do with the conflicted local record?
+	* notify the higher layer but what we do with the conflicted local record? -- keep it as record of action but remove data?
+
 * what is the threading/call strategy for the engine?
-	* eg. do we allow to higher level to call engine from the callbacks that are called from the engine?
-	* should the comm layer never call directly back?
+	* eg. do we allow to higher level to call engine from the callbacks that are called from the engine? yes if possible
+	* should the comm layer never call directly back? yes it should not
+
+* should we have action history that records everything that happened for further inspection? Definitely!
+	* good for debugging/tracking issues
+	* good for users to see what has happened in the past, what failed etc
+
+* we need more control than just scaling with full cpu usage:
+	* throttling network connections (this means timer on asio networking code)
+	* throttling cpu usage (limit automated processing, ie. require user to trigger actions, limit thread amount)
+
+
+
+----
+
+Separation of things:
+
+* state (the current state, which object exist and the data for it)
+* history (gives the history what has happened in the past, all actions/errors)
+* progress (gives the current progress if anything is happening)
+* engine (actually does the synchronisation logic)
+
+
+----
+
+
+
+
+threading model candidates:
+
+-- asio io_service (global asynchronous multi thread pool)
+	pros:
+		* scales well as the total thread count can be fixed
+		* network uses io_service anyhow
+	cons:
+		* object destruction is harder to manage
+
+-- asio io_service per storage (per storage asynchronous multi thread pool)
+	pros:
+		* easier to handle destruction than in global io_service
+		* highly concurrent
+	cons:
+		* excessive thread usage
+
+-- single thread per storage
+	pros:
+		* easier to program (destruction)
+	cons:
+		* does not scale well with many storages
+		* requires potentially extra thread jump because networking using io_service
+
+-- event queue (global single thread)
+	pros:
+		* very easy programming model, not many locks needed
+	cons:
+		* scales very poorly
+		* requires potentially extra thread jump because networking using io_service

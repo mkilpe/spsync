@@ -23,7 +23,7 @@ public:
 	/// Returns true if this user id is valid
 	bool is_valid() const;
 
-	/// Get underlaying public key id
+	/// Get underlying public key id
 	crypto::public_key_id public_key_id() const;
 
 	template<typename Ar>

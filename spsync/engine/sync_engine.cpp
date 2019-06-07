@@ -32,6 +32,7 @@ public:
 		//record.deserialise_record([]{});
 	}
 
+public:
 	mutable engine_mutex_type mutex;
 	comm_input& comm;
 	encryption_key_storage& keys;

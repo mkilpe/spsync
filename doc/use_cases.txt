@@ -1,7 +1,7 @@
 
 1: File-like synchronisation which works well on mobile:
 	* Allow to fetch data for individual files only
-	* support aggregated changes (i.e. allow to establish well known state in history where one can easily go back)
+	* support aggregated changes (ie. allow to establish well known state in history where one can easily go back)
 	* structure where some object depend on others (think of files under directories)
 
 2: Single object synchronisation (aka synchronised remote object)
