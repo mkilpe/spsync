@@ -1,0 +1,24 @@
+
+// asciidoctor-pdf -r asciidoctor-diagram architecture.adoc
+
+= SPSync Server Architecture
+
+== High-level Layer View
+[ditaa]
+----
+            +------------------------+
+            | {io}cYELNetwork        |
+            +-----------+------------+
+                        |
+                        |   Multiplex to correct storage based on the packet
+                        |
+            +-----------+------------+
+            |    cGREStorage         |
+            +-----------+------------+
+                        |
+                        |   Post call via per storage strand
+                        |
+            +-----------+------------+
+            |  cPNKCall handler      |
+            +------------------------+
+----

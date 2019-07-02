@@ -16,7 +16,7 @@ class commit_response;
 using util::sequence_number;
 using util::result;
 
-/// arbitrary number that assosiates comm_input request to comm_output response
+/// arbitrary number that associates comm_input request to comm_output response
 using request_handle = std::uint32_t;
 
 /**

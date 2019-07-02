@@ -1,67 +1,52 @@
-#include "comm_test_interface.hpp"
+#ifndef SPSYNC_ENGINE_TEST_COMM_TEST_INTERFACE_HEADER
+#define SPSYNC_ENGINE_TEST_COMM_TEST_INTERFACE_HEADER
 
+#include <spsync/comm/interface.hpp>
+
+#include <memory>
 
 namespace securepath::sync {
 
-class comm_test_interface::impl {
+/**
+ * The test implementation of comm_input interface for engine unit tests
+ */
+class comm_test_interface : public comm_input {
 public:
-	void fetch_records(request_handle req, sequence_number start, sequence_number end) {
+	comm_test_interface(sync::progress&, record_storage&);
+	~comm_test_interface();
 
-	}
+	void set_output(comm_output&);
 
-	void fetch_data(request_handle req, sequence_number record) {
-
-	}
-
-	void commit_record(request_handle req, record_handle) {
-
-	}
 public:
-	comm_output* output;
-	sequence_number current_seq{1};
-	request_handle req_handle{};
-	std::deque<std::function<void()>> event_queue;
+	// the test drive interface
+	using fetch_record_sig = result<std::deque<serialised_record>>(sequence_number, sequence_number);
+	using fetch_data_sig = result<record_data_handle>(sequence_number);
+	using commit_sig = result<serialised_record>(record_handle);
+
+	void add_fetch_records_response(std::function<fetch_record_sig>);
+	void add_fetch_data_response(std::function<fetch_data_sig>);
+	void add_commit_record_response(std::function<commit_sig>);
+	void add_action(std::function<void(comm_output&)>);
+
+	void process_event();
+
+public:
+	// -- comm_input interface, see interface.hpp --
+	virtual sequence_number current_sequence_number() const;
+	virtual request_handle fetch_records(sequence_number start, sequence_number end);
+	virtual request_handle fetch_data(sequence_number record);
+	virtual request_handle commit_record(record_handle);
+	virtual sync::progress& progress() { return progress_; }
+	virtual record_storage& records() { return records_; }
+
+private:
+	sync::progress& progress_;
+	record_storage& records_;
+
+	class impl;
+	std::unique_ptr<impl> impl_;
 };
 
-comm_test_interface::comm_test_interface()
-: impl_(std::make_unique<impl>())
-{
 }
 
-comm_test_interface::~comm_test_interface()
-{
-}
-
-void comm_test_interface::set_output(comm_output& output) {
-	impl_->output = &output;
-}
-
-sequence_number comm_test_interface::current_sequence_number() const {
-	return impl_->current_seq;
-}
-
-request_handle comm_test_interface::fetch_records(sequence_number start, sequence_number end) {
-	req handle ret = ++impl_->req_handle;
-	impl_->event_queue_.push_back([=] {
-		impl_->fetch_records(ret, start, end);
-	});
-	return ret;
-}
-
-request_handle comm_test_interface::fetch_data(sequence_number record){
-	req handle ret = ++impl_->req_handle;
-	impl_->event_queue.push_back([=] {
-		impl_->fetch_data(ret, record);
-	});
-	return ret;
-}
-
-request_handle comm_test_interface::commit_record(record_handle record) {
-	req handle ret = ++impl_->req_handle;
-	impl_->event_queue.push_back([=] {
-		impl_->commit_record(ret, record);
-	});
-	return ret;
-}
-
-}
+#endif

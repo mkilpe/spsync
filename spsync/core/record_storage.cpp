@@ -62,6 +62,7 @@ public:
 		return nullptr;
 	}
 
+	//q: cache serialised record too ?
 	virtual serialised_record record() const {
 		auto q = db_->prepare("SELECT record FROM record WHERE key = :k;");
 		q.bind(":k", record_key_);
@@ -220,8 +221,21 @@ record_handle record_storage::find(record_tag const& tag) const {
 	return impl_->load_record(q.execute());
 }
 
-record_handle record_storage::create(serialised_record const& rec, record_data_handle) {
-	return nullptr;
-}
 
+//Problem:
+// data change might have multiple object changes, how to handle the prev_object_tag here?
+
+//record_handle record_storage::create(serialised_record const& rec, record_data_handle data_handle) {
+//	return nullptr;
+//}
+/*
+		tag: record tag as blob --> rec.??
+		prev_tag: previous record tag as blob --> rec.base.??
+		prev_object_tag: previous record tag for the same object as blob --> only for data change record
+		seq: server sequence as integer --> rec.??
+		oid: object id as blob --> only for data change record
+		state: record state as integer --> initial state?
+		data_ref: unique id to record data database table as integer --> record_data_handle
+		record: serialised record as blob --> rec
+*/
 }

@@ -44,7 +44,9 @@ public:
 	record_handle find(record_tag const& tag) const;
 
 	/// create new record
-	record_handle create(serialised_record const&, record_data_handle = {});
+	//record_handle create(serialised_record const&, record_data_handle = {});
+	template<typename RecordType>
+	record_handle create(record<RecordType> const&, record_data_handle = {});
 private:
 	class impl;
 	std::unique_ptr<impl> impl_;

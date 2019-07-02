@@ -10,7 +10,7 @@ namespace securepath::sync::util {
 
 std::string const db_name = "encryption_key_storage_test.db";
 
-void remove_database_test_db() {
+static void remove_database_test_db() {
 	std::remove(db_name.c_str());
 }
 

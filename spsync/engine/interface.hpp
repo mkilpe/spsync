@@ -21,7 +21,7 @@ struct engine_input {
 
 	/// synchronise object change with given id, user metadata and data
 	virtual record_handle sync_object_change(object_id, metadata, record_data_handle = {}) = 0;
-	//q: what should the return type be there? somehow one needs to know when it was successfull (ie. identify the record later on)
+	//q: what should the return type be there? somehow one needs to know when it was successful (ie. identify the record later on)
 
 	/// synchronise user change
 	virtual record_handle sync_user_change(users user_change, metadata = {}) = 0;
