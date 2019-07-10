@@ -5,6 +5,7 @@
 #include <spsync/core/records/data_change_record.hpp>
 #include <spsync/core/records/user_change_record.hpp>
 #include <spsync/core/records/segment_record.hpp>
+#include <spsync/core/records/record.hpp>
 #include <spsync/util/content_auth.hpp>
 #include <securepath/crypto/auth_stream_cipher.hpp>
 
@@ -38,7 +39,7 @@ public:
 	void add_change(object_id oid, record_tag previous_oid_record_tag, metadata);
 
 	/// Returns the ready data_change_record, it can be called only once as it will move content
-	data_change_record result();
+	record<data_change_record> result();
 
 private:
 	std::deque<single_change> changes_;
@@ -57,7 +58,7 @@ public:
 	//todo: add the data to user_change_info, like possible old encryption keys, new encryption key
 
 	/// Returns the ready user_change_record, it can be called only once as it will move content
-	user_change_record result();
+	record<user_change_record> result();
 
 private:
 	users users_;
@@ -73,7 +74,7 @@ public:
 	using record_creator_base::record_creator_base;
 
 	/// Returns the ready segment_record, it can be called only once as it will move content
-	segment_record result();
+	record<segment_record> result();
 };
 
 }

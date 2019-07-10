@@ -1,6 +1,6 @@
 #include "comm_test_interface.hpp"
 
-namespace securepath::sync {
+namespace securepath::sync::test {
 
 class comm_test_interface::impl {
 public:

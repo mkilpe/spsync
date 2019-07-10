@@ -52,6 +52,12 @@ private:
 	std::unique_ptr<impl> impl_;
 };
 
+template<typename RecordType>
+record_handle record_storage::create(record<RecordType> const& rec, record_data_handle data) {
+	//implement
+	return nullptr;
+}
+
 }
 
 #endif

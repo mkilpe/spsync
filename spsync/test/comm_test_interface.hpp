@@ -1,11 +1,11 @@
-#ifndef SPSYNC_ENGINE_TEST_COMM_TEST_INTERFACE_HEADER
-#define SPSYNC_ENGINE_TEST_COMM_TEST_INTERFACE_HEADER
+#ifndef SPSYNC_TEST_COMM_TEST_INTERFACE_HEADER
+#define SPSYNC_TEST_COMM_TEST_INTERFACE_HEADER
 
 #include <spsync/comm/interface.hpp>
 
 #include <memory>
 
-namespace securepath::sync {
+namespace securepath::sync::test {
 
 /**
  * The test implementation of comm_input interface for engine unit tests

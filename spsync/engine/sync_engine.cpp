@@ -128,7 +128,7 @@ record_handle sync_engine::sync_object_change(object_id oid, metadata mdata, rec
 	data_change_record_creator creator(impl_->keys.current_key(), last_record->tag(), impl_->last_seen_sequence);
 	creator.add_change(std::move(oid), last_oid_tag, std::move(mdata));
 
-	record_handle h = impl_->records.create(serialised_record(creator.result(), creator.authentication_tag()));
+	record_handle h = impl_->records.create(creator.result());
 	//f: handle record data
 
 	impl_->commit_record(h);
@@ -148,7 +148,7 @@ record_handle sync_engine::sync_user_change(users user_change, metadata mdata) {
 	creator.set_change(std::move(user_change), std::move(mdata));
 	//todo: new encryption key here and such with the change
 
-	record_handle h = impl_->records.create(serialised_record(creator.result(), creator.authentication_tag()));
+	record_handle h = impl_->records.create(creator.result());
 	impl_->commit_record(h);
 
 	return h;
@@ -169,7 +169,7 @@ record_handle sync_engine::sync_segment_end(metadata mdata) {
 	//needs the start, end sequences and the record tags
 	//creator.add_change(std::move(mdata));
 
-	record_handle h = impl_->records.create(serialised_record(creator.result(), creator.authentication_tag()));
+	record_handle h = impl_->records.create(creator.result());
 	impl_->commit_record(h);
 
 	return h;
