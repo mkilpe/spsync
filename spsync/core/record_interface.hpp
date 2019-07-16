@@ -45,7 +45,10 @@ public:
 	virtual record_state state() const = 0;
 
 	/// Set the state of this record
-	virtual void set_state(record_state) = 0;
+	virtual void set_state(record_state, sequence_number server_seq = {}) = 0;
+
+	/// Set object id for data change record
+	virtual void set_oid(octet_vector const& oid) = 0;
 
 	/// Handle to the record data
 	virtual record_data_handle data() = 0;

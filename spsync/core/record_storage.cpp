@@ -1,6 +1,7 @@
 #include "record_storage.hpp"
 
 #include <securepath/database/util.hpp>
+#include <securepath/serialisation/util.hpp>
 
 #include <memory>
 #include <mutex>
@@ -41,13 +42,23 @@ public:
 		return state_;
 	}
 
-	virtual void set_state(record_state state) {
+	virtual void set_state(record_state state, sequence_number server_seq) {
 		std::unique_lock lock{mutex_};
 		state_ = state;
+		seq_ = server_seq;
 
 		//update state in database
-		auto q = db_->prepare("UPDATE record SET state = :s WHERE key = :k;");
-		q.bind(":s", static_cast<std::uint64_t>(state_));
+		auto q = db_->prepare("UPDATE record SET state = :state, seq = :seq WHERE key = :k;");
+		q.bind(":state", static_cast<std::uint64_t>(state_));
+		q.bind(":seq", server_seq.value);
+		q.bind(":k", record_key_);
+		q.execute();
+	}
+
+	virtual void set_oid(octet_vector const& oid) {
+		//update object id in database
+		auto q = db_->prepare("UPDATE record SET oid = :o WHERE key = :k;");
+		q.bind(":o", oid);
 		q.bind(":k", record_key_);
 		q.execute();
 	}
@@ -224,18 +235,23 @@ record_handle record_storage::find(record_tag const& tag) const {
 
 //Problem:
 // data change might have multiple object changes, how to handle the prev_object_tag here?
+// The prev object tag is ignored for now, see later on if it is needed and if it should be in the record itself
 
-//record_handle record_storage::create(serialised_record const& rec, record_data_handle data_handle) {
-//	return nullptr;
-//}
-/*
-		tag: record tag as blob --> rec.??
-		prev_tag: previous record tag as blob --> rec.base.??
-		prev_object_tag: previous record tag for the same object as blob --> only for data change record
-		seq: server sequence as integer --> rec.??
-		oid: object id as blob --> only for data change record
-		state: record state as integer --> initial state?
-		data_ref: unique id to record data database table as integer --> record_data_handle
-		record: serialised record as blob --> rec
-*/
+record_handle record_storage::create(serialised_record const& rec, record_tag const& previous_tag, record_data_handle data_handle) {
+	auto q = impl_->db->prepare(
+		"INSERT INTO record"
+			"VALUES(:tag, :prev_tag, :prev_object_tag, :seq, :oid, :state, :data_ref, :record)");
+	q.bind(":tag", rec.tag());
+	q.bind(":prev_tag", previous_tag);
+	q.bind(":prev_object_tag", octet_vector{});
+	q.bind(":seq", rec.server_sequence().value);
+	q.bind(":oid", octet_vector{});
+	q.bind(":state", std::uint64_t{}); //unknown state, must be set after creating the record_handle
+	q.bind(":data_ref", data_handle ? data_handle->local_id() : 0);
+	q.bind(":record", serialisation::asn_der_serialise(rec));
+	q.execute();
+
+	return find(rec.tag());
+}
+
 }

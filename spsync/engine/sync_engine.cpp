@@ -6,6 +6,7 @@
 #include <spsync/protocol/types.hpp>
 
 #include <securepath/log/log.hpp>
+#include <securepath/util/conversions.hpp>
 
 #include <map>
 #include <mutex>
@@ -29,7 +30,20 @@ public:
 	}
 
 	void update_record_commit_state(record_handle h, serialised_record const& record) {
+		if(record.check_matches_without_seq(h->record())) {
+			h->set_state(record_state::in_sync, record.server_sequence());
+		} else {
+			//t: handle error
+			LOG_WARN("Server returned different record that was sent [local tag=%1%, server tag=%2%]"
+				, to_hex(h->tag()), to_hex(record.tag()));
+		}
 		//record.deserialise_record([]{});
+	}
+
+	void handle_incoming_record(serialised_record const& record) {
+		//if() {
+
+		//}
 	}
 
 public:
@@ -68,10 +82,9 @@ void sync_engine::set_config(sync_engine_config config) {
 
 void sync_engine::on_record_response(request_handle handle, result<std::deque<serialised_record>> const& res) {
 	std::unique_lock lock{impl_->mutex};
-
 	if(res) {
 		for(auto&& rec : res.value()) {
-
+			impl_->handle_incoming_record(rec);
 		}
 	} else {
 		LOG_INFO("fetching records failed: error='%' (%)", res.get_error(), impl_->config.log_id);

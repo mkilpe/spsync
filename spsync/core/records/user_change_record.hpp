@@ -9,24 +9,40 @@
 
 namespace securepath::sync {
 
+class plain_user_change_data {
+public:
+	plain_user_change_data(users access = {})
+	: access_(std::move(access))
+	{}
+
+	template<typename Ar>
+	void serialise(Ar& ar) {
+		serialisation::sequence<Ar> seq(ar);
+		seq & access_ & trailing_data_;
+	}
+private:
+	// the change in users access
+	users access_;
+	serialisation::trailing_data trailing_data_;
+};
+
 class user_change_record : public record_base {
 public:
-	user_change_record(record_base base, users access, encrypted_record_header<user_change_header> header)
+	user_change_record() = default;
+	user_change_record(record_base base, plain_user_change_data data, encrypted_record_header<user_change_header> header)
 	: record_base(std::move(base))
-	, access_(std::move(access))
+	, data_(std::move(data))
 	, header_(std::move(header))
 	{}
 
 	template<typename Ar>
 	void serialise(Ar& ar) {
 		serialisation::sequence<Ar> seq(ar);
-		seq & access_ & header_ & trailing_data_;
+		seq & data_ & header_;
 	}
 private:
-	// the change in users access
-	users access_;
+	plain_user_change_data data_;
 	encrypted_record_header<user_change_header> header_;
-	serialisation::trailing_data trailing_data_;
 };
 
 }

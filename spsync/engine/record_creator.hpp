@@ -39,7 +39,7 @@ public:
 	void add_change(object_id oid, record_tag previous_oid_record_tag, metadata);
 
 	/// Returns the ready data_change_record, it can be called only once as it will move content
-	record<data_change_record> result();
+	auth_record<data_change_record> result();
 
 private:
 	std::deque<single_change> changes_;
@@ -58,10 +58,10 @@ public:
 	//todo: add the data to user_change_info, like possible old encryption keys, new encryption key
 
 	/// Returns the ready user_change_record, it can be called only once as it will move content
-	record<user_change_record> result();
+	auth_record<user_change_record> result();
 
 private:
-	users users_;
+	plain_user_change_data plain_record_;
 	metadata meta_;
 	user_change_info info_;
 };
@@ -74,7 +74,7 @@ public:
 	using record_creator_base::record_creator_base;
 
 	/// Returns the ready segment_record, it can be called only once as it will move content
-	record<segment_record> result();
+	auth_record<segment_record> result();
 };
 
 }

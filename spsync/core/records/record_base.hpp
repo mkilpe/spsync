@@ -27,12 +27,23 @@ public:
 			& encryption_key_id_ & trailing_data_;
 	}
 
+	/// Returns the sequence number that was the last one seen before this record was created
+	sequence_number last_seen_sequence() const { return last_seen_server_sequence_; }
+
+	/// Returns the tag of the previous record prior to this one
+	record_tag previous_tag() const { return previous_record_tag_; }
+
+	/// Returns the initialisation vector that is used to encrypted the data in this record
 	octet_vector const& iv() const { return iv_; }
+
+	/// Returns the sequence number of the encryption key used for this record
+	sequence_number encryption_key() const { return encryption_key_id_; }
+
 private:
 	// version of the current structure
 	int structure_version_{1};
 
-	// this is the last sequence the client has seen when pushing this record
+	// this is the last sequence the client has seen when creating this record
 	sequence_number last_seen_server_sequence_;
 
 	// tag of the previous record to form a chain
