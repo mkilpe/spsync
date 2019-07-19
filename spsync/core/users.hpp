@@ -4,6 +4,8 @@
 #include <spsync/core/types.hpp>
 #include <spsync/util/user.hpp>
 
+#include <securepath/serialisation/deque.hpp>
+
 #include <deque>
 
 namespace securepath::sync {

@@ -11,7 +11,7 @@ namespace securepath::sync::util {
  */
 class content_auth {
 public:
-	content_auth(octet_vector tag = {})
+	explicit content_auth(octet_vector tag = {})
 	: gcm_tag_(std::move(tag))
 	{}
 

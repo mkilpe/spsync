@@ -17,7 +17,7 @@ namespace securepath::sync::util {
 class object_id {
 public:
 	/// construct object id from vector of octets
-	object_id(octet_vector = {});
+	explicit object_id(octet_vector = {});
 
 	/// returns true if this object id is valid
 	bool is_valid() const;

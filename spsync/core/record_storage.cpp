@@ -141,7 +141,8 @@ struct record_storage::impl {
 		auto data_ref = q.value<std::uint64_t>(5);
 
 		//check if the data is valid, notice that data_ref might not be set
-		if(!tag || !prev_tag || !seq || !state) {
+		if(!tag || !seq || !state) {
+			LOG_WARN("invalid record storage entry [key=%1%]", key);
 			throw make_error(securepath::errc::invalid_data, "failed to interpret record columns");
 		}
 
@@ -149,7 +150,7 @@ struct record_storage::impl {
 			( db
 			, key
 			, std::move(*tag)
-			, std::move(*prev_tag)
+			, prev_tag ? std::move(*prev_tag) : octet_vector{}
 			, sequence_number{*seq}
 			, static_cast<record_state>(*state)
 			, data_ref.value_or(0));
@@ -157,10 +158,12 @@ struct record_storage::impl {
 
 	record_handle load_record(database::query const& q) {
 		if(!q) {
+			LOG_WARN("no such entry in record storage");
 			throw make_error(securepath::errc::no_such_data);
 		}
 		auto key = q.value<std::uint64_t>(0);
 		if(!key) {
+			LOG_WARN("invalid record storage entry, no key set");
 			throw make_error(securepath::errc::invalid_data, "failed to interpret record key column");
 		}
 
@@ -203,10 +206,7 @@ sequence_number record_storage::last_sequence_number() const {
 		throw make_error(securepath::errc::no_such_data);
 	}
 	auto data = res.value<std::uint64_t>(0);
-	if(!data) {
-		throw make_error(securepath::errc::invalid_data, "failed to interpret record sequence number column");
-	}
-	return sequence_number{*data};
+	return sequence_number{data.value_or(0)};
 }
 
 record_handle record_storage::find_last() const {
@@ -239,8 +239,8 @@ record_handle record_storage::find(record_tag const& tag) const {
 
 record_handle record_storage::create(serialised_record const& rec, record_tag const& previous_tag, record_data_handle data_handle) {
 	auto q = impl_->db->prepare(
-		"INSERT INTO record"
-			"VALUES(:tag, :prev_tag, :prev_object_tag, :seq, :oid, :state, :data_ref, :record)");
+		"INSERT INTO record(tag, prev_tag, prev_object_tag, seq, oid, state, data_ref, record) "
+			"VALUES(:tag, :prev_tag, :prev_object_tag, :seq, :oid, :state, :data_ref, :record);");
 	q.bind(":tag", rec.tag());
 	q.bind(":prev_tag", previous_tag);
 	q.bind(":prev_object_tag", octet_vector{});

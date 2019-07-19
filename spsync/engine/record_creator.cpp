@@ -15,7 +15,7 @@ record_creator_base::record_creator_base(encryption_key const& key, record_tag p
 }
 
 util::content_auth record_creator_base::authentication_tag() {
-	return encryptor_->tag();
+	return util::content_auth{encryptor_->tag()};
 }
 
 
