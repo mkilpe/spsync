@@ -47,11 +47,16 @@ struct single_change  {
 
 class data_change_record : public record_base {
 public:
+	using const_iterator = std::deque<single_change>::const_iterator;
+
 	data_change_record() = default;
 	data_change_record(record_base base, std::deque<single_change> changes)
 	: record_base(std::move(base))
 	, changes_(std::move(changes))
 	{}
+
+	const_iterator begin() const { return changes_.begin(); }
+	const_iterator end() const { return changes_.end(); }
 
 	template<typename Ar>
 	void serialise(Ar& ar) {

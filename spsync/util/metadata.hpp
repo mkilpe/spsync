@@ -20,6 +20,9 @@ class metadata {
 public:
 	using key_type = std::string;
 
+	metadata() = default;
+	metadata(std::initializer_list<std::pair<key_type const, octet_vector>>);
+
 	/// insert (or replace) typed data which will be serialised
 	template<typename Data>
 	void insert(key_type const& key, Data const& data) {
@@ -53,6 +56,8 @@ public:
 		seq & data_ & trailing_data_;
 	}
 
+	/// Returns true if there is no meta-data
+	bool empty() const;
 private:
 	std::map<key_type, octet_vector> data_;
 	serialisation::trailing_data trailing_data_;

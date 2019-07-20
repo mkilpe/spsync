@@ -43,10 +43,10 @@ public:
 	/// find record that has the given tag
 	record_handle find(record_tag const& tag) const;
 
-	/// create new record, these functions sets the state to be unknown and the object id is not set
+	/// create new record, the first function sets the state to be unknown and the object id is not set
 	template<typename RecordType>
 	record_handle create(auth_record<RecordType> const&, record_data_handle = {});
-	record_handle create(serialised_record const&, record_tag const& previous_tag, record_data_handle = {});
+	record_handle create(serialised_record const&, record_tag const& previous_tag, record_state state, record_data_handle = {});
 
 private:
 	class impl;
@@ -55,7 +55,7 @@ private:
 
 template<typename RecordType>
 record_handle record_storage::create(auth_record<RecordType> const& rec, record_data_handle data) {
-	return create(serialised_record(rec), rec.record.previous_tag(), std::move(data));
+	return create(serialised_record(rec), rec.record.previous_tag(), record_state::unknown, std::move(data));
 }
 
 }

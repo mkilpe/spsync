@@ -37,13 +37,16 @@ public:
 			LOG_WARN("Server returned different record that was sent [local tag=%1%, server tag=%2%]"
 				, to_hex(h->tag()), to_hex(record.tag()));
 		}
-		//record.deserialise_record([]{});
 	}
 
 	void handle_incoming_record(serialised_record const& record) {
-		//if() {
-
-		//}
+		// 1. check the record is cryptographically valid
+		// 2. put the record to storage
+			/*
+			record.deserialise_record([&](auto const& rec){
+				records.create(record, rec.previous_tag(), record_state::in_sync);
+			});
+			*/
 	}
 
 public:
@@ -106,7 +109,10 @@ void sync_engine::on_commit_response(request_handle handle, result<serialised_re
 			impl_->commit_requests.erase(it);
 		} else {
 			LOG_INFO("committing failed: error='%' (%)", res.get_error(), impl_->config.log_id);
-			//todo: handle correctly
+			//todo: handle correctly:
+			//  1. bring us up-to-date with server state
+			//  2. recreate the record with correct previous tag/last seen seq
+			//  3. try to commit again
 		}
 	} else {
 		LOG_WARN("invalid request handle from comm-layer (%)", impl_->config.log_id);
@@ -114,11 +120,11 @@ void sync_engine::on_commit_response(request_handle handle, result<serialised_re
 }
 
 void sync_engine::on_data_uploaded(request_handle handle, std::optional<error>) {
-
+	assert(not "implemented");
 }
 
-void sync_engine::on_record_received(serialised_record const&) {
-
+void sync_engine::on_record_received(serialised_record const& rec) {
+	impl_->handle_incoming_record(rec);
 }
 
 

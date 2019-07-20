@@ -59,4 +59,18 @@ TEST_CASE("metadata", "[unit]") {
 	}
 }
 
+TEST_CASE("metadata init", "[unit]") {
+	{
+		CHECK(metadata().empty());
+		CHECK(metadata{}.empty());
+	}
+	{
+		metadata data{{"test", to_octet_vector("data")}};
+		CHECK(!data.empty());
+		auto result = data.find("test");
+		REQUIRE(result);
+		CHECK(*result == to_octet_vector("data"));
+	}
+}
+
 }

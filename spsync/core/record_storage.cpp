@@ -121,10 +121,10 @@ struct record_storage::impl {
 		if(!db->has_table("record")) {
 			db->prepare("CREATE TABLE record("
 				"key INTEGER PRIMARY KEY,"
-				"tag BLOB,"
+				"tag BLOB UNIQUE,"
 				"prev_tag BLOB,"
 				"prev_object_tag BLOB,"
-				"seq INTEGER,"
+				"seq INTEGER UNIQUE,"
 				"oid BLOB,"
 				"state INTEGER,"
 				"data_ref INTEGER,"
@@ -210,24 +210,32 @@ sequence_number record_storage::last_sequence_number() const {
 }
 
 record_handle record_storage::find_last() const {
-	auto q = impl_->db->prepare("SELECT key, tag, prev_tag, seq, state, data_ref FROM record WHERE seq = (SELECT max(seq) FROM record);");
+	auto q = impl_->db->prepare(
+		"SELECT key, tag, prev_tag, seq, state, data_ref FROM record"
+		" WHERE seq = (SELECT max(seq) FROM record);");
 	return impl_->load_record(q.execute());
 }
 
 record_handle record_storage::find_last(object_id const& oid) const {
-	auto q = impl_->db->prepare("SELECT key, tag, prev_tag, seq, state, data_ref FROM record WHERE seq = (SELECT max(seq) FROM record WHERE oid = :o);");
+	auto q = impl_->db->prepare(
+		"SELECT key, tag, prev_tag, seq, state, data_ref FROM record"
+		" WHERE seq = (SELECT max(seq) FROM record WHERE oid = :o);");
 	q.bind(":o", oid.value());
 	return impl_->load_record(q.execute());
 }
 
 record_handle record_storage::find_first(object_id const& oid) const {
-	auto q = impl_->db->prepare("SELECT key, tag, prev_tag, seq, state, data_ref FROM record WHERE seq = (SELECT min(seq) FROM record WHERE oid = :o);");
+	auto q = impl_->db->prepare(
+		"SELECT key, tag, prev_tag, seq, state, data_ref FROM record"
+		" WHERE seq = (SELECT min(seq) FROM record WHERE oid = :o);");
 	q.bind(":o", oid.value());
 	return impl_->load_record(q.execute());
 }
 
 record_handle record_storage::find(record_tag const& tag) const {
-	auto q = impl_->db->prepare("SELECT key, tag, prev_tag, seq, state, data_ref FROM record WHERE tag = :t;");
+	auto q = impl_->db->prepare(
+		"SELECT key, tag, prev_tag, seq, state, data_ref FROM record"
+		" WHERE tag = :t;");
 	q.bind(":t", tag);
 	return impl_->load_record(q.execute());
 }
@@ -237,16 +245,17 @@ record_handle record_storage::find(record_tag const& tag) const {
 // data change might have multiple object changes, how to handle the prev_object_tag here?
 // The prev object tag is ignored for now, see later on if it is needed and if it should be in the record itself
 
-record_handle record_storage::create(serialised_record const& rec, record_tag const& previous_tag, record_data_handle data_handle) {
+record_handle record_storage::create(serialised_record const& rec, record_tag const& previous_tag,
+									 record_state state, record_data_handle data_handle) {
 	auto q = impl_->db->prepare(
-		"INSERT INTO record(tag, prev_tag, prev_object_tag, seq, oid, state, data_ref, record) "
-			"VALUES(:tag, :prev_tag, :prev_object_tag, :seq, :oid, :state, :data_ref, :record);");
+		"INSERT INTO record(tag, prev_tag, prev_object_tag, seq, oid, state, data_ref, record)"
+		" VALUES(:tag, :prev_tag, :prev_object_tag, :seq, :oid, :state, :data_ref, :record);");
 	q.bind(":tag", rec.tag());
 	q.bind(":prev_tag", previous_tag);
 	q.bind(":prev_object_tag", octet_vector{});
 	q.bind(":seq", rec.server_sequence().value);
 	q.bind(":oid", octet_vector{});
-	q.bind(":state", std::uint64_t{}); //unknown state, must be set after creating the record_handle
+	q.bind(":state", static_cast<std::uint64_t>(state));
 	q.bind(":data_ref", data_handle ? data_handle->local_id() : 0);
 	q.bind(":record", serialisation::asn_der_serialise(rec));
 	q.execute();

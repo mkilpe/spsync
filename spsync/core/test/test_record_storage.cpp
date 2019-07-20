@@ -87,4 +87,7 @@ TEST_CASE("record_storage", "[unit]") {
 
 }
 
+//t: test only unique sequences work
+//t: test only unique tags work
+
 }
