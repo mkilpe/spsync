@@ -111,8 +111,9 @@ void sync_engine::on_commit_response(request_handle handle, result<serialised_re
 			LOG_INFO("committing failed: error='%' (%)", res.get_error(), impl_->config.log_id);
 			//todo: handle correctly:
 			//  1. bring us up-to-date with server state
-			//  2. recreate the record with correct previous tag/last seen seq
-			//  3. try to commit again
+			//  2. see if there are conflicts and notify higher level if there are
+			//  3. recreate the records with correct previous tag/last seen seq for non-conflicting records
+			//  4. try to commit again
 		}
 	} else {
 		LOG_WARN("invalid request handle from comm-layer (%)", impl_->config.log_id);

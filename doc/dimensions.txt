@@ -8,3 +8,13 @@ client side:
 server side:
 	* sequence of the data
 	* multi server setup ?
+
+server operations options per storage:
+	* allow all data changes even if conflicting
+	* allow all but conflicting object id changes
+	* allow only non-adding-removing changes (different object id changes cannot conflict, adding/removing or changing the same object id can)
+	* don't allow any out-of-sequence changes (one has to always have the latest change server has too)
+
+Require segment end after certain time/amount of records?
+
+q: how to configure the server? should one be able to decide which mode he uses when creating a storage?

@@ -69,3 +69,9 @@ think:
  - push to server rules?
  - segment end?
  -
+
+
+
+The server last seen is always the last sequence we received from server.
+The previous tag is the last record tag we know of, even uncommitted one.
+Server has to check the previous tag is valid, ie. it belongs to a record that has been committed.

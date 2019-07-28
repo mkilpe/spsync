@@ -12,6 +12,10 @@ Sync Engine:
 	* current seq num/progress to get to the current seq num (separate user change, special changes and data changes)
 	* local pending changes/waiting uploads
 
+User layer on sync engine:
+	* conflict
+	* entity changed (can show user that since last time entity changed)
+
 FileSync:
 	* local changed files waiting processing
 	* remote changed files waiting synchronisation
