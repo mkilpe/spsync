@@ -1,6 +1,8 @@
 
 
 * how to handle connect/disconnect from network?
+* how to handle errors in sane way?
+
 
 * how to handle conflicts?
 	* notify the higher layer but what we do with the conflicted local record? -- keep it as record of action but remove data?
@@ -14,7 +16,7 @@
 	* good for users to see what has happened in the past, what failed etc
 
 * we need more control than just scaling with full cpu usage:
-	* throttling network connections (this means timer on asio networking code)
+	* throttling network connections (this means timer on asio networking code?)
 	* throttling cpu usage (limit automated processing, ie. require user to trigger actions, limit thread amount)
 
 
