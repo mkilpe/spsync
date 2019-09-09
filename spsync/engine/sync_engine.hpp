@@ -37,7 +37,6 @@ public:
 	void set_config(sync_engine_config);
 
 	// --- comm_output interface, see comm/interface.hpp ---
-
 	virtual void on_record_response(request_handle, result<std::deque<serialised_record>> const&);
 	virtual void on_data_response(request_handle, result<record_data_handle> const&);
 	virtual void on_commit_response(request_handle, result<serialised_record> const&);

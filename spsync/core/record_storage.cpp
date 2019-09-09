@@ -2,6 +2,7 @@
 
 #include <securepath/database/util.hpp>
 #include <securepath/serialisation/util.hpp>
+#include <securepath/util/conversions.hpp>
 
 #include <memory>
 #include <mutex>
@@ -157,27 +158,24 @@ struct record_storage::impl {
 	}
 
 	record_handle load_record(database::query const& q) {
-		if(!q) {
-			LOG_WARN("no such entry in record storage");
-			throw make_error(securepath::errc::no_such_data);
-		}
-		auto key = q.value<std::uint64_t>(0);
-		if(!key) {
-			LOG_WARN("invalid record storage entry, no key set");
-			throw make_error(securepath::errc::invalid_data, "failed to interpret record key column");
-		}
-
 		record_handle result;
+		if(q) {
+			auto key = q.value<std::uint64_t>(0);
+			if(!key) {
+				LOG_WARN("invalid record storage entry, no key set");
+				throw make_error(securepath::errc::invalid_data, "failed to interpret record key column");
+			}
 
-		std::unique_lock lock{mutex};
-		auto it = record_handles.find(*key);
-		if(it != record_handles.end()) {
-			result = it->second.lock();
-		}
+			std::unique_lock lock{mutex};
+			auto it = record_handles.find(*key);
+			if(it != record_handles.end()) {
+				result = it->second.lock();
+			}
 
-		if(!result) {
-			result = construct_record(*key, q);
-			record_handles[*key] = result;
+			if(!result) {
+				result = construct_record(*key, q);
+				record_handles[*key] = result;
+			}
 		}
 
 		return result;
@@ -246,7 +244,9 @@ record_handle record_storage::find(record_tag const& tag) const {
 // The prev object tag is ignored for now, see later on if it is needed and if it should be in the record itself
 
 record_handle record_storage::create(serialised_record const& rec, record_tag const& previous_tag,
-									 record_state state, record_data_handle data_handle) {
+									 record_state state, record_data_handle data_handle)
+{
+	LOG_TRACE("creating record to storage %", to_hex(rec.tag()));
 	auto q = impl_->db->prepare(
 		"INSERT INTO record(tag, prev_tag, prev_object_tag, seq, oid, state, data_ref, record)"
 		" VALUES(:tag, :prev_tag, :prev_object_tag, :seq, :oid, :state, :data_ref, :record);");

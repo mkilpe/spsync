@@ -1,0 +1,10 @@
+
+
+initial/connecting/server declined record
+	* update state from server
+	* recreate pending commits
+	* push the commits
+
+- needs to queue commits while updating
+
+

@@ -44,6 +44,15 @@ public:
 	, metadata_(std::move(meta))
 	{}
 
+	/// get the time when this change was created
+	time_point creation_time() const { return creation_time_; }
+
+	/// get information for the associated data if there is any
+	std::optional<data_change_info> data_info() const { return data_change_; }
+
+	/// get the arbitrary metadata
+	util::metadata metadata() const { return metadata_; }
+
 	template<typename Ar>
 	void serialise(Ar& ar) {
 		serialisation::sequence<Ar> seq(ar);

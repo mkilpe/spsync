@@ -67,6 +67,14 @@ std::ostream& operator<<(std::ostream& out, access_type const& access) {
 	return out;
 }
 
+bool operator==(user_access const& l, user_access const& r) {
+	return l.user == r.user && l.access == r.access;
+}
+
+bool operator!=(user_access const& l, user_access const& r) {
+	return !(l == r);
+}
+
 std::ostream& operator<<(std::ostream& out, user_access const& access) {
 	return out << "[" << access.user << ": " << access.access << "]";
 }

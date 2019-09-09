@@ -40,10 +40,10 @@ TEST_CASE("record_storage", "[unit]") {
 	record_storage storage(db_conn);
 
 	CHECK(storage.last_sequence_number() == sequence_number{});
-	CHECK_THROWS(storage.find_last());
-	CHECK_THROWS(storage.find_last(object_id{}));
-	CHECK_THROWS(storage.find_first(object_id{}));
-	CHECK_THROWS(storage.find(record_tag{}));
+	CHECK(!storage.find_last());
+	CHECK(!storage.find_last(object_id{}));
+	CHECK(!storage.find_first(object_id{}));
+	CHECK(!storage.find(record_tag{}));
 
 	test_record_creator creator;
 	CHECK(storage.create(creator.test_user_change()));

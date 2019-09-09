@@ -28,7 +28,7 @@ public:
 	void add_commit_record_response(std::function<commit_sig>);
 	void add_action(std::function<void(comm_output&)>);
 
-	void process_event();
+	bool process_event();
 
 public:
 	// -- comm_input interface, see interface.hpp --

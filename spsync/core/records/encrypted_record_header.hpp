@@ -15,6 +15,9 @@ public:
 	: encrypted_header_(std::move(enc_header))
 	{}
 
+	/// Returns the raw encrypted data for the record header
+	octet_vector const& data() const { return encrypted_header_; }
+
 	template<typename Ar>
 	void serialise(Ar& ar) {
 		serialisation::sequence<Ar> seq(ar);

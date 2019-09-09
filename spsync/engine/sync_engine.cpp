@@ -33,7 +33,9 @@ public:
 		if(record.check_matches_without_seq(h->record())) {
 			h->set_state(record_state::in_sync, record.server_sequence());
 		} else {
-			//t: handle error
+			h->set_state(record_state::invalid);
+
+			//t: handle error, what to do?
 			LOG_WARN("Server returned different record that was sent [local tag=%1%, server tag=%2%]"
 				, to_hex(h->tag()), to_hex(record.tag()));
 		}
@@ -90,7 +92,7 @@ void sync_engine::on_record_response(request_handle handle, result<std::deque<se
 			impl_->handle_incoming_record(rec);
 		}
 	} else {
-		LOG_INFO("fetching records failed: error='%' (%)", res.get_error(), impl_->config.log_id);
+		LOG_INFO("fetching records failed: error=% (%)", res.get_error(), impl_->config.log_id);
 		//network error?
 	}
 }
@@ -108,7 +110,7 @@ void sync_engine::on_commit_response(request_handle handle, result<serialised_re
 			impl_->update_record_commit_state(it->second, res.value());
 			impl_->commit_requests.erase(it);
 		} else {
-			LOG_INFO("committing failed: error='%' (%)", res.get_error(), impl_->config.log_id);
+			LOG_INFO("committing failed: error=% (%)", res.get_error(), impl_->config.log_id);
 			//todo: handle correctly:
 			//  1. bring us up-to-date with server state
 			//  2. see if there are conflicts and notify higher level if there are
@@ -134,7 +136,7 @@ void sync_engine::on_record_received(serialised_record const& rec) {
 //f: for now just implement plain record without data
 record_handle sync_engine::sync_object_change(object_id oid, metadata mdata, record_data_handle) {
 	std::unique_lock lock{impl_->mutex};
-	LOG_TRACE("sync object change: oid='%' (%)", oid.to_hex(), impl_->config.log_id);
+	LOG_TRACE("sync object change: oid=% (%)", oid.to_hex(), impl_->config.log_id);
 
 	auto last_oid_record = impl_->records.find_last(oid);
 	auto last_record = impl_->records.find_last();
@@ -158,7 +160,7 @@ record_handle sync_engine::sync_object_change(object_id oid, metadata mdata, rec
 
 record_handle sync_engine::sync_user_change(users user_change, metadata mdata) {
 	std::unique_lock lock{impl_->mutex};
-	LOG_TRACE("sync user change: users='%' (%)", user_change, impl_->config.log_id);
+	LOG_TRACE("sync user change: users=% (%)", user_change, impl_->config.log_id);
 
 	auto last_record = impl_->records.find_last();
 

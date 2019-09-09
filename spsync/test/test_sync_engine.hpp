@@ -11,19 +11,6 @@ namespace securepath::sync::test {
 class test_sync_engine : public sync_engine {
 public:
 	using sync_engine::sync_engine;
-
-	virtual record_handle sync_object_change(object_id, metadata, record_data_handle) {
-		return nullptr;
-	}
-
-	virtual record_handle sync_user_change(users user_change, metadata) {
-		return nullptr;
-	}
-
-	virtual record_handle sync_segment_end(metadata) {
-		return nullptr;
-	}
-
 };
 
 }

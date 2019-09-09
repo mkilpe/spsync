@@ -32,6 +32,9 @@ public:
 		serialisation::sequence<Ar> seq(ar);
 		seq & users_ & trailing_data_;
 	}
+
+	bool operator==(users const&) const;
+	bool operator!=(users const&) const;
 private:
 	// the access for users
 	std::deque<util::user_access> users_;

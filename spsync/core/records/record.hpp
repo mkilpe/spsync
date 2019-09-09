@@ -91,10 +91,14 @@ public:
 		return auth_.tag();
 	}
 
+	/// check if records are identical without considering the server assigned sequence
 	bool check_matches_without_seq(serialised_record const& rec) const {
 		return record_ == rec.record_ &&
 				auth_ == rec.auth_;
 	}
+
+	/// get the authentication part for the record
+	util::content_auth auth() const { return auth_; }
 
 	template<typename Ar>
 	void serialise(Ar& ar) {
@@ -107,11 +111,11 @@ public:
 	 *
 	 * The visitor type needs to have call-operator for the RecordType types.
 	 * Example:
-	 *  struct visitor { void operator()(user_change_record'rec); ... };
+	 *  struct visitor { void operator()(user_change_record rec); ... };
 	 */
 	template<typename Visitor>
-	void deserialise_record(octet_span data, Visitor& v) {
-		serialisation::asn_der_deserialise_choice<record_types>(data, v);
+	void deserialise_record(Visitor&& v) const {
+		serialisation::asn_der_deserialise_choice<record_types>(record_, std::forward<Visitor>(v));
 	}
 
 private:

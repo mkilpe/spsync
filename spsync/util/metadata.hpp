@@ -47,7 +47,7 @@ public:
 	/// find data matching the key
 	std::optional<octet_vector> find(key_type const& key) const;
 
-	/// remove data assosiated with the key
+	/// remove data associated with the key
 	void erase(key_type const& key);
 
 	template<typename Ar>
@@ -58,6 +58,9 @@ public:
 
 	/// Returns true if there is no meta-data
 	bool empty() const;
+
+	bool operator==(metadata const& m) const;
+	bool operator!=(metadata const& m) const;
 private:
 	std::map<key_type, octet_vector> data_;
 	serialisation::trailing_data trailing_data_;

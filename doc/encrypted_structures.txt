@@ -27,7 +27,7 @@ All structures in chain have:
 
 Chain of structures:
 
-- Root block: -- consider how to authenticate the root block //should this just be user change?
+- Root block: -- consider how to authenticate the root block //should this just be user change? -- yes
 	* sequence
 	* Access structure
 	* iv for encrypted data and key id

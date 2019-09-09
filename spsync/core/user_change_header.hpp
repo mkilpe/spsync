@@ -36,11 +36,18 @@ struct user_change_info {
  */
 class user_change_header {
 public:
+	user_change_header() = default;
 
 	user_change_header(user_change_info uc_info, util::metadata meta)
 	: user_change_(std::move(uc_info))
 	, metadata_(std::move(meta))
 	{}
+
+	/// get the change info for users
+	user_change_info change_info() const { return user_change_; }
+
+	/// get the arbitrary metadata
+	util::metadata metadata() const { return metadata_; }
 
 	template<typename Ar>
 	void serialise(Ar& ar) {

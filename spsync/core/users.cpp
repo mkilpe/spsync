@@ -26,6 +26,14 @@ std::deque<util::user_access> const& users::access() const {
 	return users_;
 }
 
+bool users::operator==(users const& u) const {
+	return users_ == u.users_ && trailing_data_ == u.trailing_data_;
+}
+
+bool users::operator!=(users const& u) const {
+	return !(*this == u);
+}
+
 std::ostream& operator<<(std::ostream& out, users const& u) {
 	bool first = true;
 	out << "{users: ";

@@ -49,17 +49,21 @@ void comm_test_interface::add_action(std::function<void(comm_output&)> f) {
 	impl_->action_queue.push_back(std::move(f));
 }
 
-void comm_test_interface::process_event() {
+bool comm_test_interface::process_event() {
+	bool ret = false;
 	assert(impl_->output);
 	if(!impl_->action_queue.empty()) {
 		auto func = impl_->action_queue.front();
 		impl_->action_queue.pop_front();
 		func(*impl_->output);
+		ret = true;
 	} else if(!impl_->event_queue.empty()) {
 		auto func = impl_->event_queue.front();
 		impl_->event_queue.pop_front();
 		func();
+		ret = true;
 	}
+	return ret;
 }
 
 sequence_number comm_test_interface::current_sequence_number() const {

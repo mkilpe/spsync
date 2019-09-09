@@ -15,6 +15,9 @@ public:
 	: access_(std::move(access))
 	{}
 
+	/// get the user access changes
+	users access() const { return access_; }
+
 	template<typename Ar>
 	void serialise(Ar& ar) {
 		serialisation::sequence<Ar> seq(ar);
@@ -34,6 +37,12 @@ public:
 	, data_(std::move(data))
 	, header_(std::move(header))
 	{}
+
+	/// Returns the user change data for this record
+	plain_user_change_data data() const { return data_; }
+
+	/// Returns the encrypted header
+	encrypted_record_header<user_change_header> header() const { return header_; }
 
 	template<typename Ar>
 	void serialise(Ar& ar) {
