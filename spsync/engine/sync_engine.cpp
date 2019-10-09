@@ -27,10 +27,12 @@ public:
 		h->set_state(record_state::pending_commit);
 		request_handle req = comm.commit_record(h);
 		commit_requests[req] = h;
+		LOG_INFO("trying to commit record to server [tag = %, request handle = %]", to_hex(h->tag()), req);
 	}
 
 	void update_record_commit_state(record_handle h, serialised_record const& record) {
 		if(record.check_matches_without_seq(h->record())) {
+			LOG_INFO("setting in sync state for record [tag = %, seq = %]", to_hex(h->tag()), record.server_sequence());
 			h->set_state(record_state::in_sync, record.server_sequence());
 		} else {
 			h->set_state(record_state::invalid);
@@ -42,6 +44,7 @@ public:
 	}
 
 	void handle_incoming_record(serialised_record const& record) {
+		LOG_INFO("received record [tag = %, seq = %]", to_hex(record.tag()), record.server_sequence());
 		// 1. check the record is cryptographically valid
 		// 2. put the record to storage
 			/*
@@ -102,16 +105,24 @@ void sync_engine::on_data_response(request_handle handle, result<record_data_han
 }
 
 void sync_engine::on_commit_response(request_handle handle, result<serialised_record> const& res) {
+	LOG_INFO("on_commit_response [request handle = %]", handle);
 	std::unique_lock lock{impl_->mutex};
 
 	auto it = impl_->commit_requests.find(handle);
 	if(it != impl_->commit_requests.end()) {
 		if(res) {
-			impl_->update_record_commit_state(it->second, res.value());
-			impl_->commit_requests.erase(it);
+			auto ser_record = res.value();
+			if(ser_record.server_sequence().is_valid()) {
+				impl_->update_record_commit_state(it->second, ser_record);
+				impl_->commit_requests.erase(it);
+			} else {
+				LOG_WARN("server replied with invalid sequence number [tag = %] (%)", to_hex(ser_record.tag()), impl_->config.log_id);
+				//t: handle correctly
+				// what to do here? try again or deem the server as bad behaving?
+			}
 		} else {
 			LOG_INFO("committing failed: error=% (%)", res.get_error(), impl_->config.log_id);
-			//todo: handle correctly:
+			//t: handle correctly:
 			//  1. bring us up-to-date with server state
 			//  2. see if there are conflicts and notify higher level if there are
 			//  3. recreate the records with correct previous tag/last seen seq for non-conflicting records

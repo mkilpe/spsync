@@ -28,6 +28,8 @@ public:
 	void add_commit_record_response(std::function<commit_sig>);
 	void add_action(std::function<void(comm_output&)>);
 
+	sequence_number next_sequence_number();
+
 	bool process_event();
 
 public:

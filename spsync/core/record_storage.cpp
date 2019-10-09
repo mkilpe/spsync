@@ -125,7 +125,7 @@ struct record_storage::impl {
 				"tag BLOB UNIQUE,"
 				"prev_tag BLOB,"
 				"prev_object_tag BLOB,"
-				"seq INTEGER UNIQUE,"
+				"seq INTEGER,"
 				"oid BLOB,"
 				"state INTEGER,"
 				"data_ref INTEGER,"
@@ -211,6 +211,13 @@ record_handle record_storage::find_last() const {
 	auto q = impl_->db->prepare(
 		"SELECT key, tag, prev_tag, seq, state, data_ref FROM record"
 		" WHERE seq = (SELECT max(seq) FROM record);");
+	return impl_->load_record(q.execute());
+}
+
+record_handle record_storage::find_root() const {
+	auto q = impl_->db->prepare(
+		"SELECT key, tag, prev_tag, seq, state, data_ref FROM record"
+		" WHERE seq = (SELECT min(seq) FROM record);");
 	return impl_->load_record(q.execute());
 }
 

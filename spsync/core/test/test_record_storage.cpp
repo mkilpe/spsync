@@ -55,7 +55,7 @@ TEST_CASE("record_storage", "[unit]") {
 		CHECK(h->seq() == sequence_number{});
 		CHECK(h->state() == record_state::unknown);
 	}
-	{ // check find returns correcr data
+	{ // check find returns correct data
 		auto h = storage.find(creator.previous_tag);
 		CHECK(h->tag() == creator.previous_tag);
 		CHECK(h->previous_tag().empty());
@@ -78,6 +78,7 @@ TEST_CASE("record_storage", "[unit]") {
 		CHECK(h->previous_tag() == previous_tag);
 		CHECK(h->seq() == sequence_number{});
 		CHECK(h->state() == record_state::unknown);
+		CHECK(!h->record().tag().empty());
 
 		h->set_state(record_state::in_sync, creator.last_server_seq);
 		h = storage.find_last();
@@ -85,6 +86,24 @@ TEST_CASE("record_storage", "[unit]") {
 		CHECK(storage.last_sequence_number() == creator.last_server_seq);
 	}
 
+}
+
+
+TEST_CASE("record_storage root", "[unit]") {
+	remove_database_test_db();
+	auto db_conn = database::sqlite::create_sqlite_connection(db_name);
+
+	record_storage storage(db_conn);
+
+	test_record_creator creator;
+	for(int i = 0; i != 10; ++i) {
+		auto h = storage.create(creator.test_user_change());
+		h->set_state(record_state::in_sync, creator.last_server_seq);
+	}
+	auto root = storage.find_root();
+	REQUIRE(root);
+	CHECK(root->seq() == sequence_number{1});
+	CHECK(root->previous_tag().empty());
 }
 
 //t: test only unique sequences work

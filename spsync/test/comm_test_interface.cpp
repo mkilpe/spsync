@@ -5,7 +5,7 @@ namespace securepath::sync::test {
 class comm_test_interface::impl {
 public:
 	comm_output* output{};
-	sequence_number current_seq{1};
+	sequence_number current_seq;
 	request_handle req_handle{};
 
 	// save per action responses
@@ -49,6 +49,10 @@ void comm_test_interface::add_action(std::function<void(comm_output&)> f) {
 	impl_->action_queue.push_back(std::move(f));
 }
 
+sequence_number comm_test_interface::next_sequence_number() {
+	return ++impl_->current_seq;
+}
+
 bool comm_test_interface::process_event() {
 	bool ret = false;
 	assert(impl_->output);
@@ -77,6 +81,8 @@ request_handle comm_test_interface::fetch_records(sequence_number start, sequenc
 			auto res = impl_->fetch_records_queue.front()(start, end);
 			impl_->fetch_records_queue.pop_front();
 			impl_->output->on_record_response(ret, res);
+		} else {
+			LOG_TRACE("empty record queue");
 		}
 	});
 	return ret;
@@ -89,6 +95,8 @@ request_handle comm_test_interface::fetch_data(sequence_number record){
 			auto res = impl_->fetch_data_queue.front()(record);
 			impl_->fetch_data_queue.pop_front();
 			impl_->output->on_data_response(ret, res);
+		} else {
+			LOG_TRACE("empty fetch queue");
 		}
 	});
 	return ret;
@@ -101,6 +109,8 @@ request_handle comm_test_interface::commit_record(record_handle record) {
 			auto res = impl_->commit_queue.front()(record);
 			impl_->commit_queue.pop_front();
 			impl_->output->on_commit_response(ret, res);
+		} else {
+			LOG_TRACE("empty commit queue");
 		}
 	});
 	return ret;

@@ -23,7 +23,7 @@ public:
 	~record_storage();
 
 
-	// -- overall record chain --
+	// -- overall record chain --+
 
 	/// get the biggest sequence number the server has returned
 	sequence_number last_sequence_number() const;
@@ -31,6 +31,8 @@ public:
 	/// find the last record in the chain
 	record_handle find_last() const;
 
+	/// find the first record in the chain
+	record_handle find_root() const;
 
 	// -- per object operations --
 
