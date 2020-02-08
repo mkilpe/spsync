@@ -19,6 +19,8 @@ struct plain_single_change_data {
 	// tag of the previous record with same object id
 	record_tag previous_oid_record_tag;
 
+	// q: should we have change type (like remove) so that the server can remove unused data?
+
 	serialisation::trailing_data trailing_data;
 
 	template<typename Ar>

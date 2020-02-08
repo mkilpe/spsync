@@ -5,7 +5,7 @@
 #include <spsync/core/records/data_change_record.hpp>
 #include <spsync/core/records/user_change_record.hpp>
 #include <spsync/core/records/segment_record.hpp>
-#include <spsync/core/records/record.hpp>
+#include <spsync/core/records/chain_block.hpp>
 #include <spsync/util/content_auth.hpp>
 #include <securepath/crypto/auth_stream_cipher.hpp>
 
@@ -17,7 +17,7 @@ namespace securepath::sync {
 class record_creator_base {
 public:
 	/// construct to create the record_base which is common to all records and initialise encryption+authentication
-	record_creator_base(encryption_key const& key, record_tag previous_tag, sequence_number last_seen);
+	record_creator_base(encryption_key const& key, chain_block_id last_seen);
 
 	/// Returns authentication tag for the record, this can be called only once after constructing the record has been done
 	util::content_auth authentication_tag();

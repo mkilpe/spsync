@@ -6,6 +6,7 @@ class comm_test_interface::impl {
 public:
 	comm_output* output{};
 	sequence_number current_seq;
+	octet_vector previous_block_hash;
 	request_handle req_handle{};
 
 	// save per action responses
@@ -53,6 +54,10 @@ sequence_number comm_test_interface::next_sequence_number() {
 	return ++impl_->current_seq;
 }
 
+octet_vector comm_test_interface::previous_block_hash() const {
+	return impl_->previous_block_hash;
+}
+
 bool comm_test_interface::process_event() {
 	bool ret = false;
 	assert(impl_->output);
@@ -76,7 +81,7 @@ sequence_number comm_test_interface::current_sequence_number() const {
 
 request_handle comm_test_interface::fetch_records(sequence_number start, sequence_number end) {
 	request_handle ret = ++impl_->req_handle;
-	impl_->event_queue.push_back([=] {
+	impl_->event_queue.push_back([=, this] {
 		if(!impl_->fetch_records_queue.empty()) {
 			auto res = impl_->fetch_records_queue.front()(start, end);
 			impl_->fetch_records_queue.pop_front();
@@ -90,7 +95,7 @@ request_handle comm_test_interface::fetch_records(sequence_number start, sequenc
 
 request_handle comm_test_interface::fetch_data(sequence_number record){
 	request_handle ret = ++impl_->req_handle;
-	impl_->event_queue.push_back([=] {
+	impl_->event_queue.push_back([=, this] {
 		if(!impl_->fetch_data_queue.empty()) {
 			auto res = impl_->fetch_data_queue.front()(record);
 			impl_->fetch_data_queue.pop_front();
@@ -104,10 +109,13 @@ request_handle comm_test_interface::fetch_data(sequence_number record){
 
 request_handle comm_test_interface::commit_record(record_handle record) {
 	request_handle ret = ++impl_->req_handle;
-	impl_->event_queue.push_back([=] {
+	impl_->event_queue.push_back([=, this] {
 		if(!impl_->commit_queue.empty()) {
 			auto res = impl_->commit_queue.front()(record);
 			impl_->commit_queue.pop_front();
+			if(res) {
+				impl_->previous_block_hash = res->hash();
+			}
 			impl_->output->on_commit_response(ret, res);
 		} else {
 			LOG_TRACE("empty commit queue");

@@ -17,11 +17,11 @@ public:
 	using data_type = DataType;
 
 	/// Construct result from the error
-	result(error err)
+	result(error err = {})
 	: error_(std::move(err))
 	{}
 
-	/// Cosntruct result from the data
+	/// Construct result from the data
 	result(data_type data)
 	: data_(std::move(data))
 	{}

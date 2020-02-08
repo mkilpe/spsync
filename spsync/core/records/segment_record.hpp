@@ -24,7 +24,7 @@ private:
 	sequence_number segment_start_;
 	sequence_number segment_end_;
 
-	// Tags of the records in this segment in sequence number oder starting from the smallest [segment_start, segment_end_)
+	// Tags of the records in this segment in sequence number order starting from the smallest [segment_start, segment_end_)
 	std::deque<record_tag> tags_;
 	serialisation::trailing_data trailing_data_;
 };

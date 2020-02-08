@@ -12,7 +12,11 @@ namespace securepath::sync::util {
 struct hash {
 	crypto::hash_algorithm id{crypto::hash_algorithm::sha3_512};
 	octet_vector digest;
-	serialisastion::trailing_data trailing_data
+	serialisation::trailing_data trailing_data
+
+	bool is_valid() const {
+		return !digest.empty();
+	}
 
 	template<typename Ar>
 	void serialise(Ar& ar) {
@@ -20,5 +24,6 @@ struct hash {
 		seq & id & digest & trailing_data;
 	}
 };
+
 
 #endif

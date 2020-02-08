@@ -5,7 +5,7 @@
 #include <spsync/core/records/data_change_record.hpp>
 #include <spsync/core/records/user_change_record.hpp>
 #include <spsync/core/records/segment_record.hpp>
-#include <spsync/core/records/record.hpp>
+#include <spsync/core/records/chain_block.hpp>
 #include <spsync/util/content_auth.hpp>
 #include <securepath/crypto/auth_stream_cipher.hpp>
 
@@ -16,16 +16,13 @@ namespace securepath::sync {
  */
 class record_verifier_base {
 public:
-
 	record_verifier_base(encryption_key const& key, util::content_auth auth, record_base record);
-
-	template<typename Record>
-	record_verifier_base(encryption_key const& key, auth_record<Record> const& rec)
-	: record_verifier_base(key, rec.auth, rec.record)
-	{}
 
 	/// Return whether the record is authentic based on the auth stream tag. This can be called only once as it consumes the tag.
 	bool is_authentic() const;
+
+	/// The record base for the verified record
+	record_base const& base() const { return base_; }
 
 protected:
 	util::content_auth auth_;
@@ -45,7 +42,7 @@ public:
 	};
 
 	/// Construct to verify authenticity and extract the decrypted data.
-	data_change_record_verifier(encryption_key const& key, auth_record<data_change_record> const& record);
+	data_change_record_verifier(encryption_key const& key, data_change_record const& record, util::content_auth auth);
 
 	/// Returns the decrypted and extracted data
 	std::deque<single_data> headers() const { return headers_; }
@@ -59,7 +56,7 @@ private:
 class user_change_record_verifier : public record_verifier_base {
 public:
 	/// Construct to verify authenticity and extract the decrypted data.
-	user_change_record_verifier(encryption_key const& key, auth_record<user_change_record> const& record);
+	user_change_record_verifier(encryption_key const& key, user_change_record const& record, util::content_auth auth);
 
 	/// Returns the decrypted header from the record
 	user_change_header header() const;
@@ -67,6 +64,29 @@ private:
 	std::optional<user_change_header> header_;
 };
 
+/**
+ * Helper class to verify segment record authenticity and extract the decrypted part
+ */
+class segment_record_verifier : public record_verifier_base {
+public:
+	/// Construct to verify authenticity and extract the decrypted data.
+	segment_record_verifier(encryption_key const& key, segment_record const& record, util::content_auth auth);
+
+	//t: implement
+private:
+};
+
+
+template<typename> struct record_verifier;
+template<> struct record_verifier<data_change_record> : data_change_record_verifier {
+	using data_change_record_verifier::data_change_record_verifier;
+};
+template<> struct record_verifier<user_change_record> : user_change_record_verifier {
+	using user_change_record_verifier::user_change_record_verifier;
+};
+template<> struct record_verifier<segment_record> : segment_record_verifier {
+	using segment_record_verifier::segment_record_verifier;
+};
 
 }
 

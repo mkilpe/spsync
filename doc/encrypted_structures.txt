@@ -27,14 +27,7 @@ All structures in chain have:
 
 Chain of structures:
 
-- Root block: -- consider how to authenticate the root block //should this just be user change? -- yes
-	* sequence
-	* Access structure
-	* iv for encrypted data and key id
-	* encrypted meta data (like rules, e.g. force signature instead of tag)
-	* signature/tag
-
-- User change:
+- User change: (Root block: -- consider how to authenticate the root block //should this just be user change? -- yes)
 	* sequence
 	* Access structure
 	* iv for encrypted data and key id
@@ -56,7 +49,7 @@ Chain of structures:
 		* encrypted header
 		* signature/tag
 
-- segment end:
+- segment end: ??? what should be in this structure?
 	* sequence
 	* start and end seq
 	* list of objects tags
@@ -68,10 +61,21 @@ think:
  - aggregate change?
  - push to server rules?
  - segment end?
- -
+ - dependencies between changes
 
 
 
 The server last seen is always the last sequence we received from server.
 The previous tag is the last record tag we know of, even uncommitted one.
 Server has to check the previous tag is valid, ie. it belongs to a record that has been committed.
+
+
+Don't build sequence on client side but rather only sign the records and let the server build the blockchain on the server side and push to clients
+ * we do this to get sensible speed for committing records (i.e. the client doesn't need to always be totally up-to-date when committing which could leave to bad performance and starvation of slower clients)
+
+block chain structure:
+
+- block:
+	* record
+	* hash of the previous block
+	* sequence number

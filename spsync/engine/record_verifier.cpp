@@ -18,10 +18,10 @@ bool record_verifier_base::is_authentic() const {
 }
 
 
-data_change_record_verifier::data_change_record_verifier(encryption_key const& key, auth_record<data_change_record> const& rec)
-: record_verifier_base(key, rec)
+data_change_record_verifier::data_change_record_verifier(encryption_key const& key, data_change_record const& rec, util::content_auth auth)
+: record_verifier_base(key, std::move(auth), rec)
 {
-	for(auto const& sheader : rec.record) {
+	for(auto const& sheader : rec) {
 		// first authenticate the unencrypted data
 		decryptor_->process_auth(serialisation::asn_der_serialise(sheader.data));
 		// decrypt the header
@@ -33,18 +33,23 @@ data_change_record_verifier::data_change_record_verifier(encryption_key const& k
 }
 
 
-user_change_record_verifier::user_change_record_verifier(encryption_key const& key, auth_record<user_change_record> const& rec)
-: record_verifier_base(key, rec)
+user_change_record_verifier::user_change_record_verifier(encryption_key const& key, user_change_record const& rec, util::content_auth auth)
+: record_verifier_base(key, std::move(auth), rec)
 {
 	// first authenticate the unencrypted data
-	decryptor_->process_auth(serialisation::asn_der_serialise(rec.record.data()));
+	decryptor_->process_auth(serialisation::asn_der_serialise(rec.data()));
 	// decrypt the header
-	header_ = serialisation::asn_der_deserialise<user_change_header>(decryptor_->process(rec.record.header().data()));
+	header_ = serialisation::asn_der_deserialise<user_change_header>(decryptor_->process(rec.header().data()));
 }
 
 user_change_header user_change_record_verifier::header() const {
 	assert(header_);
 	return *header_;
+}
+
+segment_record_verifier::segment_record_verifier(encryption_key const& key, segment_record const& rec, util::content_auth auth)
+: record_verifier_base(key, std::move(auth), rec)
+{
 }
 
 }

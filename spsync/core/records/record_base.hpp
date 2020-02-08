@@ -1,6 +1,7 @@
 #ifndef SPSYNC_CORE_RECORD_BASE_HEADER
 #define SPSYNC_CORE_RECORD_BASE_HEADER
 
+#include <spsync/core/chain_block_id.hpp>
 #include <spsync/core/types.hpp>
 
 namespace securepath::sync {
@@ -12,9 +13,8 @@ class record_base {
 public:
 
 	record_base() = default;
-	record_base(sequence_number last_seen_server_sequence, record_tag previous_tag, octet_vector iv, sequence_number enc_key_id)
-	: last_seen_server_sequence_(std::move(last_seen_server_sequence))
-	, previous_record_tag_(std::move(previous_tag))
+	record_base(chain_block_id last_seen_block, octet_vector iv, sequence_number enc_key_id)
+	: last_seen_block_(std::move(last_seen_block))
 	, iv_(std::move(iv))
 	, encryption_key_id_(std::move(enc_key_id))
 	{}
@@ -22,16 +22,12 @@ public:
 	template<typename Ar>
 	void serialise(Ar& ar) {
 		serialisation::sequence<Ar> seq(ar);
-		seq & structure_version_ & last_seen_server_sequence_
-			& previous_record_tag_ & iv_
-			& encryption_key_id_ & trailing_data_;
+		seq & structure_version_ & last_seen_block_
+			& iv_ & encryption_key_id_ & trailing_data_;
 	}
 
 	/// Returns the sequence number that was the last one seen before this record was created
-	sequence_number last_seen_sequence() const { return last_seen_server_sequence_; }
-
-	/// Returns the tag of the previous record prior to this one
-	record_tag previous_tag() const { return previous_record_tag_; }
+	chain_block_id last_seen_block() const { return last_seen_block_; }
 
 	/// Returns the initialisation vector that is used to encrypted the data in this record
 	octet_vector const& iv() const { return iv_; }
@@ -43,11 +39,8 @@ private:
 	// version of the current structure
 	int structure_version_{1};
 
-	// this is the last sequence the client has seen when creating this record
-	sequence_number last_seen_server_sequence_;
-
-	// tag of the previous record to form a chain
-	record_tag previous_record_tag_;
+	// this is the last chain block id the client has seen when creating this record
+	chain_block_id last_seen_block_;
 
 	// initialisation vector for encrypting the record header
 	octet_vector iv_;

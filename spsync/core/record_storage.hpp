@@ -23,16 +23,22 @@ public:
 	~record_storage();
 
 
-	// -- overall record chain --+
+	// -- overall record chain --
 
-	/// get the biggest sequence number the server has returned
-	sequence_number last_sequence_number() const;
+	/// get the last block id in the chain received from server
+	chain_block_id last_block() const;
 
 	/// find the last record in the chain
 	record_handle find_last() const;
 
 	/// find the first record in the chain
 	record_handle find_root() const;
+
+	/// find record that has the given block hash
+	record_handle find(octet_vector const&) const;
+
+	/// find record that has the given tag
+	record_handle find_tag(octet_vector const&) const;
 
 	// -- per object operations --
 
@@ -42,13 +48,11 @@ public:
 	/// find the first record for given object id
 	record_handle find_first(object_id const&) const;
 
-	/// find record that has the given tag
-	record_handle find(record_tag const& tag) const;
 
 	/// create new record, the first function sets the state to be unknown and the object id is not set
 	template<typename RecordType>
 	record_handle create(auth_record<RecordType> const&, record_data_handle = {});
-	record_handle create(serialised_record const&, record_tag const& previous_tag, record_state state, record_data_handle = {});
+	record_handle create(chain_block const&, record_state state, record_data_handle = {});
 
 private:
 	class impl;
@@ -57,7 +61,7 @@ private:
 
 template<typename RecordType>
 record_handle record_storage::create(auth_record<RecordType> const& rec, record_data_handle data) {
-	return create(serialised_record(rec), rec.record.previous_tag(), record_state::unknown, std::move(data));
+	return create(chain_block(rec), record_state::unknown, std::move(data));
 }
 
 }

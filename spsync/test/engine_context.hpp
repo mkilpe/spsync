@@ -32,6 +32,15 @@ public:
 		engine.sync_user_change(initial);
 	}
 
+	void add_default_commit_response() {
+		io.add_commit_record_response([&](record_handle h)
+			{
+				auto record = h->record();
+				record.set_server_sequence_and_parent_hash(io.next_sequence_number(), io.previous_block_hash());
+				return record;
+			});
+	}
+
 	crypto::private_key root_user_key{crypto::generate_rsa_private_key(1024)};
 	util::user_id root_user{root_user_key.id()};
 

@@ -1,10 +1,11 @@
-#ifndef SPSYNC_CORE_RECORD_HEADER
-#define SPSYNC_CORE_RECORD_HEADER
+#ifndef SPSYNC_CORE_CHAIN_BLOCK_HEADER
+#define SPSYNC_CORE_CHAIN_BLOCK_HEADER
 
 #include "record_base.hpp"
 #include <spsync/core/types.hpp>
 #include <spsync/util/content_auth.hpp>
 
+#include <securepath/crypto/hash.hpp>
 #include <securepath/serialisation/sequence.hpp>
 #include <securepath/serialisation/util.hpp>
 #include <securepath/util/typelist.hpp>
@@ -55,44 +56,49 @@ using record_types = typelist<
 
 
 /**
- * Contains the serialised record<RecordType> class for easy use in network protocol
+ * Contains the serialised record<RecordType> class, authentication information and the server set block information
  */
-class serialised_record {
+class chain_block {
 public:
-	serialised_record() = default;
+	chain_block() = default;
 
 	template<typename RecordType>
-	serialised_record(auth_record<RecordType> record, sequence_number const& s = {})
+	chain_block(auth_record<RecordType> record)
 	: record_(serialisation::asn_der_serialise_choice<record_types>(record.record))
 	, auth_(std::move(record.auth))
-	, server_sequence_(s)
 	{
 	}
 
 	template<typename RecordType>
-	serialised_record(RecordType const& rec, util::content_auth auth)
+	chain_block(RecordType const& rec, util::content_auth auth)
 	: record_(serialisation::asn_der_serialise_choice<record_types>(rec))
 	, auth_(std::move(auth))
 	{
 	}
 
 	/// Returns the sequence number set by the server
-	sequence_number server_sequence() const {
+	sequence_number sequence() const {
 		return server_sequence_;
 	}
 
-	/// sets the server sequence number
-	void set_server_sequence(sequence_number const& s) {
-		server_sequence_ = s;
+	/// Returns the hash of the previous chain block
+	octet_vector const& parent_hash() const {
+		return parent_hash_;
 	}
 
-	/// Returns the tag of this record (the tag is used to chain the records)
+	/// sets the server sequence number and the parent hash
+	void set_server_sequence_and_parent_hash(sequence_number const& s, octet_vector hash) {
+		server_sequence_ = s;
+		parent_hash_ = std::move(hash);
+	}
+
+	/// Returns the tag of this record
 	octet_vector tag() const {
 		return auth_.tag();
 	}
 
-	/// check if records are identical without considering the server assigned sequence
-	bool check_matches_without_seq(serialised_record const& rec) const {
+	/// check if records are identical without considering the server assigned data
+	bool check_matches_without_server_data(chain_block const& rec) const {
 		return record_ == rec.record_ &&
 				auth_ == rec.auth_;
 	}
@@ -100,10 +106,19 @@ public:
 	/// get the authentication part for the record
 	util::content_auth auth() const { return auth_; }
 
+	/// the block hash that is used for the parent hash
+	octet_vector hash() const {
+		return crypto::hash(serialisation::asn_der_serialise(*this), crypto::hash_algorithm::sha3_512);
+	}
+
+	chain_block_id id() const {
+		return chain_block_id{server_sequence_, hash()};
+	}
+
 	template<typename Ar>
 	void serialise(Ar& ar) {
 		serialisation::sequence<Ar> seq(ar);
-		seq & record_ & auth_ & server_sequence_;
+		seq & record_ & auth_ & server_sequence_ & parent_hash_;
 	}
 
 	/**
@@ -111,11 +126,16 @@ public:
 	 *
 	 * The visitor type needs to have call-operator for the RecordType types.
 	 * Example:
-	 *  struct visitor { void operator()(user_change_record rec); ... };
+	 *  struct visitor { void operator()(user_change_record record); ... };
 	 */
 	template<typename Visitor>
 	void deserialise_record(Visitor&& v) const {
-		serialisation::asn_der_deserialise_choice<record_types>(record_, std::forward<Visitor>(v));
+		deserialise_record<void>(std::forward<Visitor>(v));
+	}
+
+	template<typename ReturnType, typename Visitor>
+	ReturnType deserialise_record(Visitor&& v) const {
+		return serialisation::asn_der_deserialise_choice<record_types, ReturnType>(record_, std::forward<Visitor>(v));
 	}
 
 private:
@@ -127,6 +147,9 @@ private:
 
 	// sequence from server, the only thing that is not protected by auth_ as the server sets it
 	sequence_number server_sequence_;
+
+	// hash of the previous chain block
+	octet_vector parent_hash_;
 };
 
 }

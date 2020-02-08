@@ -6,8 +6,8 @@
 
 namespace securepath::sync {
 
-record_creator_base::record_creator_base(encryption_key const& key, record_tag previous_tag, sequence_number last_seen)
-: base_(std::move(last_seen), std::move(previous_tag), crypto::random_octet_vector(crypto::aes_gcm_iv_size()), key.key_seq)
+record_creator_base::record_creator_base(encryption_key const& key, chain_block_id last_seen)
+: base_(std::move(last_seen), crypto::random_octet_vector(crypto::aes_gcm_iv_size()), key.key_seq)
 , encryptor_(crypto::create_aes_gcm_stream_encryptor(key.key, base_.iv()))
 {
 	// authenticate the base first

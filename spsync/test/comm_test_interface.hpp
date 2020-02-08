@@ -19,9 +19,9 @@ public:
 
 public:
 	// the test drive interface
-	using fetch_record_sig = result<std::deque<serialised_record>>(sequence_number, sequence_number);
+	using fetch_record_sig = result<std::deque<chain_block>>(sequence_number, sequence_number);
 	using fetch_data_sig = result<record_data_handle>(sequence_number);
-	using commit_sig = result<serialised_record>(record_handle);
+	using commit_sig = result<chain_block>(record_handle);
 
 	void add_fetch_records_response(std::function<fetch_record_sig>);
 	void add_fetch_data_response(std::function<fetch_data_sig>);
@@ -29,8 +29,16 @@ public:
 	void add_action(std::function<void(comm_output&)>);
 
 	sequence_number next_sequence_number();
+	octet_vector previous_block_hash() const;
 
 	bool process_event();
+	bool process_events() {
+		bool res = false;
+		while(process_event()) {
+			res = true;
+		}
+		return res;
+	}
 
 public:
 	// -- comm_input interface, see interface.hpp --
