@@ -26,6 +26,14 @@ struct chain_block_id {
 	}
 };
 
+inline bool operator==(chain_block_id const& l, chain_block_id const& r) {
+	return l.sequence == r.sequence && l.hash ==  r.hash;
+}
+
+inline bool operator!=(chain_block_id const& l, chain_block_id const& r) {
+	return !(l == r);
+}
+
 inline std::ostream& operator<<(std::ostream& out, chain_block_id const& b) {
 	return out << "(" << b.sequence << ", " << to_hex(b.hash);
 }

@@ -54,6 +54,11 @@ private:
 	std::optional<data_type> data_;
 };
 
+template<typename ResultType, typename Enum>
+inline bool check_result_error(util::result<ResultType> const& res, Enum value) {
+	return res.get_error().code() == make_error_code(value);
+}
+
 }
 
 #endif
