@@ -56,7 +56,12 @@ private:
 
 template<typename ResultType, typename Enum>
 inline bool check_result_error(util::result<ResultType> const& res, Enum value) {
-	return res.get_error().code() == make_error_code(value);
+	auto err = make_error_code(value);
+	bool ret = res.get_error().code() == err;
+	if(!ret) {
+		LOG_INFO("result error not matching [% != %]", res.get_error().code(), err);
+	}
+	return ret;
 }
 
 }

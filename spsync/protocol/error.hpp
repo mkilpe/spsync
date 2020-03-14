@@ -13,17 +13,8 @@ enum class errc {
 	end_of_list
 };
 
-class spsync_category : public std::error_category {
-public:
-	virtual char const* name() const noexcept;
-	virtual std::error_condition default_error_condition(int ev) const noexcept;
-	virtual bool equivalent(std::error_code const& code, int condition) const noexcept;
- 	virtual std::string message(int ev) const;
-};
-
 std::error_condition make_error_condition(errc e);
 std::error_code make_error_code(errc e);
-error make_error(errc e, std::string msg = "");
 
 }
 

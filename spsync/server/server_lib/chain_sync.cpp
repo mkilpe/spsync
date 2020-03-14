@@ -93,6 +93,7 @@ util::result<chain_block> chain_sync::commit_block(chain_block const& block) {
 		if(!err) {
 			res = set_and_save_block(block);
 		} else {
+			res = err;
 			LOG_WARN("error while processing new block [err=%, block tag=%] (%)", err, to_hex(block.tag()), config_.log_id);
 		}
 	} catch(error const& err) {
