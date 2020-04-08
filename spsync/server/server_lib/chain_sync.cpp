@@ -39,11 +39,14 @@ error chain_sync::can_block_be_committed(chain_block const& block) const {
 error chain_sync::check_rules(data_change_record const& rec) const {
 	error err;
 	for(auto it = rec.begin(); it != rec.end() && !err; ++it) {
-		if(it->data.id.is_valid()) {
+		LOG_TRACE("GGG: % -- %", it->data.id, to_hex(it->data.previous_oid_record_tag));
+		if(!it->data.id.is_valid()) {
+			LOG_TRACE("data id is invalid [id=%] (%)", it->data.id, config_.log_id);
 			err = make_error(protocol::errc::invalid_record);
 		} else {
 			auto handle = records_.find_last(it->data.id);
 			if(!handle && it->data.previous_oid_record_tag.empty()) {
+				LOG_TRACE("AAA % -- %", !!handle, it->data.previous_oid_record_tag.size());
 				// add
 				if(config_.mode == sync_mode::require_data_add_remove_seen) {
 
@@ -53,12 +56,14 @@ error chain_sync::check_rules(data_change_record const& rec) const {
 					}
 				}
 			} else if(handle && handle->tag() == it->data.previous_oid_record_tag) {
+				LOG_TRACE("BBB");
 				if(config_.mode == sync_mode::require_all_seen) {
 					if(rec.last_seen_block() != last_block_) {
 						err = make_error(protocol::errc::record_out_of_sync);
 					}
 				}
 			} else {
+				LOG_TRACE("previous oid is invalid [oid=%] (%)", to_hex(it->data.previous_oid_record_tag), config_.log_id);
 				err = make_error(protocol::errc::invalid_record);
 			}
 		}
@@ -71,6 +76,8 @@ error chain_sync::check_rules(user_change_record const& rec) const {
 	if(config_.mode >= sync_mode::require_special_seen) {
 		if(rec.last_seen_block() != last_block_) {
 			err = make_error(protocol::errc::record_out_of_sync);
+			LOG_TRACE("out of sync [(%,%) != (%,%) (%)"
+				, last_block_.sequence, to_hex(last_block_.hash), rec.last_seen_block().sequence, to_hex(rec.last_seen_block().hash), config_.log_id);
 		}
 	}
 	return err;

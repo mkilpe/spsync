@@ -21,29 +21,30 @@ struct plain_single_change_data {
 
 	// q: should we have change type (like remove) so that the server can remove unused data?
 
-	serialisation::trailing_data trailing_data;
+	serialisation::trailing_data trailing_data_;
 
 	template<typename Ar>
 	void serialise(Ar& ar) {
 		serialisation::sequence<Ar> seq(ar);
-		seq & id & previous_oid_record_tag & trailing_data;
+		seq & id & previous_oid_record_tag & trailing_data_;
 	}
 };
 
 struct single_change  {
 	single_change() = default;
-	single_change(plain_single_change_data data, encrypted_record_header<data_change_header> header)
+	explicit single_change(plain_single_change_data data, encrypted_record_header<data_change_header> header = {})
 	: data(std::move(data))
 	, header(std::move(header))
 	{}
 
 	plain_single_change_data data;
 	encrypted_record_header<data_change_header> header;
+	serialisation::trailing_data trailing_data_;
 
 	template<typename Ar>
 	void serialise(Ar& ar) {
 		serialisation::sequence<Ar> seq(ar);
-		seq & data & header;
+		seq & data & header & trailing_data_;
 	}
 };
 
@@ -52,7 +53,7 @@ public:
 	using const_iterator = std::deque<single_change>::const_iterator;
 
 	data_change_record() = default;
-	data_change_record(record_base base, std::deque<single_change> changes)
+	explicit data_change_record(record_base base, std::deque<single_change> changes = {})
 	: record_base(std::move(base))
 	, changes_(std::move(changes))
 	{}
@@ -60,15 +61,19 @@ public:
 	const_iterator begin() const { return changes_.begin(); }
 	const_iterator end() const { return changes_.end(); }
 
+	void add(single_change change) {
+		changes_.push_back(std::move(change));
+	}
+
 	template<typename Ar>
 	void serialise(Ar& ar) {
 		serialisation::sequence<Ar> seq(ar);
-		seq & static_cast<record_base&>(*this) & changes_ & trailing_data;
+		seq & static_cast<record_base&>(*this) & changes_ & trailing_data_;
 	}
 private:
 	// this can be just a single change or aggregated multiple changes
 	std::deque<single_change> changes_;
-	serialisation::trailing_data trailing_data;
+	serialisation::trailing_data trailing_data_;
 };
 
 }

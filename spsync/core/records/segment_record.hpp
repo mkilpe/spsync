@@ -12,6 +12,7 @@ namespace securepath::sync {
 /// The plain segment record data with non-encrypted data
 class plain_segment_data {
 public:
+
 	template<typename Ar>
 	void serialise(Ar& ar) {
 		serialisation::sequence<Ar> seq(ar);
@@ -32,14 +33,27 @@ private:
 /// Segment record with encrypted header
 class segment_record : public record_base {
 public:
+	segment_record() = default;
+	segment_record(record_base base, plain_segment_data data, encrypted_record_header<segment_header> header)
+	: record_base(std::move(base))
+	, data_(std::move(data))
+	, header_(std::move(header))
+	{}
+
+	/// Returns the user change data for this record
+	plain_segment_data data() const { return data_; }
+
+	/// Returns the encrypted header
+	encrypted_record_header<segment_header> header() const { return header_; }
+
 	template<typename Ar>
 	void serialise(Ar& ar) {
 		serialisation::sequence<Ar> seq(ar);
-		seq & plain_data_ & header_;
+		seq & static_cast<record_base&>(*this) & data_ & header_;
 	}
 
 private:
-	plain_segment_data plain_data_;
+	plain_segment_data data_;
 	encrypted_record_header<segment_header> header_;
 };
 

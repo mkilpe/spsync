@@ -47,7 +47,7 @@ public:
 	template<typename Ar>
 	void serialise(Ar& ar) {
 		serialisation::sequence<Ar> seq(ar);
-		seq & data_ & header_;
+		seq & static_cast<record_base&>(*this) & data_ & header_;
 	}
 private:
 	plain_user_change_data data_;

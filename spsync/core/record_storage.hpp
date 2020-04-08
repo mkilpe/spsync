@@ -51,8 +51,13 @@ public:
 
 	/// create new record, the first function sets the state to be unknown and the object id is not set
 	template<typename RecordType>
-	record_handle create(auth_record<RecordType> const&, record_data_handle = {});
-	record_handle create(chain_block const&, record_state state, record_data_handle = {});
+	record_handle create(auth_record<RecordType> const&);
+	record_handle create(auth_record<data_change_record> const&);
+	record_handle create(chain_block const&, record_state state);
+
+private:
+	void create_object_records(octet_vector const& tag, data_change_record const& rec);
+	record_handle create_impl(chain_block const& rec, record_state state);
 
 private:
 	class impl;
@@ -60,8 +65,8 @@ private:
 };
 
 template<typename RecordType>
-record_handle record_storage::create(auth_record<RecordType> const& rec, record_data_handle data) {
-	return create(chain_block(rec), record_state::unknown, std::move(data));
+record_handle record_storage::create(auth_record<RecordType> const& rec) {
+	return create(chain_block(rec), record_state::unknown);
 }
 
 }

@@ -55,14 +55,14 @@ public:
 	/// Set the state of this record to in_sync along with the given data
 	virtual void set_in_sync(chain_block_id, octet_vector parent_block_hash) = 0;
 
-	/// Set object id for data change record
-	virtual void set_oid(octet_vector const& oid) = 0;
-
 	/// Handle to the record data
-	virtual record_data_handle data() = 0;
-	virtual const_record_data_handle data() const = 0;
+	//t: we need to have enumeration here as one record can have many entities with data
+	//q: perhaps have find for object id
+	//q: we need more than just the data, also the metadata and other change record info
+	//virtual record_data_handle data() = 0;
+	//virtual const_record_data_handle data() const = 0;
 
-	/// Get the record in serialised format
+	/// Get the record in serialised formats
 	virtual chain_block record() const = 0;
 };
 

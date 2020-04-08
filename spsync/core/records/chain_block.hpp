@@ -138,6 +138,16 @@ public:
 		return serialisation::asn_der_deserialise_choice<record_types, ReturnType>(record_, std::forward<Visitor>(v));
 	}
 
+	template<typename Record>
+	Record deserialise_to() const {
+		return deserialise_record<Record>([](auto const& rec){ return rec; });
+	}
+
+	template<typename Record>
+	auth_record<Record> to_auth_record() const {
+		return auth_record<Record>(deserialise_to<Record>(), auth());
+	}
+
 private:
 	//the specific record class as serialised
 	octet_vector record_;

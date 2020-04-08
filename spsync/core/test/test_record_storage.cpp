@@ -3,10 +3,11 @@
 #include <securepath/test_frame/test_utils.hpp>
 
 #include <spsync/core/record_storage.hpp>
-#include <spsync/core/records/user_change_record.hpp>
 
 #include <securepath/database/sqlite/connection.hpp>
 #include <securepath/util/octet_vector.hpp>
+
+#include <spsync/test/test_block_creator.hpp>
 
 namespace securepath::sync::util {
 
@@ -16,26 +17,7 @@ static void remove_database_test_db() {
 	std::remove(db_name.c_str());
 }
 
-struct test_record_creator {
-
-	auth_record<user_change_record> test_user_change() {
-		record_tag tag = test::random_octet_vector(16);
-		auth_record<user_change_record> test_record{
-			user_change_record{record_base{
-				chain_block_id{last_server_seq++, last_chain_hash}, octet_vector{}, sequence_number{1}},
-				plain_user_change_data{},
-				encrypted_record_header<user_change_header>{}}, content_auth{tag}};
-		chain_block block{test_record};
-		block.set_server_sequence_and_parent_hash(last_server_seq, last_chain_hash);
-		last_chain_hash = block.hash();
-		last_tag = tag;
-		return test_record;
-	}
-
-	sequence_number last_server_seq{};
-	record_tag last_tag{};
-	octet_vector last_chain_hash{};
-};
+using test::test_block_creator;
 
 TEST_CASE("record_storage", "[unit]") {
 	remove_database_test_db();
@@ -49,8 +31,8 @@ TEST_CASE("record_storage", "[unit]") {
 	CHECK(!storage.find_first(object_id{}));
 	CHECK(!storage.find(record_tag{}));
 
-	test_record_creator creator;
-	auto root_handle = storage.create(creator.test_user_change());
+	test_block_creator creator;
+	auto root_handle = storage.create(creator.test_user_change().to_auth_record<user_change_record>());
 	REQUIRE(root_handle);
 
 	// state needs to be in_sync for these to be found
@@ -92,7 +74,7 @@ TEST_CASE("record_storage", "[unit]") {
 	}
 	{ // check that creating new record has correct data
 		octet_vector parent_block_hash = creator.last_chain_hash;
-		CHECK(storage.create(creator.test_user_change()));
+		CHECK(storage.create(creator.test_user_change().to_auth_record<user_change_record>()));
 		auto h = storage.find_tag(creator.last_tag);
 		REQUIRE(h);
 		CHECK(h->tag() == creator.last_tag);
@@ -129,9 +111,9 @@ TEST_CASE("record_storage root", "[unit]") {
 	record_storage storage(db_conn);
 	sequence_number seq{0};
 	octet_vector parent_block_hash;
-	test_record_creator creator;
+	test_block_creator creator;
 	for(int i = 0; i != 10; ++i) {
-		auto h = storage.create(creator.test_user_change());
+		auto h = storage.create(creator.test_user_change().to_auth_record<user_change_record>());
 		REQUIRE(h);
 		h->set_in_sync(chain_block_id{creator.last_server_seq, creator.last_chain_hash}, parent_block_hash);
 		CHECK(h->block_id().sequence == ++seq);
@@ -149,17 +131,17 @@ TEST_CASE("record_storage unique seq", "[unit]") {
 	auto db_conn = database::sqlite::create_sqlite_connection(db_name);
 
 	record_storage storage(db_conn);
-	test_record_creator creator;
+	test_block_creator creator;
 
-	auto h1 = storage.create(creator.test_user_change());
+	auto h1 = storage.create(creator.test_user_change().to_auth_record<user_change_record>());
 	h1->set_in_sync(chain_block_id{creator.last_server_seq, creator.last_chain_hash}, octet_vector{});
 
-	auto h2 = storage.create(creator.test_user_change());
+	auto h2 = storage.create(creator.test_user_change().to_auth_record<user_change_record>());
 	// use same block id
 	CHECK_THROWS(h2->set_in_sync(h1->block_id(), octet_vector{}));
 	h2->set_in_sync(chain_block_id{creator.last_server_seq, creator.last_chain_hash}, h1->block_id().hash);
 
-	auto h3 = storage.create(creator.test_user_change());
+	auto h3 = storage.create(creator.test_user_change().to_auth_record<user_change_record>());
 	// use same parent block hash
 	CHECK_THROWS(h3->set_in_sync(chain_block_id{creator.last_server_seq, creator.last_chain_hash}, h1->block_id().hash));
 	// use same sequence number
@@ -174,12 +156,131 @@ TEST_CASE("record_storage unique tag", "[unit]") {
 	auto db_conn = database::sqlite::create_sqlite_connection(db_name);
 
 	record_storage storage(db_conn);
-	test_record_creator creator;
+	test_block_creator creator;
 
-	auto block = creator.test_user_change();
+	auto block = creator.test_user_change().to_auth_record<user_change_record>();
 	auto h = storage.create(block);
 	REQUIRE(h);
 	CHECK_THROWS(storage.create(block));
+}
+
+
+TEST_CASE("record_storage data change not synced", "[unit]") {
+	remove_database_test_db();
+	auto db_conn = database::sqlite::create_sqlite_connection(db_name);
+
+	record_storage storage(db_conn);
+	test_block_creator creator;
+
+	// first record needs to be user_change
+	storage.create(creator.test_user_change(), record_state::in_sync);
+
+	// test that blocks which are not in_sync state are not found with find_first/find_last
+	auto block = creator.test_data_change();
+	auto h = storage.create(block, record_state::unknown);
+	REQUIRE(h);
+	for(auto&& r : block.deserialise_to<data_change_record>()) {
+		CHECK(!storage.find_first(r.data.id));
+		CHECK(!storage.find_last(r.data.id));
+	}
+	h->set_state(record_state::in_sync);
+	for(auto&& r : block.deserialise_to<data_change_record>()) {
+		CHECK(storage.find_first(r.data.id));
+		CHECK(storage.find_last(r.data.id));
+	}
+}
+
+inline bool check_tag(record_handle h, octet_vector tag) {
+	return h && h->tag() == tag;
+}
+
+TEST_CASE("record_storage data change", "[unit]") {
+	auto oids = GENERATE(1, 3, 10, 103);
+
+	remove_database_test_db();
+	auto db_conn = database::sqlite::create_sqlite_connection(db_name);
+
+	record_storage storage(db_conn);
+	test_block_creator creator;
+
+	// first record needs to be user_change
+	storage.create(creator.test_user_change(), record_state::in_sync);
+
+	chain_block first_change_block;
+	{
+		first_change_block = creator.test_multi_data_change(oids);
+		auto h = storage.create(first_change_block, record_state::in_sync);
+		REQUIRE(h);
+		for(auto&& r : first_change_block.deserialise_to<data_change_record>()) {
+			CHECK(check_tag(storage.find_first(r.data.id), h->tag()));
+			CHECK(check_tag(storage.find_last(r.data.id), h->tag()));
+		}
+	}
+
+	{
+		auto block = creator.test_multi_data_change(oids);
+		auto h = storage.create(block, record_state::in_sync);
+		REQUIRE(h);
+		for(auto&& r : block.deserialise_to<data_change_record>()) {
+			CHECK(check_tag(storage.find_first(r.data.id), h->tag()));
+			CHECK(check_tag(storage.find_last(r.data.id), h->tag()));
+		}
+
+		// check the first one is still as should
+		for(auto&& r : first_change_block.deserialise_to<data_change_record>()) {
+			CHECK(check_tag(storage.find_first(r.data.id), first_change_block.tag()));
+			CHECK(check_tag(storage.find_last(r.data.id), first_change_block.tag()));
+		}
+	}
+	// create follow up
+	{
+		auto block = creator.test_followup_data_change(first_change_block);
+		auto h = storage.create(block, record_state::in_sync);
+		REQUIRE(h);
+		for(auto&& r : block.deserialise_to<data_change_record>()) {
+			CHECK(check_tag(storage.find_first(r.data.id), first_change_block.tag()));
+			CHECK(check_tag(storage.find_last(r.data.id), h->tag()));
+		}
+	}
+}
+
+
+TEST_CASE("record_storage long_chain data change", "[unit]") {
+	auto length = GENERATE(3, 13, 203);
+
+	remove_database_test_db();
+	auto db_conn = database::sqlite::create_sqlite_connection(db_name);
+
+	record_storage storage(db_conn);
+	test_block_creator creator;
+
+	// first record needs to be user_change
+	storage.create(creator.test_user_change(), record_state::in_sync);
+
+	std::vector<chain_block> blocks;
+	{
+		blocks.push_back(creator.test_data_change());
+		storage.create(blocks.back(), record_state::in_sync);
+	}
+	for(int i = 0; i != length; ++i) {
+		blocks.push_back(creator.test_followup_data_change(blocks.back()));
+		storage.create(blocks.back(), record_state::in_sync);
+	}
+
+	object_id oid = blocks.front().deserialise_to<data_change_record>().begin()->data.id;
+
+	CHECK(check_tag(storage.find_first(oid), blocks.front().tag()));
+	CHECK(check_tag(storage.find_last(oid), blocks.back().tag()));
+
+	/*auto handle = storage.find_last(oid);
+	int count = 0;
+	while(handle && !blocks.empty()) {
+		++count;
+		CHECK(check_tag(handle, blocks.back().tag()));
+		handle = ...
+		blocks.pop_back();
+	}
+	CHECK(count == length+1);*/
 }
 
 }

@@ -10,6 +10,8 @@
 
 namespace securepath::sync {
 
+// status: only the first and last rule implemented for now
+
 /**
  * modes for synchronisation (server rules):
  *	- allow all at any time
@@ -30,7 +32,7 @@ enum class sync_mode {
 struct chain_sync_config {
 	/// this is id for the repository, it is only used for logging to help trace/debug things if set
 	std::string log_id;
-	sync_mode mode{sync_mode::require_special_seen};
+	sync_mode mode{sync_mode::require_all_seen};
 };
 
 /**

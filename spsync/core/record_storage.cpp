@@ -3,6 +3,10 @@
 #include <securepath/database/util.hpp>
 #include <securepath/serialisation/util.hpp>
 #include <securepath/util/conversions.hpp>
+#include <spsync/core/records/data_change_record.hpp>
+
+#include <spsync/core/records/user_change_record.hpp>
+#include <spsync/core/records/segment_record.hpp>
 
 #include <memory>
 #include <mutex>
@@ -13,14 +17,13 @@ namespace {
 class database_record : public record_interface {
 public:
 	database_record(database::connection_ptr db, std::uint64_t record_key, record_tag tag
-		, octet_vector parent_hash, chain_block_id id, record_state state, std::uint64_t data_ref)
+		, octet_vector parent_hash, chain_block_id id, record_state state)
 	: db_(db)
 	, record_key_(record_key)
 	, tag_(std::move(tag))
 	, parent_hash_(std::move(parent_hash))
 	, block_id_(std::move(id))
 	, state_(state)
-	, data_ref_(data_ref)
 	{}
 
 	virtual chain_block_id block_id() const {
@@ -72,24 +75,6 @@ public:
 		parent_hash_ = std::move(parent_block_hash);
 	}
 
-	virtual void set_oid(octet_vector const& oid) {
-		//update object id in database
-		auto q = db_->prepare("UPDATE record SET oid = :o WHERE key = :k;");
-		q.bind(":o", oid);
-		q.bind(":k", record_key_);
-		q.execute();
-	}
-
-	virtual record_data_handle data() {
-		//todo: use data_ref_ to load from db
-		return nullptr;
-	}
-
-	virtual const_record_data_handle data() const {
-		//todo: use data_ref_ to load from db
-		return nullptr;
-	}
-
 	virtual chain_block record() const {
 		auto q = db_->prepare("SELECT record FROM record WHERE key = :k;");
 		q.bind(":k", record_key_);
@@ -112,7 +97,6 @@ private:
 	octet_vector parent_hash_;
 	chain_block_id block_id_;
 	record_state state_;
-	std::uint64_t data_ref_;
 };
 
 }
@@ -124,10 +108,15 @@ private:
 		seq: sequence as integer, this is only set after server returns the committed chain block
 		hash: hash of the chain_block, this is only set after server returns the committed chain block
 		parent_hash: hash of the parent chain block, this is only set after server returns the committed chain block
-		oid: object id as blob
 		state: record state as integer, this is the record_state enum in record_interface.hpp
-		data_ref: unique id to record data database table as integer
 		record: serialised chain_block as blob
+
+	database table 'record_objects':
+		key: arbitrary table index as integer (primary key)
+		tag: the record tag this row belongs to
+		prev_tag: the record tag for previous change to the same object
+		oid: object id as blob
+		data_ref: unique id to record data database table as integer
 */
 
 struct record_storage::impl {
@@ -141,21 +130,26 @@ struct record_storage::impl {
 				"seq INTEGER UNIQUE,"
 				"hash BLOB UNIQUE,"
 				"parent_hash BLOB UNIQUE,"
-				"oid BLOB,"
 				"state INTEGER,"
-				"data_ref INTEGER,"
 				"record BLOB);").execute();
+		}
+		if(!db->has_table("record_objects")) {
+			db->prepare("CREATE TABLE record_objects("
+				"key INTEGER PRIMARY KEY,"
+				"tag BLOB,"
+				"prev_tag BLOB,"
+				"oid BLOB,"
+				"data_ref INTEGER UNIQUE);").execute();
 		}
 	}
 
-	// construct record handle from query (SELECT key, tag, seq, hash, parent_hash, state, data_ref ... )
+	// construct record handle from query (SELECT key, tag, seq, hash, parent_hash, state, ... )
 	record_handle construct_record(std::uint64_t key, database::query const& q) {
 		auto tag = q.value<octet_vector>(1);
 		auto seq = q.value<std::uint64_t>(2);
 		auto hash = q.value<octet_vector>(3);
 		auto parent_hash = q.value<octet_vector>(4);
 		auto state = q.value<std::int64_t>(5);
-		auto data_ref = q.value<std::uint64_t>(6);
 
 		//check if the data is valid, notice that data_ref might not be set
 		if(!tag || !state) {
@@ -169,8 +163,7 @@ struct record_storage::impl {
 			, std::move(*tag)
 			, parent_hash.value_or(octet_vector{})
 			, chain_block_id{seq.value_or(0), hash.value_or(octet_vector{})}
-			, static_cast<record_state>(*state)
-			, data_ref.value_or(0));
+			, static_cast<record_state>(*state));
 	}
 
 	record_handle load_record(database::query const& q) {
@@ -230,7 +223,7 @@ chain_block_id record_storage::last_block() const {
 
 record_handle record_storage::find_last() const {
 	auto q = impl_->db->prepare(
-		"SELECT key, tag, seq, hash, parent_hash, state, data_ref FROM record WHERE"
+		"SELECT key, tag, seq, hash, parent_hash, state FROM record WHERE"
 		" seq = (SELECT max(seq) FROM record WHERE state = :state);");
 	q.bind(":state", static_cast<std::int64_t>(record_state::in_sync));
 	return impl_->load_record(q.execute());
@@ -238,7 +231,7 @@ record_handle record_storage::find_last() const {
 
 record_handle record_storage::find_root() const {
 	auto q = impl_->db->prepare(
-		"SELECT key, tag, seq, hash, parent_hash, state, data_ref FROM record WHERE seq = :seq AND state = :state;");
+		"SELECT key, tag, seq, hash, parent_hash, state FROM record WHERE seq = :seq AND state = :state;");
 	q.bind(":seq", static_cast<std::uint64_t>(1));
 	q.bind(":state", static_cast<std::int64_t>(record_state::in_sync));
 	return impl_->load_record(q.execute());
@@ -246,8 +239,10 @@ record_handle record_storage::find_root() const {
 
 record_handle record_storage::find_last(object_id const& oid) const {
 	auto q = impl_->db->prepare(
-		"SELECT key, tag, seq, hash, parent_hash, state, data_ref FROM record WHERE"
-		" seq = (SELECT max(seq) FROM record WHERE state = :state AND oid = :o);");
+		"SELECT record.key, record.tag, record.seq, record.hash, record.parent_hash, record.state FROM record, record_objects"
+		" WHERE record.tag = record_objects.tag AND record_objects.oid = :o AND"
+		" state = :state ORDER BY record.seq DESC LIMIT 1");
+
 	q.bind(":state", static_cast<std::int64_t>(record_state::in_sync));
 	q.bind(":o", oid.value());
 	return impl_->load_record(q.execute());
@@ -255,8 +250,10 @@ record_handle record_storage::find_last(object_id const& oid) const {
 
 record_handle record_storage::find_first(object_id const& oid) const {
 	auto q = impl_->db->prepare(
-		"SELECT key, tag, seq, hash, parent_hash, state, data_ref FROM record WHERE"
-		" seq = (SELECT min(seq) FROM record WHERE state = :state AND oid = :o);");
+		"SELECT record.key, record.tag, record.seq, record.hash, record.parent_hash, record.state FROM record, record_objects"
+		" WHERE record.tag = record_objects.tag AND record_objects.oid = :o AND"
+		" state = :state ORDER BY record.seq ASC LIMIT 1");
+
 	q.bind(":state", static_cast<std::int64_t>(record_state::in_sync));
 	q.bind(":o", oid.value());
 	return impl_->load_record(q.execute());
@@ -264,7 +261,7 @@ record_handle record_storage::find_first(object_id const& oid) const {
 
 record_handle record_storage::find(octet_vector const& hash) const {
 	auto q = impl_->db->prepare(
-		"SELECT key, tag, seq, hash, parent_hash, state, data_ref FROM record"
+		"SELECT key, tag, seq, hash, parent_hash, state FROM record"
 		" WHERE hash = :h;");
 	q.bind(":h", hash);
 	return impl_->load_record(q.execute());
@@ -272,25 +269,32 @@ record_handle record_storage::find(octet_vector const& hash) const {
 
 record_handle record_storage::find_tag(octet_vector const& tag) const {
 	auto q = impl_->db->prepare(
-		"SELECT key, tag, seq, hash, parent_hash, state, data_ref FROM record"
+		"SELECT key, tag, seq, hash, parent_hash, state FROM record"
 		" WHERE tag = :t;");
 	q.bind(":t", tag);
 	return impl_->load_record(q.execute());
 }
 
-//Problem:
-// data change might have multiple object changes, how to handle the prev_object_tag here?
-// The prev object tag is ignored for now, see later on if it is needed and if it should be in the record itself
+void record_storage::create_object_records(octet_vector const& tag, data_change_record const& rec) {
+	for(auto& obj : rec) {
+		auto q = impl_->db->prepare(
+			"INSERT INTO record_objects(tag, prev_tag, oid, data_ref)"
+			" VALUES(:tag, :prev_tag, :oid, :data_ref);");
+		q.bind(":tag", tag);
+		q.bind(":prev_tag", obj.data.previous_oid_record_tag);
+		q.bind(":oid", obj.data.id.value());
+		q.bind(":data_ref");
+		q.execute();
+	}
+}
 
-record_handle record_storage::create(chain_block const& rec, record_state state, record_data_handle data_handle)
-{
-	LOG_TRACE("creating record to storage %", to_hex(rec.tag()));
+record_handle record_storage::create_impl(chain_block const& rec, record_state state) {
 	auto q = impl_->db->prepare(
-		"INSERT INTO record(tag, seq, hash, parent_hash, oid, state, data_ref, record)"
-		" VALUES(:tag, :seq, :hash, :parent_hash, :oid, :state, :data_ref, :record);");
+		"INSERT INTO record(tag, seq, hash, parent_hash, state, record)"
+		" VALUES(:tag, :seq, :hash, :parent_hash, :state, :record);");
 
 	q.bind(":tag", rec.tag());
-	if(rec.sequence() && !rec.parent_hash().empty()) {
+	if(rec.sequence()) {
 		q.bind(":seq", rec.sequence().value);
 		q.bind(":hash", rec.hash());
 		q.bind(":parent_hash", rec.parent_hash());
@@ -299,13 +303,38 @@ record_handle record_storage::create(chain_block const& rec, record_state state,
 		q.bind(":hash");
 		q.bind(":parent_hash");
 	}
-	q.bind(":oid", octet_vector{});
 	q.bind(":state", static_cast<std::int64_t>(state));
-	q.bind(":data_ref", data_handle ? data_handle->local_id() : 0);
 	q.bind(":record", serialisation::asn_der_serialise(rec));
 	q.execute();
 
 	return find_tag(rec.tag());
+}
+
+record_handle record_storage::create(chain_block const& rec, record_state state)
+{
+	LOG_TRACE("creating record to storage %", to_hex(rec.tag()));
+	database::transaction tact(*impl_->db);
+	auto handle = create_impl(rec, state);
+	if(handle) {
+		rec.deserialise_record([&rec, this](auto const& r)
+			{
+				if constexpr(std::is_same_v<std::decay_t<decltype(r)>, data_change_record>) {
+					create_object_records(rec.tag(), r);
+				}
+			});
+	}
+	return handle;
+}
+
+record_handle record_storage::create(auth_record<data_change_record> const& rec) {
+	LOG_TRACE("creating record to storage %", to_hex(rec.auth.tag()));
+
+	database::transaction tact(*impl_->db);
+	auto handle = create_impl(chain_block(rec), record_state::unknown);
+	if(handle) {
+		create_object_records(rec.auth.tag(), rec.record);
+	}
+	return handle;
 }
 
 }
