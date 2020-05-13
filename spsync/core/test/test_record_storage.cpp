@@ -30,6 +30,8 @@ TEST_CASE("record_storage", "[unit]") {
 	CHECK(!storage.find_last(object_id{}));
 	CHECK(!storage.find_first(object_id{}));
 	CHECK(!storage.find(record_tag{}));
+	CHECK(!storage.find(sequence_number{}));
+	CHECK(!storage.find(sequence_number{1}));
 
 	test_block_creator creator;
 	auto root_handle = storage.create(creator.test_user_change().to_auth_record<user_change_record>());
@@ -64,6 +66,15 @@ TEST_CASE("record_storage", "[unit]") {
 		CHECK(h->block_id().sequence == sequence_number{1});
 		CHECK(h->state() == record_state::in_sync);
 	}
+	{
+		auto h = storage.find(sequence_number{1});
+		REQUIRE(h);
+		CHECK(h->tag() == creator.last_tag);
+		CHECK(h->parent_block_hash().empty());
+		CHECK(h->block_id().sequence == sequence_number{1});
+		CHECK(h->state() == record_state::in_sync);
+
+	}
 	{ // check find returns correct data
 		auto h = storage.find_tag(creator.last_tag);
 		REQUIRE(h);
@@ -89,12 +100,17 @@ TEST_CASE("record_storage", "[unit]") {
 		CHECK(storage.last_block().sequence == creator.last_server_seq);
 		CHECK(h->parent_block_hash() == parent_block_hash);
 	}
+	{ // check find sequence number
+		auto h = storage.find(creator.last_server_seq);
+		CHECK(h->tag() == creator.last_tag);
+	}
 	{ // change state to invalid
 		auto h = storage.find_last();
 		REQUIRE(h);
 		CHECK(h->state() == record_state::in_sync);
 		h->set_state(record_state::invalid);
 		CHECK(h->state() == record_state::invalid);
+		CHECK(!storage.find(creator.last_server_seq));
 
 		CHECK(storage.find_last() != h);
 		auto ih = storage.find_tag(h->tag());

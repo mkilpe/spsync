@@ -26,6 +26,7 @@ struct test_block_creator {
 		return block;
 	}
 
+	/// Create empty user change record for testing
 	chain_block test_user_change() {
 		record_tag tag = securepath::test::random_octet_vector(16);
 		auth_record<user_change_record> test_record{
@@ -34,10 +35,12 @@ struct test_block_creator {
 		return next_block(test_record);
 	}
 
+	/// Create data change record with one object id for testing
 	chain_block test_data_change(record_tag tag = securepath::test::random_octet_vector(16)) {
 		return test_multi_data_change(1, tag);
 	}
 
+	/// Create data change record with multiple object ids for testing
 	chain_block test_multi_data_change(std::size_t amount, record_tag tag = securepath::test::random_octet_vector(16)) {
 		auth_record<data_change_record> test_record{data_change_record{next_record_base()}, util::content_auth{tag}};
 		for(std::size_t i = 0; i != amount; ++i) {
@@ -46,6 +49,7 @@ struct test_block_creator {
 		return next_block(test_record);
 	}
 
+	/// Create data change record that has same object ids as the given record and those set as the previous change of the object id
 	chain_block test_followup_data_change(chain_block const& previous) {
 		data_change_record rec = previous.deserialise_to<data_change_record>();
 		record_tag tag = securepath::test::random_octet_vector(16);

@@ -26,8 +26,8 @@ using request_handle = std::uint32_t;
 struct comm_input {
 	virtual ~comm_input() = default;
 
-	/// Returns the newest sequence number we know of or invalid sequence number
-	virtual sequence_number current_sequence_number() const = 0;
+	/// Fetches newest known sequence number from the server
+	virtual request_handle fetch_sequence_number() = 0;
 
 	/// Fetches records for specific range of sequence numbers [start, end]
 	virtual request_handle fetch_records(sequence_number start, sequence_number end) = 0;
@@ -48,6 +48,9 @@ struct comm_input {
  */
 struct comm_output {
 	virtual ~comm_output() = default;
+
+	/// called as a response to fetch_sequence_number, newest sequence number on server
+	virtual void on_sequence_number_response(request_handle, result<sequence_number> const&) = 0;
 
 	/// called when record is received as a response to fetch_records call
 	virtual void on_record_response(request_handle, result<std::deque<chain_block>> const&) = 0;

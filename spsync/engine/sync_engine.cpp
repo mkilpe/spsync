@@ -174,10 +174,14 @@ void sync_engine::set_config(sync_engine_config config) {
 
 
 //--- comm_output interface, see comm/interface.hpp
-
-void sync_engine::on_record_response(request_handle handle, result<std::deque<chain_block>> const& res) {
+void sync_engine::on_sequence_number_response(request_handle req_handle, result<sequence_number> const& res) {
 	std::unique_lock lock{impl_->mutex};
-	LOG_INFO("on_record_received [request handle = %] (%)", handle, impl_->config.log_id);
+
+}
+
+void sync_engine::on_record_response(request_handle req_handle, result<std::deque<chain_block>> const& res) {
+	std::unique_lock lock{impl_->mutex};
+	LOG_INFO("on_record_received [request handle = %] (%)", req_handle, impl_->config.log_id);
 	if(res) {
 		for(auto&& block : res.value()) {
 			impl_->handle_incoming_record(block);
@@ -188,13 +192,13 @@ void sync_engine::on_record_response(request_handle handle, result<std::deque<ch
 	}
 }
 
-void sync_engine::on_data_response(request_handle handle, result<record_data_handle> const&) {
+void sync_engine::on_data_response(request_handle req_handle, result<record_data_handle> const&) {
 
 }
 
-void sync_engine::on_commit_response(request_handle handle, result<chain_block> const& res) {
+void sync_engine::on_commit_response(request_handle req_handle, result<chain_block> const& res) {
 	std::unique_lock lock{impl_->mutex};
-	LOG_INFO("on_commit_response [request handle = %]", handle);
+	LOG_INFO("on_commit_response [request handle = %]", req_handle);
 
 	if(res) {
 		auto block = res.value();
@@ -222,7 +226,7 @@ void sync_engine::on_commit_response(request_handle handle, result<chain_block> 
 	}
 }
 
-void sync_engine::on_data_uploaded(request_handle handle, std::optional<error>) {
+void sync_engine::on_data_uploaded(request_handle req_handle, std::optional<error>) {
 	assert(not "implemented");
 }
 

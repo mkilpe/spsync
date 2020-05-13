@@ -267,6 +267,14 @@ record_handle record_storage::find(octet_vector const& hash) const {
 	return impl_->load_record(q.execute());
 }
 
+record_handle record_storage::find(sequence_number seq) const {
+	auto q = impl_->db->prepare(
+		"SELECT key, tag, seq, hash, parent_hash, state FROM record WHERE seq = :seq AND state = :state;");
+	q.bind(":seq", static_cast<std::uint64_t>(seq.value));
+	q.bind(":state", static_cast<std::int64_t>(record_state::in_sync));
+	return impl_->load_record(q.execute());
+}
+
 record_handle record_storage::find_tag(octet_vector const& tag) const {
 	auto q = impl_->db->prepare(
 		"SELECT key, tag, seq, hash, parent_hash, state FROM record"

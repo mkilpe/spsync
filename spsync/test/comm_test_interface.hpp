@@ -42,7 +42,7 @@ public:
 
 public:
 	// -- comm_input interface, see interface.hpp --
-	virtual sequence_number current_sequence_number() const;
+	virtual request_handle fetch_sequence_number();
 	virtual request_handle fetch_records(sequence_number start, sequence_number end);
 	virtual request_handle fetch_data(sequence_number record);
 	virtual request_handle commit_record(record_handle);

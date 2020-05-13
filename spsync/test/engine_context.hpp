@@ -4,6 +4,7 @@
 #include "comm_test_interface.hpp"
 #include "test_progress.hpp"
 #include "test_sync_engine.hpp"
+#include "util.hpp"
 
 #include <spsync/core/encryption_key_storage.hpp>
 #include <securepath/crypto/private_key.hpp>
@@ -11,11 +12,6 @@
 #include <securepath/database/sqlite/connection.hpp>
 
 namespace securepath::sync::test {
-
-inline database::connection_ptr create_test_database(std::string const& db_name = "test.db") {
-	std::remove(db_name.c_str());
-	return database::sqlite::create_sqlite_connection(db_name);
-}
 
 class engine_context {
 public:

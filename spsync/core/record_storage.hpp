@@ -37,6 +37,9 @@ public:
 	/// find record that has the given block hash
 	record_handle find(octet_vector const&) const;
 
+	/// find record based on sequence number
+	record_handle find(sequence_number) const;
+
 	/// find record that has the given tag
 	record_handle find_tag(octet_vector const&) const;
 

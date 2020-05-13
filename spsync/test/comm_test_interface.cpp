@@ -75,8 +75,12 @@ bool comm_test_interface::process_event() {
 	return ret;
 }
 
-sequence_number comm_test_interface::current_sequence_number() const {
-	return impl_->current_seq;
+request_handle comm_test_interface::fetch_sequence_number() {
+	request_handle ret = ++impl_->req_handle;
+	impl_->event_queue.push_back([=, this] {
+		impl_->output->on_sequence_number_response(ret, impl_->current_seq);
+	});
+	return ret;
 }
 
 request_handle comm_test_interface::fetch_records(sequence_number start, sequence_number end) {

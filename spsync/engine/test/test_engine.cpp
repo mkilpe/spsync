@@ -92,7 +92,6 @@ TEST_CASE("engine commit multiple records", "[unit]") {
 	auto handle = context.storage.find_last();
 	REQUIRE(handle);
 	CHECK(context.storage.last_block().sequence == sequence_number{4});
-	CHECK(context.storage.last_block().sequence == context.io.current_sequence_number());
 	auto previous_handle = context.storage.find(handle->parent_block_hash());
 	REQUIRE(previous_handle);
 	CHECK(previous_handle->block_id().sequence == sequence_number{3});
