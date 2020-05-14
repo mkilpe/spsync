@@ -9,6 +9,10 @@
 #include <spsync/core/encryption_key_storage.hpp>
 #include <spsync/server/server_lib/chain_sync.hpp>
 
+#include <securepath/crypto/private_key.hpp>
+#include <securepath/crypto/rsa.hpp>
+#include <securepath/database/sqlite/connection.hpp>
+
 #include <deque>
 #include <functional>
 #include <memory>
@@ -43,12 +47,12 @@ public:
 	virtual request_handle commit_record(record_handle);
 
 	/// Accessors to common, shared infrastructure
-	virtual sync::progress& progress();
-	virtual record_storage& records();
+	virtual sync::progress& progress() const;
+	virtual record_storage& records() const;
 
 private:
-	test_progress progress_;
-	record_storage storage_;
+	mutable test_progress progress_;
+	mutable record_storage storage_;
 	comm_output* output_{};
 	test_sync_server* server_{};
 	sequence_number last_pushed_record_;
@@ -61,9 +65,12 @@ private:
  */
 class test_sync_server_client_context {
 public:
-	test_sync_server_client_context();
+	test_sync_server_client_context(int n);
 
-	database::connection_ptr database{create_test_database("test_sync_server_client.db")};
+	crypto::private_key user_key{crypto::generate_rsa_private_key(1024)};
+	util::user_id user{user_key.id()};
+
+	database::connection_ptr database;
 	test_sync_server_client io{database};
 	encryption_key_storage enc_keys{database};
 	sync_engine_config engine_config;
@@ -88,12 +95,20 @@ public:
  */
 struct test_sync_context {
 
-	/// add client and by default connect to the test server
-	void add_client(bool connect = true);
+	/// add 'num' clients and by default connect to the test server
+	void add_client(bool connect = true, int num = 1);
 
+	/// return nth client
+	test_sync_server_client_context& client(int num);
 
 	/// handle events for all clients
 	void handle_events();
+
+	/// create initial record using the first client as owner and add other clients as members
+	void create_initial_record();
+
+	/// returns true if all client and server record storages have same in sync records and given sequence number as last sequence (or the given seq is invalid)
+	bool compare_record_storages(sequence_number = {}) const;
 
 public:
 	test_sync_server server;

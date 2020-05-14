@@ -46,8 +46,8 @@ public:
 	virtual request_handle fetch_records(sequence_number start, sequence_number end);
 	virtual request_handle fetch_data(sequence_number record);
 	virtual request_handle commit_record(record_handle);
-	virtual sync::progress& progress() { return progress_; }
-	virtual record_storage& records() { return records_; }
+	virtual sync::progress& progress() const { return progress_; }
+	virtual record_storage& records() const { return records_; }
 
 private:
 	sync::progress& progress_;

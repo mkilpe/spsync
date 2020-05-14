@@ -9,7 +9,7 @@
 #include <securepath/test_frame/test_utils.hpp>
 
 namespace securepath::sync::util {
-
+namespace {
 struct check_user_change_visitor {
 	users expected_users;
 
@@ -25,6 +25,7 @@ struct check_user_change_visitor {
 
 void check_user_change(chain_block const& r, users const& expected_users) {
 	r.deserialise_record(check_user_change_visitor{expected_users});
+}
 }
 
 // * commit initial change

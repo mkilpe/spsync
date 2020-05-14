@@ -11,7 +11,7 @@
 
 namespace securepath::sync {
 
-// status: only the first and last rule implemented for now
+// t: check and update user access when handling records
 
 /**
  * modes for synchronisation (server rules):
@@ -51,6 +51,9 @@ public:
 
 	/// try to commit chain block
 	util::result<chain_block> commit_block(chain_block const&);
+
+	record_storage& records() { return records_; }
+	record_storage const& records() const { return records_; }
 
 private:
 	chain_block set_and_save_block(chain_block block);

@@ -21,13 +21,9 @@ sequence_number chain_sync::current_sequence_number() const {
 
 std::deque<chain_block> chain_sync::get_records(sequence_number start, sequence_number end) const {
 	std::deque<chain_block> ret;
-	for(; start < end; ++start) {
-		auto h = records_.find(start);
-		if(h) {
-			ret.push_back(h->record());
-		} else {
-			start = end;
-		}
+	record_handle h;
+	for(; start < end && (h = records_.find(start)); ++start) {
+		ret.push_back(h->record());
 	}
 	return ret;
 }
@@ -96,7 +92,7 @@ error chain_sync::check_rules_existing(data_change_record const& rec, single_cha
 error chain_sync::check_rules(data_change_record const& rec) const {
 	error err;
 	for(auto it = rec.begin(); it != rec.end() && !err; ++it) {
-		LOG_TRACE("GGG: % -- %", it->data.id, to_hex(it->data.previous_oid_record_tag));
+		//LOG_TRACE("GGG: % -- %", it->data.id, to_hex(it->data.previous_oid_record_tag));
 		if(!it->data.id.is_valid()) {
 			LOG_TRACE("data id is invalid [id=%] (%)", it->data.id, config_.log_id);
 			err = make_error(protocol::errc::invalid_record);

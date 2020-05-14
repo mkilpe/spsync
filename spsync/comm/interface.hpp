@@ -39,8 +39,8 @@ struct comm_input {
 	virtual request_handle commit_record(record_handle) = 0;
 
 	/// Accessors to common, shared infrastructure
-	virtual sync::progress& progress() = 0;
-	virtual record_storage& records() = 0;
+	virtual sync::progress& progress() const = 0;
+	virtual record_storage& records() const = 0;
 };
 
 /**

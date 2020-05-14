@@ -20,6 +20,7 @@ void test_sync_server_client::disconnect() {
 	server_ = nullptr;
 }
 
+// t: later on have events to emulate disconnected server
 void test_sync_server_client::handle_events() {
 	assert(output_);
 	for(auto&& event : events_) {
@@ -72,15 +73,17 @@ request_handle test_sync_server_client::commit_record(record_handle h) {
 	return ret;
 }
 
-sync::progress& test_sync_server_client::progress() {
+sync::progress& test_sync_server_client::progress() const {
 	return progress_;
 }
 
-record_storage& test_sync_server_client::records() {
+record_storage& test_sync_server_client::records() const {
 	return storage_;
 }
 
-test_sync_server_client_context::test_sync_server_client_context() {
+test_sync_server_client_context::test_sync_server_client_context(int n)
+: database{create_test_database("test_sync_server_client_" + std::to_string(n) + ".db")}
+{
 	io.set_output(engine);
 }
 
@@ -89,17 +92,87 @@ test_sync_server::test_sync_server(chain_sync_config config)
 {
 }
 
-void test_sync_context::add_client(bool connect) {
-	clients.push_back(std::make_unique<test_sync_server_client_context>());
-	if(connect) {
-		clients.back()->io.connect(server);
+void test_sync_context::add_client(bool connect, int num) {
+	for(int i = 0; i != num; ++i) {
+		clients.push_back(std::make_unique<test_sync_server_client_context>(clients.size()+1));
+		if(connect) {
+			clients.back()->io.connect(server);
+		}
 	}
+}
+
+test_sync_server_client_context& test_sync_context::client(int num) {
+	assert(num < clients.size());
+	return *clients[num];
 }
 
 void test_sync_context::handle_events() {
 	for(auto&& v : clients) {
 		v->io.handle_events();
 	}
+}
+
+void test_sync_context::create_initial_record() {
+	if(!clients.empty()) {
+		// set initial key, use hard coded one for testing
+		encryption_key initial_key{sequence_number{1}, to_octet_vector("12345678901234567890123456789012")};
+		users initial;
+
+		bool first = true;
+		for(auto&& c : clients) {
+			if(first) {
+				first = false;
+				initial.add(util::user_access{c->user, util::access_type::user_management_access});
+			} else {
+				initial.add(util::user_access{c->user, util::access_type::data_write_access});
+			}
+			// insert the key for everyone
+			c->enc_keys.insert(initial_key);
+		}
+		clients.front()->engine.sync_user_change(initial);
+	}
+}
+
+static bool check_record_matches(sequence_number seq, int client_n, record_handle sh, record_handle ch) {
+	bool ret = false;
+	if(sh) {
+		if(ch) {
+			if(sh->tag() == ch->tag()) {
+				ret = sh->parent_block_hash() == ch->parent_block_hash();
+				if(!ret) {
+					LOG_WARN("parent block hash for sequence % does not match: server(%) - client %(%)", seq, to_hex(sh->parent_block_hash()), client_n, to_hex(ch->parent_block_hash()));
+				}
+			} else {
+				LOG_WARN("tag for sequence % does not match: server(%) - client %(%)", seq, to_hex(sh->tag()), client_n, to_hex(ch->tag()));
+			}
+		} else {
+			LOG_WARN("client % sequence number % missing", client_n, seq);
+		}
+	} else {
+		LOG_WARN("server sequence number % missing", seq);
+	}
+	return ret;
+}
+
+bool test_sync_context::compare_record_storages(sequence_number required_seq) const {
+	record_storage const& server_records = server.sync.records();
+	sequence_number last_seq = server_records.last_block().sequence;
+	bool ret = !required_seq.is_valid() || required_seq == last_seq;
+	if(!ret) {
+		LOG_WARN("Server doesn't have required sequence as last one: server(%) != %", last_seq, required_seq);
+	}
+	for(int i = 0; ret && i != clients.size(); ++i) {
+		record_storage const& client_records = clients[i]->io.records();
+		if(last_seq != client_records.last_block().sequence) {
+			ret = false;
+			LOG_WARN("last sequence number mismatch: server(%) - client %(%)", last_seq, i, client_records.last_block().sequence);
+		} else {
+			for(sequence_number seq{1}; ret && seq != last_seq+1; ++seq) {
+				ret = check_record_matches(seq, i, server_records.find(seq), client_records.find(seq));
+			}
+		}
+	}
+	return ret;
 }
 
 }
