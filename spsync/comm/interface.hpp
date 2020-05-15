@@ -29,7 +29,7 @@ struct comm_input {
 	/// Fetches newest known sequence number from the server
 	virtual request_handle fetch_sequence_number() = 0;
 
-	/// Fetches records for specific range of sequence numbers [start, end]
+	/// Fetches records for specific range of sequence numbers [start, end]. If end is invalid, the server max sequence is used.
 	virtual request_handle fetch_records(sequence_number start, sequence_number end) = 0;
 
 	/// Fetches record data for given record
@@ -48,6 +48,12 @@ struct comm_input {
  */
 struct comm_output {
 	virtual ~comm_output() = default;
+
+	/// called when connection to server established
+	virtual void on_connected() = 0;
+
+	/// called when disconnected from server
+	virtual void on_disconnected(std::optional<error>) = 0;
 
 	/// called as a response to fetch_sequence_number, newest sequence number on server
 	virtual void on_sequence_number_response(request_handle, result<sequence_number> const&) = 0;

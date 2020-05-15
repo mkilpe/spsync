@@ -4,6 +4,7 @@
 #include <securepath/database/sqlite/connection.hpp>
 #include <securepath/util/command_parser.hpp>
 
+#include <filesystem>
 #include <iostream>
 
 namespace securepath::sync {
@@ -22,6 +23,9 @@ struct storage_tool : command_parser {
 
 	void run() {
 		if(!storage.empty()) {
+			if(!std::filesystem::exists(storage)) {
+				throw std::runtime_error("file does not exist: " + storage);
+			}
 			record_storage records(database::sqlite::create_sqlite_connection(storage));
 			sequence_number last_sequence = records.last_block().sequence;
 			if(last_sequence.is_valid()) {

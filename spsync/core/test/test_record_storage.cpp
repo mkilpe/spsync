@@ -32,6 +32,7 @@ TEST_CASE("record_storage", "[unit]") {
 	CHECK(!storage.find(record_tag{}));
 	CHECK(!storage.find(sequence_number{}));
 	CHECK(!storage.find(sequence_number{1}));
+	CHECK(storage.highest_sequence_number() == sequence_number{});
 
 	test_block_creator creator;
 	auto root_handle = storage.create(creator.test_user_change().to_auth_record<user_change_record>());
@@ -64,6 +65,7 @@ TEST_CASE("record_storage", "[unit]") {
 		CHECK(h->tag() == creator.last_tag);
 		CHECK(h->parent_block_hash().empty());
 		CHECK(h->block_id().sequence == sequence_number{1});
+		CHECK(storage.highest_sequence_number() == sequence_number{1});
 		CHECK(h->state() == record_state::in_sync);
 	}
 	{
@@ -111,6 +113,7 @@ TEST_CASE("record_storage", "[unit]") {
 		h->set_state(record_state::invalid);
 		CHECK(h->state() == record_state::invalid);
 		CHECK(!storage.find(creator.last_server_seq));
+		CHECK(storage.highest_sequence_number() == creator.last_server_seq);
 
 		CHECK(storage.find_last() != h);
 		auto ih = storage.find_tag(h->tag());

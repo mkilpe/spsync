@@ -7,6 +7,7 @@
 #include <spsync/core/records/chain_block.hpp>
 
 #include <memory>
+#include <iosfwd>
 
 namespace securepath::sync {
 
@@ -25,6 +26,8 @@ enum class record_state {
 	/// the record is invalid, e.g. the aes gcm tag doesn't match
 	invalid
 };
+
+std::ostream& operator<<(std::ostream&, record_state);
 
 /**
  * Interface for stored records

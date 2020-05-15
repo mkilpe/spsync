@@ -22,6 +22,12 @@ sequence_number chain_sync::current_sequence_number() const {
 std::deque<chain_block> chain_sync::get_records(sequence_number start, sequence_number end) const {
 	std::deque<chain_block> ret;
 	record_handle h;
+	if(!start.is_valid()) {
+		start = sequence_number{1};
+	}
+	if(!end.is_valid()) {
+		end = current_sequence_number()+1;
+	}
 	for(; start < end && (h = records_.find(start)); ++start) {
 		ret.push_back(h->record());
 	}

@@ -1,6 +1,24 @@
 
-* server
-** update and check user access rights for storage when handling records
+= server
+* update and check user access rights for storage when handling records
 
-* engine
-** signatures for records (creating/verifying)
+= engine
+* signatures for records (creating/verifying)
+* handle pending sync records
+* handle_decrypt_record functions
+* connect/disconnect handling?
+
+out of sync:
+
+  1. bring us up-to-date with server state
+
+  2. see if there are conflicts and notify higher level if there are
+  3. recreate the records with correct previous tag/last seen seq for non-conflicting records
+  4. try to commit again
+
+* how to fetch missing records, chunking?
+ - add current max seq to the result and return only n records
+* more specific result types for comm_output?
+ - add current max seq when commit denied because of out of sync
+
+

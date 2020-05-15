@@ -12,6 +12,10 @@
 #include <map>
 #include <mutex>
 
+#define LTRACE(format, ...) LOG_TRACE(format " (%)" __VA_OPT__(,) __VA_ARGS__, config.log_id)
+#define LINFO(format, ...) LOG_INFO(format " (%)" __VA_OPT__(,) __VA_ARGS__, config.log_id)
+#define LWARN(format, ...) LOG_WARN(format " (%)" __VA_OPT__(,) __VA_ARGS__, config.log_id)
+
 namespace securepath::sync {
 
 class sync_engine::impl {
@@ -26,36 +30,34 @@ public:
 	void commit_record(record_handle h) {
 		h->set_state(record_state::pending_commit);
 		request_handle req = comm.commit_record(h);
-		LOG_INFO("trying to commit record to server [tag = %, request handle = %] (%)"
-			, to_hex(h->tag()), req, config.log_id);
+		LINFO("trying to commit record to server [tag = %, request handle = %]", to_hex(h->tag()), req);
 	}
 
 	void update_record_commit_state(record_handle h, chain_block const& record, chain_block_id const& id) {
 		if(record.check_matches_without_server_data(h->record())
 			&& check_chain_block(record, id) == record_state::in_sync)
 		{
-			LOG_INFO("setting in sync state for record [block id = %, parent block = %, tag = %] (%)",
-				id, to_hex(record.parent_hash()), to_hex(h->tag()), config.log_id);
+			LINFO("setting in sync state for record [block id = %, parent block = %, tag = %]",
+				id, to_hex(record.parent_hash()), to_hex(h->tag()));
 			h->set_in_sync(id, record.parent_hash());
 		} else {
 			h->set_state(record_state::invalid);
 
 			//t: handle error, what to do?
-			LOG_WARN("Server returned invalid record [local tag=%, server tag=%] (%)"
-				, to_hex(h->tag()), to_hex(record.tag()), config.log_id);
+			LWARN("Server returned invalid record [local tag=%, server tag=%]", to_hex(h->tag()), to_hex(record.tag()));
 		}
 	}
 
 	void handle_decrypt_record(data_change_record_verifier const& ver) {
-
+		//record is in sync, notify higher layer?
 	}
 
 	void handle_decrypt_record(user_change_record_verifier const& ver) {
-
+		//record is in sync, notify higher layer?
 	}
 
 	void handle_decrypt_record(segment_record_verifier const& ver) {
-
+		//record is in sync, notify higher layer?
 	}
 
 	record_state check_chain_block(chain_block const& record, chain_block_id const& id) {
@@ -78,14 +80,14 @@ public:
 						// all good, we are in sync
 						state = record_state::in_sync;
 					} else {
-						LOG_WARN("Record sequence does not match with its parent [block id = %, tag = %"
-							", seq = %, parent seq = %, parent hash = %] (%)"
+						LWARN("Record sequence does not match with its parent [block id = %, tag = %"
+							", seq = %, parent seq = %, parent hash = %]"
 							, id, to_hex(record.tag()), to_hex(record.parent_hash()), record.sequence()
-							, parent->block_id().sequence, config.log_id);
+							, parent->block_id().sequence);
 					}
 				} else {
-					LOG_TRACE("Record block with unknown parent [block id = %, tag = %, parent hash = %] (%)"
-						, id, to_hex(record.tag()), to_hex(record.parent_hash()), config.log_id);
+					LTRACE("Record block with unknown parent [block id = %, tag = %, parent hash = %]"
+						, id, to_hex(record.tag()), to_hex(record.parent_hash()));
 
 					if(last_block.sequence+1 < record.sequence()) {
 						// if the sequence is bigger than the next one we are waiting, then try this block later on when we
@@ -95,8 +97,8 @@ public:
 				}
 			}
 		} else {
-			LOG_WARN("Record block with sequence number that is already in use [block id = %, tag = %] (%)"
-				, id, to_hex(record.tag()), config.log_id);
+			LWARN("Record block with sequence number that is already in use [block id = %, tag = %]"
+				, id, to_hex(record.tag()));
 		}
 		return state;
 	}
@@ -117,10 +119,10 @@ public:
 					handle_decrypt_record(ver);
 				}
 			} else {
-				LOG_WARN("Record is not authentic [block id = %, tag = %] (%)", id, to_hex(record.tag()), config.log_id);
+				LWARN("Record is not authentic [block id = %, tag = %]", id, to_hex(record.tag()));
 			}
 		} else {
-			LOG_INFO("No valid key for record [block id = %, tag = %, key id = %] (%)", id, to_hex(record.tag()), rec.encryption_key(), config.log_id);
+			LINFO("No valid key for record [block id = %, tag = %, key id = %]", id, to_hex(record.tag()), rec.encryption_key());
 			// store for later, when we hopefully have the key
 			records.create(record, record_state::pending_sync);
 		}
@@ -128,7 +130,7 @@ public:
 
 	void handle_incoming_record(chain_block const& record) {
 		chain_block_id id{record.id()};
-		LOG_INFO("received record block [block id = %, tag = %] (%)", id, to_hex(record.tag()), config.log_id);
+		LINFO("received record block [block id = %, tag = %]", id, to_hex(record.tag()));
 
 		if(id.is_valid()) {
 			auto handle = records.find(id.hash);
@@ -137,10 +139,10 @@ public:
 						this->handle_block(record, id, rec);
 					});
 			} else {
-				LOG_TRACE("record block already known [block id = %, tag = %] (%)", id, to_hex(record.tag()), config.log_id);
+				LTRACE("record block already known [block id = %, tag = %]", id, to_hex(record.tag()));
 			}
 		} else {
-			LOG_WARN("server sent invalid record block (%)", config.log_id);
+			LWARN("server sent invalid record block");
 		}
 	}
 
@@ -152,6 +154,14 @@ public:
 	sync_engine_config config;
 	engine_output* output{};
 };
+
+// redefine to use the impl for normal members
+#undef LTRACE
+#undef LINFO
+#undef LWARN
+#define LTRACE(format, ...) LOG_TRACE(format " (%)" __VA_OPT__(,) __VA_ARGS__, impl_->config.log_id)
+#define LINFO(format, ...) LOG_INFO(format " (%)" __VA_OPT__(,) __VA_ARGS__, impl_->config.log_id)
+#define LWARN(format, ...) LOG_WARN(format " (%)" __VA_OPT__(,) __VA_ARGS__, impl_->config.log_id)
 
 sync_engine::sync_engine(comm_input& comm, encryption_key_storage& keys, sync_engine_config config)
 : impl_(std::make_unique<impl>(comm, keys, std::move(config)))
@@ -174,31 +184,55 @@ void sync_engine::set_config(sync_engine_config config) {
 
 
 //--- comm_output interface, see comm/interface.hpp
+void sync_engine::on_connected() {
+	std::unique_lock lock{impl_->mutex};
+	auto handle = impl_->comm.fetch_sequence_number();
+	LTRACE("on_connected, requested sequence number (request handle %)", handle);
+}
+
+void sync_engine::on_disconnected(std::optional<error> err) {
+	std::unique_lock lock{impl_->mutex};
+	LTRACE("on_disconnected [error = %]", err.value_or(error()));
+	// nothing for sync_engine
+}
+
 void sync_engine::on_sequence_number_response(request_handle req_handle, result<sequence_number> const& res) {
 	std::unique_lock lock{impl_->mutex};
-
+	if(res) {
+		LINFO("on_sequence_number_response: % (request handle %)", res.value(), req_handle);
+		auto highest_seq = impl_->records.highest_sequence_number();
+		if(highest_seq < res.value()) {
+			// try to fetch all records we don't have
+			auto req_h = impl_->comm.fetch_records(highest_seq, sequence_number{});
+			LTRACE("requested records [%,-) (request handle %)", highest_seq, req_h);
+		}
+	} else {
+		LINFO("on_sequence_number_response with error: % (request handle %)", res.get_error(), req_handle);
+	}
 }
 
 void sync_engine::on_record_response(request_handle req_handle, result<std::deque<chain_block>> const& res) {
 	std::unique_lock lock{impl_->mutex};
-	LOG_INFO("on_record_received [request handle = %] (%)", req_handle, impl_->config.log_id);
+	LINFO("on_record_received [request handle = %]", req_handle);
 	if(res) {
-		for(auto&& block : res.value()) {
+		auto records = res.value();
+		LTRACE("received % records", records.size());
+		for(auto&& block : records) {
 			impl_->handle_incoming_record(block);
 		}
 	} else {
-		LOG_INFO("fetching records failed: error=% (%)", res.get_error(), impl_->config.log_id);
+		LINFO("fetching records failed: error=%", res.get_error());
 		//network error?
 	}
 }
 
 void sync_engine::on_data_response(request_handle req_handle, result<record_data_handle> const&) {
-
+	assert(not "implemented");
 }
 
 void sync_engine::on_commit_response(request_handle req_handle, result<chain_block> const& res) {
 	std::unique_lock lock{impl_->mutex};
-	LOG_INFO("on_commit_response [request handle = %]", req_handle);
+	LINFO("on_commit_response [request handle = %]", req_handle);
 
 	if(res) {
 		auto block = res.value();
@@ -209,15 +243,15 @@ void sync_engine::on_commit_response(request_handle req_handle, result<chain_blo
 			if(handle) {
 				impl_->update_record_commit_state(handle, block, id);
 			} else {
-				LOG_WARN("commit reply with unknown tag [block id = %, tag = %] (%)", id, to_hex(block.tag()), impl_->config.log_id);
+				LWARN("commit reply with unknown tag [block id = %, tag = %]", id, to_hex(block.tag()));
 			}
 		} else {
-			LOG_WARN("server replied with invalid chain block [block id = %, tag = %] (%)", id, to_hex(block.tag()), impl_->config.log_id);
+			LWARN("server replied with invalid chain block [block id = %, tag = %]", id, to_hex(block.tag()));
 			//t: handle correctly
 			// what to do here? try again or deem the server as bad behaving?
 		}
 	} else {
-		LOG_INFO("committing failed: error=% (%)", res.get_error(), impl_->config.log_id);
+		LINFO("committing failed: error=%", res.get_error());
 		//t: handle correctly:
 		//  1. bring us up-to-date with server state
 		//  2. see if there are conflicts and notify higher level if there are
@@ -232,7 +266,7 @@ void sync_engine::on_data_uploaded(request_handle req_handle, std::optional<erro
 
 void sync_engine::on_record_received(chain_block const& block) {
 	std::unique_lock lock{impl_->mutex};
-	LOG_INFO("on_record_received (%)", impl_->config.log_id);
+	LINFO("on_record_received");
 	impl_->handle_incoming_record(block);
 }
 
@@ -242,7 +276,7 @@ void sync_engine::on_record_received(chain_block const& block) {
 //f: for now just implement plain record without data
 record_handle sync_engine::sync_object_change(object_id oid, metadata mdata, record_data_handle) {
 	std::unique_lock lock{impl_->mutex};
-	LOG_TRACE("sync object change: oid=% (%)", oid.to_hex(), impl_->config.log_id);
+	LTRACE("sync object change: oid=%", oid.to_hex());
 
 	auto last_oid_record = impl_->records.find_last(oid);
 	auto last_block = impl_->records.last_block();
@@ -266,7 +300,7 @@ record_handle sync_engine::sync_object_change(object_id oid, metadata mdata, rec
 
 record_handle sync_engine::sync_user_change(users user_change, metadata mdata) {
 	std::unique_lock lock{impl_->mutex};
-	LOG_TRACE("sync user change: users=% (%)", user_change, impl_->config.log_id);
+	LTRACE("sync user change: users=%", user_change);
 
 	auto last_block = impl_->records.last_block();
 
@@ -283,7 +317,7 @@ record_handle sync_engine::sync_user_change(users user_change, metadata mdata) {
 
 record_handle sync_engine::sync_segment_end(metadata mdata) {
 	std::unique_lock lock{impl_->mutex};
-	LOG_TRACE("sync segment end (%)", impl_->config.log_id);
+	LTRACE("sync segment end");
 
 	auto last_block = impl_->records.last_block();
 

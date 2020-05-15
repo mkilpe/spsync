@@ -25,7 +25,7 @@ public:
 
 	// -- overall record chain --
 
-	/// get the last block id in the chain received from server
+	/// get the last block id in the chain received from server in 'in sync' state
 	chain_block_id last_block() const;
 
 	/// find the last record in the chain
@@ -42,6 +42,9 @@ public:
 
 	/// find record that has the given tag
 	record_handle find_tag(octet_vector const&) const;
+
+	/// highest sequence number of record received from server with any state
+	sequence_number highest_sequence_number() const;
 
 	// -- per object operations --
 

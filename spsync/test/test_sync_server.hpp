@@ -94,12 +94,19 @@ public:
  * Test context for using the test_sync_server
  */
 struct test_sync_context {
+	test_sync_context(chain_sync_config config = {});
 
 	/// add 'num' clients and by default connect to the test server
 	void add_client(bool connect = true, int num = 1);
 
 	/// return nth client
 	test_sync_server_client_context& client(int num);
+
+	/// connect nth client
+	void connect_client(int n);
+
+	/// disconnect nth client
+	void disconnect_client(int n);
 
 	/// handle events for all clients
 	void handle_events();

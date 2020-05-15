@@ -283,6 +283,17 @@ record_handle record_storage::find_tag(octet_vector const& tag) const {
 	return impl_->load_record(q.execute());
 }
 
+sequence_number record_storage::highest_sequence_number() const {
+	auto q = impl_->db->prepare("SELECT max(seq) FROM record;");
+
+	sequence_number ret;
+	auto res = q.execute();
+	if(res) {
+		ret = sequence_number{res.value<std::uint64_t>(0).value_or(0)};
+	}
+	return ret;
+}
+
 void record_storage::create_object_records(octet_vector const& tag, data_change_record const& rec) {
 	for(auto& obj : rec) {
 		auto q = impl_->db->prepare(
@@ -320,7 +331,7 @@ record_handle record_storage::create_impl(chain_block const& rec, record_state s
 
 record_handle record_storage::create(chain_block const& rec, record_state state)
 {
-	LOG_TRACE("creating record to storage %", to_hex(rec.tag()));
+	LOG_TRACE("creating record to storage % (state %)", to_hex(rec.tag()), state);
 	database::transaction tact(*impl_->db);
 	auto handle = create_impl(rec, state);
 	if(handle) {

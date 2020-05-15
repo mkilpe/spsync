@@ -12,20 +12,21 @@ void test_sync_server_client::set_output(comm_output& out) {
 }
 
 void test_sync_server_client::connect(test_sync_server& server) {
+	LOG_INFO("Client connected");
 	server_ = &server;
 	last_pushed_record_ = server_->sync.current_sequence_number();
+	output_->on_connected();
 }
 
 void test_sync_server_client::disconnect() {
+	LOG_INFO("Client disconnected");
 	server_ = nullptr;
+	output_->on_disconnected(std::nullopt);
 }
 
 // t: later on have events to emulate disconnected server
 void test_sync_server_client::handle_events() {
 	assert(output_);
-	for(auto&& event : events_) {
-		event();
-	}
 	if(server_) {
 		if(last_pushed_record_ < server_->sync.current_sequence_number()) {
 			for(auto&& rec : server_->sync.get_records(last_pushed_record_+1, server_->sync.current_sequence_number()+1)) {
@@ -33,6 +34,13 @@ void test_sync_server_client::handle_events() {
 			}
 			last_pushed_record_ = server_->sync.current_sequence_number();
 		}
+	}
+	// take the events out in case handling an event adds another event
+	std::deque<std::function<void()>> events;
+	events.swap(events_);
+
+	for(auto&& event : events) {
+		event();
 	}
 }
 
@@ -92,6 +100,11 @@ test_sync_server::test_sync_server(chain_sync_config config)
 {
 }
 
+test_sync_context::test_sync_context(chain_sync_config config)
+: server(config)
+{
+}
+
 void test_sync_context::add_client(bool connect, int num) {
 	for(int i = 0; i != num; ++i) {
 		clients.push_back(std::make_unique<test_sync_server_client_context>(clients.size()+1));
@@ -104,6 +117,14 @@ void test_sync_context::add_client(bool connect, int num) {
 test_sync_server_client_context& test_sync_context::client(int num) {
 	assert(num < clients.size());
 	return *clients[num];
+}
+
+void test_sync_context::connect_client(int n) {
+	client(n).io.connect(server);
+}
+
+void test_sync_context::disconnect_client(int n) {
+	client(n).io.disconnect();
 }
 
 void test_sync_context::handle_events() {

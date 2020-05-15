@@ -8,24 +8,74 @@
 #include <securepath/test_frame/test_serialisation.hpp>
 #include <securepath/test_frame/test_utils.hpp>
 
-namespace securepath::sync::util {
+namespace securepath::sync {
+using namespace securepath::sync::util;
 
-// - (1) single client sync records
-// - (2) two clients, one commits records
-// - (3) two clients, one commits records while other is offline and then goes online
-// - (4) two clients both commit separate records
+// + (1) single client sync records (allow all mode)
+// + (2) two clients, one commits records (allow all mode)
+// + (3) multi client set-up where all commits (allow all mode)
+// - (4) two clients, one commits records while other is off-line and then goes on-line (allow all mode)
 // - (5) two clients both try to commit follow up for record -> one fails (conflict)
 // - (6) multi client set-up where one commits
 // - (7) multi client set-up where all commits
+// - (8) two clients, one is off-line and does changes and goes then on-line
 
 TEST_CASE("engine sync test 1", "[unit]") {
-	test::test_sync_context context;
+	test::test_sync_context context(chain_sync_config{sync_mode::allow_all});
 	context.add_client();
 	context.create_initial_record();
 	context.handle_events();
 	context.client(0).engine.sync_object_change(create_object_id(), metadata{});
 	context.handle_events();
-	CHECK(context.compare_record_storages(sequence_number{2}));
+	context.client(0).engine.sync_object_change(create_object_id(), metadata{});
+	context.client(0).engine.sync_object_change(create_object_id(), metadata{});
+	context.handle_events();
+	CHECK(context.compare_record_storages(sequence_number{4}));
+}
+
+TEST_CASE("engine sync test 2", "[unit]") {
+	test::test_sync_context context(chain_sync_config{sync_mode::allow_all});
+	context.add_client(true, 2);
+	context.create_initial_record();
+	context.handle_events();
+	context.client(0).engine.sync_object_change(create_object_id(), metadata{});
+	context.handle_events();
+	context.client(0).engine.sync_object_change(create_object_id(), metadata{});
+	context.client(0).engine.sync_object_change(create_object_id(), metadata{});
+	context.handle_events();
+	CHECK(context.compare_record_storages(sequence_number{4}));
+}
+
+TEST_CASE("engine sync test 3", "[unit]") {
+	test::test_sync_context context(chain_sync_config{sync_mode::allow_all});
+	context.add_client(true, 10);
+	context.create_initial_record();
+	context.handle_events();
+	for(int i = 0; i != 10; ++i) {
+		for(int c = 0; c != 10; ++c) {
+			context.client(c).engine.sync_object_change(create_object_id(), metadata{});
+		}
+	}
+	context.handle_events(); //commit
+	context.handle_events(); //get everything from the server
+	CHECK(context.compare_record_storages(sequence_number{101}));
+}
+
+TEST_CASE("engine sync test 4", "[unit]") {
+	test::test_sync_context context(chain_sync_config{sync_mode::allow_all});
+	context.add_client(false, 2);
+	context.connect_client(0);
+	context.create_initial_record();
+	context.handle_events();
+	context.client(0).engine.sync_object_change(create_object_id(), metadata{});
+	context.handle_events();
+	context.client(0).engine.sync_object_change(create_object_id(), metadata{});
+	context.client(0).engine.sync_object_change(create_object_id(), metadata{});
+	context.handle_events();
+	context.connect_client(1);
+	context.handle_events(); // handle connecting response
+	context.handle_events(); // fetch records
+	CHECK(context.compare_record_storages(sequence_number{4}));
 }
 
 }

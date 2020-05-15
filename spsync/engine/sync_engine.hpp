@@ -37,6 +37,8 @@ public:
 	void set_config(sync_engine_config);
 
 	// --- comm_output interface, see comm/interface.hpp ---
+	virtual void on_connected();
+	virtual void on_disconnected(std::optional<error>);
 	virtual void on_sequence_number_response(request_handle, result<sequence_number> const&);
 	virtual void on_record_response(request_handle, result<std::deque<chain_block>> const&);
 	virtual void on_data_response(request_handle, result<record_data_handle> const&);
