@@ -25,12 +25,14 @@ void test_sync_server_client::disconnect() {
 }
 
 // t: later on have events to emulate disconnected server
-void test_sync_server_client::handle_events() {
+bool test_sync_server_client::handle_events() {
 	assert(output_);
+	bool ret = false;
 	if(server_) {
 		if(last_pushed_record_ < server_->sync.current_sequence_number()) {
 			for(auto&& rec : server_->sync.get_records(last_pushed_record_+1, server_->sync.current_sequence_number()+1)) {
 				output_->on_record_received(rec);
+				ret = true;
 			}
 			last_pushed_record_ = server_->sync.current_sequence_number();
 		}
@@ -41,7 +43,9 @@ void test_sync_server_client::handle_events() {
 
 	for(auto&& event : events) {
 		event();
+		ret = true;
 	}
+	return ret;
 }
 
 request_handle test_sync_server_client::fetch_sequence_number() {
@@ -127,10 +131,12 @@ void test_sync_context::disconnect_client(int n) {
 	client(n).io.disconnect();
 }
 
-void test_sync_context::handle_events() {
+bool test_sync_context::handle_events() {
+	bool ret = false;
 	for(auto&& v : clients) {
-		v->io.handle_events();
+		ret |= v->io.handle_events();
 	}
+	return ret;
 }
 
 void test_sync_context::create_initial_record() {

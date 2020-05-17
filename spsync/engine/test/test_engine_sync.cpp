@@ -14,7 +14,7 @@ using namespace securepath::sync::util;
 // + (1) single client sync records (allow all mode)
 // + (2) two clients, one commits records (allow all mode)
 // + (3) multi client set-up where all commits (allow all mode)
-// - (4) two clients, one commits records while other is off-line and then goes on-line (allow all mode)
+// + (4) two clients, one commits records while other is off-line and then goes on-line (allow all mode)
 // - (5) two clients both try to commit follow up for record -> one fails (conflict)
 // - (6) multi client set-up where one commits
 // - (7) multi client set-up where all commits
@@ -56,8 +56,7 @@ TEST_CASE("engine sync test 3", "[unit]") {
 			context.client(c).engine.sync_object_change(create_object_id(), metadata{});
 		}
 	}
-	context.handle_events(); //commit
-	context.handle_events(); //get everything from the server
+	while(context.handle_events()) {}
 	CHECK(context.compare_record_storages(sequence_number{101}));
 }
 
@@ -73,8 +72,7 @@ TEST_CASE("engine sync test 4", "[unit]") {
 	context.client(0).engine.sync_object_change(create_object_id(), metadata{});
 	context.handle_events();
 	context.connect_client(1);
-	context.handle_events(); // handle connecting response
-	context.handle_events(); // fetch records
+	while(context.handle_events()) {}
 	CHECK(context.compare_record_storages(sequence_number{4}));
 }
 

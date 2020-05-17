@@ -32,7 +32,7 @@ public:
 	void connect(test_sync_server& server);
 	void disconnect();
 
-	void handle_events();
+	bool handle_events();
 
 	/// Fetches current sequence number
 	virtual request_handle fetch_sequence_number();
@@ -109,7 +109,7 @@ struct test_sync_context {
 	void disconnect_client(int n);
 
 	/// handle events for all clients
-	void handle_events();
+	bool handle_events();
 
 	/// create initial record using the first client as owner and add other clients as members
 	void create_initial_record();
