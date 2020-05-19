@@ -1,6 +1,8 @@
 #ifndef SPSYNC_PROTOCOL_SERVER_PROTOCOL_HEADER
 #define SPSYNC_PROTOCOL_SERVER_PROTOCOL_HEADER
 
+#include "protocol_base.hpp"
+
 namespace securepath::sync {
 
 // called as a response to fetch_sequence_number, newest sequence number on server

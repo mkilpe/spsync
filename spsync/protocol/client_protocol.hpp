@@ -1,7 +1,7 @@
 #ifndef SPSYNC_PROTOCOL_CLIENT_PROTOCOL_HEADER
 #define SPSYNC_PROTOCOL_CLIENT_PROTOCOL_HEADER
 
-#include "types.hpp"
+#include "protocol_base.hpp"
 
 #include <securepath/util/typelist.hpp>
 #include <securepath/serialisation/choice.hpp>
@@ -11,36 +11,40 @@
 namespace securepath::sync::protocol {
 inline namespace v1 {
 
-std::uint16_t const current_version{1};
-
-using call_id = std::uint32_t;
-
-struct protocol_base {
-	protocol_base(call_id cid = 0)
-	: cid(cid)
-	{}
-
-	call_id cid;
-
-	template<typename S>
-	void serialise(S& s) {
-		serialisation::sequence<S> seq(s);
-		seq & cid;
-	}
-};
+// initial packet with version
+// create storage
+// destroy storage
+// list storages
+// manage storage (request updates, alter settings on server)
+// request sequence number
+// request records
+// request data
+// request commit
 
 struct client_hello : protocol_base {
+	using protocol_base::protocol_base;
 
 	int version{current_version};
 
 	template<typename S>
 	void serialise(S& s) {
 		serialisation::sequence<S> seq(s);
-		seq & version;
+		seq & static_cast<protocol_base&>(*this) & version;
 	}
 };
 
-struct request_sequence_number : protocol_base {
+struct storage_management : protocol_base {
+	std::vector<storage_management_info> storages;
+
+	template<typename S>
+	void serialise(S& s) {
+		serialisation::sequence<S> seq(s);
+		seq & static_cast<protocol_base&>(*this) & storages;
+	}
+};
+
+
+struct request_sequence_number : storage_request_base {
 
 	template<typename S>
 	void serialise(S& s) {
@@ -48,7 +52,7 @@ struct request_sequence_number : protocol_base {
 	}
 };
 
-struct request_records : protocol_base {
+struct request_records : storage_request_base {
 	sequence_number start, end;
 
 	template<typename S>
@@ -58,7 +62,7 @@ struct request_records : protocol_base {
 	}
 };
 
-struct request_data : protocol_base {
+struct request_data : storage_request_base {
 	sequence_number record;
 	std::uint64_t start, end;
 
@@ -69,7 +73,7 @@ struct request_data : protocol_base {
 	}
 };
 
-struct request_commit : protocol_base {
+struct request_commit : storage_request_base {
 	chain_block record;
 
 	template<typename S>
