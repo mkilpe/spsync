@@ -40,9 +40,9 @@ public:
 	virtual void on_connected();
 	virtual void on_disconnected(std::optional<error>);
 	virtual void on_sequence_number_response(request_handle, result<sequence_number> const&);
-	virtual void on_record_response(request_handle, result<std::deque<chain_block>> const&);
+	virtual void on_record_response(request_handle, record_response const&);
 	virtual void on_data_response(request_handle, result<record_data_handle> const&);
-	virtual void on_commit_response(request_handle, result<chain_block> const&);
+	virtual void on_commit_response(request_handle, commit_response const&);
 	virtual void on_data_uploaded(request_handle, std::optional<error>);
 	virtual void on_record_received(chain_block const&);
 

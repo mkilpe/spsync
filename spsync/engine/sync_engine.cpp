@@ -34,12 +34,11 @@ public:
 	}
 
 	void update_record_commit_state(record_handle h, chain_block const& record, chain_block_id const& id) {
-		if(record.check_matches_without_server_data(h->record())
-			&& check_chain_block(record, id) == record_state::in_sync)
-		{
-			LINFO("setting in sync state for record [block id = %, parent block = %, tag = %]",
-				id, to_hex(record.parent_hash()), to_hex(h->tag()));
-			h->set_in_sync(id, record.parent_hash());
+		auto state = check_chain_block(record, id);
+		if(record.check_matches_without_server_data(h->record()) && is_valid_state(state)) {
+			LINFO("setting state for record [block id = %, parent block = %, tag = %, state = %]",
+				id, to_hex(record.parent_hash()), to_hex(h->tag()), state);
+			h->set_state(state, id, record.parent_hash());
 		} else {
 			h->set_state(record_state::invalid);
 
@@ -48,16 +47,31 @@ public:
 		}
 	}
 
-	void handle_decrypt_record(data_change_record_verifier const& ver) {
+	void handle_in_sync_record(data_change_record_verifier const& ver) {
 		//record is in sync, notify higher layer?
 	}
 
-	void handle_decrypt_record(user_change_record_verifier const& ver) {
+	void handle_in_sync_record(user_change_record_verifier const& ver) {
 		//record is in sync, notify higher layer?
 	}
 
-	void handle_decrypt_record(segment_record_verifier const& ver) {
+	void handle_in_sync_record(segment_record_verifier const& ver) {
 		//record is in sync, notify higher layer?
+	}
+
+	void check_pending_records(chain_block_id id) {
+		LTRACE("check_pending_records [id = %]", id);
+		record_handle next;
+		while((next = records.find(id.sequence+1, record_state::pending_sync))
+			&& next->parent_block_hash() == id.hash)
+		{
+			id = next->block_id();
+			LTRACE("setting pending sync to in sync state [id = %]", id);
+			next->set_state(record_state::in_sync);
+		}
+		if(next && next->parent_block_hash() != id.hash) {
+			LWARN("next block has invalid parent hash [id = %, next parent hash = %]", id, to_hex(next->parent_block_hash()));
+		}
 	}
 
 	record_state check_chain_block(chain_block const& record, chain_block_id const& id) {
@@ -100,6 +114,8 @@ public:
 			LWARN("Record block with sequence number that is already in use [block id = %, tag = %]"
 				, id, to_hex(record.tag()));
 		}
+
+		LTRACE("check_chain_block returns state %", state);
 		return state;
 	}
 
@@ -116,7 +132,8 @@ public:
 			record_verifier<Record> ver(*enc_key, rec, record.auth());
 			if(ver.is_authentic()) {
 				if(handle_block_chain(record, id)) {
-					handle_decrypt_record(ver);
+					handle_in_sync_record(ver);
+					check_pending_records(id);
 				}
 			} else {
 				LWARN("Record is not authentic [block id = %, tag = %]", id, to_hex(record.tag()));
@@ -133,7 +150,7 @@ public:
 		LINFO("received record block [block id = %, tag = %]", id, to_hex(record.tag()));
 
 		if(id.is_valid()) {
-			auto handle = records.find(id.hash);
+			auto handle = records.find_tag(record.tag());
 			if(!handle) {
 				record.deserialise_record([&](auto const& rec) {
 						this->handle_block(record, id, rec);
@@ -204,24 +221,31 @@ void sync_engine::on_sequence_number_response(request_handle req_handle, result<
 		if(highest_seq < res.value()) {
 			// try to fetch all records we don't have
 			auto req_h = impl_->comm.fetch_records(highest_seq, sequence_number{});
-			LTRACE("requested records [%,-) (request handle %)", highest_seq, req_h);
+			LTRACE("requested records [%,-] (request handle %)", highest_seq, req_h);
 		}
 	} else {
 		LINFO("on_sequence_number_response with error: % (request handle %)", res.get_error(), req_handle);
 	}
 }
 
-void sync_engine::on_record_response(request_handle req_handle, result<std::deque<chain_block>> const& res) {
+void sync_engine::on_record_response(request_handle req_handle, record_response const& res) {
 	std::unique_lock lock{impl_->mutex};
-	LINFO("on_record_received [request handle = %]", req_handle);
-	if(res) {
-		auto records = res.value();
+	LINFO("on_record_received (request handle = %, requested max = %, server seq = %)", req_handle, res.requested_max, res.server_max_sequence);
+	if(res.data) {
+		auto records = res.data.value();
 		LTRACE("received % records", records.size());
-		for(auto&& block : records) {
-			impl_->handle_incoming_record(block);
+		if(!records.empty()) {
+			for(auto&& block : records) {
+				impl_->handle_incoming_record(block);
+			}
+			sequence_number last_seq = records.back().sequence();
+			if(last_seq < res.requested_max || (!res.requested_max.is_valid() && last_seq < res.server_max_sequence)) {
+				auto req_h = impl_->comm.fetch_records(last_seq, res.requested_max);
+				LTRACE("requested more records [%,%] (request handle %)", last_seq, res.requested_max, req_h);
+			}
 		}
 	} else {
-		LINFO("fetching records failed: error=%", res.get_error());
+		LINFO("fetching records failed: error=%", res.data.get_error());
 		//network error?
 	}
 }
@@ -230,12 +254,12 @@ void sync_engine::on_data_response(request_handle req_handle, result<record_data
 	assert(not "implemented");
 }
 
-void sync_engine::on_commit_response(request_handle req_handle, result<chain_block> const& res) {
+void sync_engine::on_commit_response(request_handle req_handle, commit_response const& res) {
 	std::unique_lock lock{impl_->mutex};
 	LINFO("on_commit_response [request handle = %]", req_handle);
 
-	if(res) {
-		auto block = res.value();
+	if(res.data) {
+		auto block = res.data.value();
 		chain_block_id id = block.id();
 
 		if(id.is_valid()) {
@@ -251,7 +275,7 @@ void sync_engine::on_commit_response(request_handle req_handle, result<chain_blo
 			// what to do here? try again or deem the server as bad behaving?
 		}
 	} else {
-		LINFO("committing failed: error=%", res.get_error());
+		LINFO("committing failed: error=%", res.data.get_error());
 		//t: handle correctly:
 		//  1. bring us up-to-date with server state
 		//  2. see if there are conflicts and notify higher level if there are
@@ -266,7 +290,7 @@ void sync_engine::on_data_uploaded(request_handle req_handle, std::optional<erro
 
 void sync_engine::on_record_received(chain_block const& block) {
 	std::unique_lock lock{impl_->mutex};
-	LINFO("on_record_received");
+	LINFO("on_record_received [seq = %]", block.sequence());
 	impl_->handle_incoming_record(block);
 }
 

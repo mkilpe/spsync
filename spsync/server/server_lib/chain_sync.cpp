@@ -26,9 +26,9 @@ std::deque<chain_block> chain_sync::get_records(sequence_number start, sequence_
 		start = sequence_number{1};
 	}
 	if(!end.is_valid()) {
-		end = current_sequence_number()+1;
+		end = current_sequence_number();
 	}
-	for(; start < end && (h = records_.find(start)); ++start) {
+	for(; start <= end && (h = records_.find(start)) && ret.size() < config_.max_returned_records; ++start) {
 		ret.push_back(h->record());
 	}
 	return ret;

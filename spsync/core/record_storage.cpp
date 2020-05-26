@@ -46,33 +46,30 @@ public:
 		return state_;
 	}
 
-	virtual void set_state(record_state state) {
+	virtual void set_state(record_state state, chain_block_id bid, octet_vector parent_block_hash) {
 		std::unique_lock lock{mutex_};
 
-		//update state in database
-		auto q = db_->prepare("UPDATE record SET state = :state WHERE key = :k;");
-		q.bind(":state", static_cast<std::int64_t>(state));
-		q.bind(":k", record_key_);
-		q.execute();
+		if(bid.is_valid()) {
+			//update state in database
+			auto q = db_->prepare("UPDATE record SET state = :state, seq = :seq, hash = :hash, parent_hash = :parent_hash WHERE key = :k;");
+			q.bind(":state", static_cast<std::int64_t>(state));
+			q.bind(":seq", bid.sequence.value);
+			q.bind(":hash", bid.hash);
+			q.bind(":parent_hash", parent_block_hash);
+			q.bind(":k", record_key_);
+			q.execute();
 
+			block_id_ = std::move(bid);
+			parent_hash_ = std::move(parent_block_hash);
+		} else {
+			//update just the state in database
+			auto q = db_->prepare("UPDATE record SET state = :state WHERE key = :k;");
+			q.bind(":state", static_cast<std::int64_t>(state));
+			q.bind(":k", record_key_);
+			q.execute();
+
+		}
 		state_ = state;
-	}
-
-	virtual void set_in_sync(chain_block_id bid, octet_vector parent_block_hash) {
-		std::unique_lock lock{mutex_};
-
-		//update state in database
-		auto q = db_->prepare("UPDATE record SET state = :state, seq = :seq, hash = :hash, parent_hash = :parent_hash WHERE key = :k;");
-		q.bind(":state", static_cast<std::int64_t>(record_state::in_sync));
-		q.bind(":seq", bid.sequence.value);
-		q.bind(":hash", bid.hash);
-		q.bind(":parent_hash", parent_block_hash);
-		q.bind(":k", record_key_);
-		q.execute();
-
-		state_ = record_state::in_sync;
-		block_id_ = std::move(bid);
-		parent_hash_ = std::move(parent_block_hash);
 	}
 
 	virtual chain_block record() const {
@@ -259,19 +256,20 @@ record_handle record_storage::find_first(object_id const& oid) const {
 	return impl_->load_record(q.execute());
 }
 
-record_handle record_storage::find(octet_vector const& hash) const {
+record_handle record_storage::find(octet_vector const& hash, record_state state) const {
 	auto q = impl_->db->prepare(
 		"SELECT key, tag, seq, hash, parent_hash, state FROM record"
-		" WHERE hash = :h;");
+		" WHERE hash = :h AND state = :state;");
 	q.bind(":h", hash);
+	q.bind(":state", static_cast<std::int64_t>(state));
 	return impl_->load_record(q.execute());
 }
 
-record_handle record_storage::find(sequence_number seq) const {
+record_handle record_storage::find(sequence_number seq, record_state state) const {
 	auto q = impl_->db->prepare(
 		"SELECT key, tag, seq, hash, parent_hash, state FROM record WHERE seq = :seq AND state = :state;");
 	q.bind(":seq", static_cast<std::uint64_t>(seq.value));
-	q.bind(":state", static_cast<std::int64_t>(record_state::in_sync));
+	q.bind(":state", static_cast<std::int64_t>(state));
 	return impl_->load_record(q.execute());
 }
 

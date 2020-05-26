@@ -29,12 +29,13 @@ bool test_sync_server_client::handle_events() {
 	assert(output_);
 	bool ret = false;
 	if(server_) {
-		if(last_pushed_record_ < server_->sync.current_sequence_number()) {
-			for(auto&& rec : server_->sync.get_records(last_pushed_record_+1, server_->sync.current_sequence_number()+1)) {
+		while(last_pushed_record_ < server_->sync.current_sequence_number()) {
+			auto recs = server_->sync.get_records(last_pushed_record_+1, server_->sync.current_sequence_number());
+			for(auto&& rec : recs) {
 				output_->on_record_received(rec);
 				ret = true;
 			}
-			last_pushed_record_ = server_->sync.current_sequence_number();
+			last_pushed_record_ += recs.size();
 		}
 	}
 	// take the events out in case handling an event adds another event
@@ -61,7 +62,7 @@ request_handle test_sync_server_client::fetch_records(sequence_number start, seq
 	assert(output_ && server_);
 	request_handle ret = ++req_handle;
 	events_.push_back([=, this] {
-			output_->on_record_response(ret, server_->sync.get_records(start, end));
+			output_->on_record_response(ret, record_response{end, server_->sync.current_sequence_number(), server_->sync.get_records(start, end)});
 	});
 	return ret;
 }
@@ -80,7 +81,8 @@ request_handle test_sync_server_client::commit_record(record_handle h) {
 	assert(output_ && server_);
 	request_handle ret = ++req_handle;
 	events_.push_back([=, this] {
-			output_->on_commit_response(ret, server_->sync.commit_block(h->record()));
+			auto commit_result = server_->sync.commit_block(h->record());
+			output_->on_commit_response(ret, commit_response{server_->sync.current_sequence_number(), commit_result});
 	});
 	return ret;
 }
@@ -95,6 +97,7 @@ record_storage& test_sync_server_client::records() const {
 
 test_sync_server_client_context::test_sync_server_client_context(int n)
 : database{create_test_database("test_sync_server_client_" + std::to_string(n) + ".db")}
+, engine_config{std::to_string(n)}
 {
 	io.set_output(engine);
 }

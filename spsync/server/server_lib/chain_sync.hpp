@@ -34,6 +34,8 @@ struct chain_sync_config {
 	sync_mode mode{sync_mode::require_all_seen};
 	/// this is id for the repository, it is only used for logging to help trace/debug things if set
 	std::string log_id;
+	/// maximum records returned for one call
+	std::size_t max_returned_records{30};
 };
 
 /**
@@ -46,7 +48,7 @@ public:
 	/// returns the latest sequence number
 	sequence_number current_sequence_number() const;
 
-	/// get the records [start, end)
+	/// get the records [start, end], returns only maximum of config.max_returned_records records at once
 	std::deque<chain_block> get_records(sequence_number start, sequence_number end) const;
 
 	/// try to commit chain block

@@ -19,6 +19,7 @@ struct sequence_number {
 
 	sequence_number& operator++();
 	sequence_number operator++(int);
+	sequence_number& operator+=(int);
 	explicit operator bool() const { return value; }
 
 	template<typename Ar>
@@ -32,6 +33,8 @@ bool operator==(sequence_number const& left, sequence_number const& right);
 bool operator!=(sequence_number const& left, sequence_number const& right);
 bool operator<(sequence_number const& left, sequence_number const& right);
 bool operator>(sequence_number const& left, sequence_number const& right);
+bool operator<=(sequence_number const& left, sequence_number const& right);
+bool operator>=(sequence_number const& left, sequence_number const& right);
 sequence_number operator+(sequence_number const&, std::uint64_t);
 sequence_number operator+(std::uint64_t, sequence_number const&);
 

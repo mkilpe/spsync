@@ -53,7 +53,7 @@ TEST_CASE("record_storage", "[unit]") {
 	}
 
 	{ //set state and server sequence
-		root_handle->set_in_sync(chain_block_id{creator.last_server_seq, creator.last_chain_hash}, octet_vector{});
+		root_handle->set_state(record_state::in_sync, chain_block_id{creator.last_server_seq, creator.last_chain_hash}, octet_vector{});
 		CHECK(storage.last_block().sequence == creator.last_server_seq);
 		CHECK(root_handle->block_id().sequence == creator.last_server_seq);
 		CHECK(root_handle->state() == record_state::in_sync);
@@ -96,7 +96,7 @@ TEST_CASE("record_storage", "[unit]") {
 		CHECK(h->state() == record_state::unknown);
 		CHECK(!h->record().tag().empty());
 
-		h->set_in_sync(chain_block_id{creator.last_server_seq, creator.last_chain_hash}, parent_block_hash);
+		h->set_state(record_state::in_sync, chain_block_id{creator.last_server_seq, creator.last_chain_hash}, parent_block_hash);
 		h = storage.find_last();
 		CHECK(h->tag() == creator.last_tag);
 		CHECK(storage.last_block().sequence == creator.last_server_seq);
@@ -134,7 +134,7 @@ TEST_CASE("record_storage root", "[unit]") {
 	for(int i = 0; i != 10; ++i) {
 		auto h = storage.create(creator.test_user_change().to_auth_record<user_change_record>());
 		REQUIRE(h);
-		h->set_in_sync(chain_block_id{creator.last_server_seq, creator.last_chain_hash}, parent_block_hash);
+		h->set_state(record_state::in_sync, chain_block_id{creator.last_server_seq, creator.last_chain_hash}, parent_block_hash);
 		CHECK(h->block_id().sequence == ++seq);
 		parent_block_hash = creator.last_chain_hash;
 	}
@@ -153,20 +153,20 @@ TEST_CASE("record_storage unique seq", "[unit]") {
 	test_block_creator creator;
 
 	auto h1 = storage.create(creator.test_user_change().to_auth_record<user_change_record>());
-	h1->set_in_sync(chain_block_id{creator.last_server_seq, creator.last_chain_hash}, octet_vector{});
+	h1->set_state(record_state::in_sync, chain_block_id{creator.last_server_seq, creator.last_chain_hash}, octet_vector{});
 
 	auto h2 = storage.create(creator.test_user_change().to_auth_record<user_change_record>());
 	// use same block id
-	CHECK_THROWS(h2->set_in_sync(h1->block_id(), octet_vector{}));
-	h2->set_in_sync(chain_block_id{creator.last_server_seq, creator.last_chain_hash}, h1->block_id().hash);
+	CHECK_THROWS(h2->set_state(record_state::in_sync, h1->block_id(), octet_vector{}));
+	h2->set_state(record_state::in_sync, chain_block_id{creator.last_server_seq, creator.last_chain_hash}, h1->block_id().hash);
 
 	auto h3 = storage.create(creator.test_user_change().to_auth_record<user_change_record>());
 	// use same parent block hash
-	CHECK_THROWS(h3->set_in_sync(chain_block_id{creator.last_server_seq, creator.last_chain_hash}, h1->block_id().hash));
+	CHECK_THROWS(h3->set_state(record_state::in_sync, chain_block_id{creator.last_server_seq, creator.last_chain_hash}, h1->block_id().hash));
 	// use same sequence number
-	CHECK_THROWS(h3->set_in_sync(chain_block_id{1, creator.last_chain_hash}, h2->block_id().hash));
+	CHECK_THROWS(h3->set_state(record_state::in_sync, chain_block_id{1, creator.last_chain_hash}, h2->block_id().hash));
 	// use same block hash
-	CHECK_THROWS(h3->set_in_sync(chain_block_id{creator.last_server_seq, h1->block_id().hash}, h2->block_id().hash));
+	CHECK_THROWS(h3->set_state(record_state::in_sync, chain_block_id{creator.last_server_seq, h1->block_id().hash}, h2->block_id().hash));
 }
 
 // test only unique tags work

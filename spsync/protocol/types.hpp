@@ -3,11 +3,6 @@
 
 namespace securepath::sync {
 
-struct storage_management_info {
-	enum action_type {
-
-	} action;
-};
 
 }
 

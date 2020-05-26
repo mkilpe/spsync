@@ -1,23 +1,9 @@
 #ifndef SPSYNC_COMM_INTERFACE_HEADER
 #define SPSYNC_COMM_INTERFACE_HEADER
 
-#include <spsync/core/record_interface.hpp>
-#include <spsync/util/result.hpp>
-
-#include <cstdint>
+#include "types.hpp"
 
 namespace securepath::sync {
-
-class progress;
-class record_storage;
-class serialised_record;
-class commit_response;
-
-using util::sequence_number;
-using util::result;
-
-/// arbitrary number that associates comm_input request to comm_output response
-using request_handle = std::uint32_t;
 
 /**
  * The interface to push information to the server, eg. try to commit a record.
@@ -59,13 +45,13 @@ struct comm_output {
 	virtual void on_sequence_number_response(request_handle, result<sequence_number> const&) = 0;
 
 	/// called when record is received as a response to fetch_records call
-	virtual void on_record_response(request_handle, result<std::deque<chain_block>> const&) = 0;
+	virtual void on_record_response(request_handle, record_response const&) = 0;
 
 	/// called when record data is fully received as a response to fetch_data call
 	virtual void on_data_response(request_handle, result<record_data_handle> const&) = 0;
 
 	/// called when getting response to a commit attempt from the server
-	virtual void on_commit_response(request_handle, result<chain_block> const&) = 0;
+	virtual void on_commit_response(request_handle, commit_response const&) = 0;
 
 	/// called when all data for a record has been uploaded or error occurred
 	virtual void on_data_uploaded(request_handle, std::optional<error>) = 0;

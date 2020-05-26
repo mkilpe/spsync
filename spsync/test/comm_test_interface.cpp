@@ -89,7 +89,7 @@ request_handle comm_test_interface::fetch_records(sequence_number start, sequenc
 		if(!impl_->fetch_records_queue.empty()) {
 			auto res = impl_->fetch_records_queue.front()(start, end);
 			impl_->fetch_records_queue.pop_front();
-			impl_->output->on_record_response(ret, res);
+			impl_->output->on_record_response(ret, record_response{end, impl_->current_seq, res});
 		} else {
 			LOG_TRACE("empty record queue");
 		}
@@ -120,7 +120,7 @@ request_handle comm_test_interface::commit_record(record_handle record) {
 			if(res) {
 				impl_->previous_block_hash = res->hash();
 			}
-			impl_->output->on_commit_response(ret, res);
+			impl_->output->on_commit_response(ret, commit_response{impl_->current_seq, res});
 		} else {
 			LOG_TRACE("empty commit queue");
 		}

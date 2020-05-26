@@ -173,9 +173,7 @@ TEST_CASE("engine bad parent hash", "[unit]") {
 	// the parent hash is wrong and the sequence number is what we expect next == error
 	CHECK(rec_handle1->state() == record_state::invalid);
 
-	// the parent hash is wrong but the sequence number is higher than we expect next, this is still invalid because
-	// the commit came from ourselves, otherwise it would be in pending state
-	CHECK(rec_handle2->state() == record_state::invalid);
+	CHECK(rec_handle2->state() == record_state::pending_sync);
 }
 
 

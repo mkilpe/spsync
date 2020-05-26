@@ -35,10 +35,10 @@ public:
 	record_handle find_root() const;
 
 	/// find record that has the given block hash
-	record_handle find(octet_vector const&) const;
+	record_handle find(octet_vector const&, record_state = record_state::in_sync) const;
 
-	/// find record based on sequence number
-	record_handle find(sequence_number) const;
+	/// find record based on sequence number with specific state
+	record_handle find(sequence_number, record_state = record_state::in_sync) const;
 
 	/// find record that has the given tag
 	record_handle find_tag(octet_vector const&) const;

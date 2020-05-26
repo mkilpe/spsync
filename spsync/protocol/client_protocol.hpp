@@ -12,15 +12,18 @@ namespace securepath::sync::protocol {
 inline namespace v1 {
 
 // initial packet with version
+// list storages
+
 // create storage
 // destroy storage
-// list storages
-// manage storage (request updates, alter settings on server)
+// manage storage (request updates, alter settings on server, quota)
+
 // request sequence number
 // request records
 // request data
 // request commit
 
+/// always first packet to negotiate version
 struct client_hello : protocol_base {
 	using protocol_base::protocol_base;
 
@@ -33,32 +36,64 @@ struct client_hello : protocol_base {
 	}
 };
 
-struct storage_management : protocol_base {
-	std::vector<storage_management_info> storages;
+/// Create storage with specific storage id
+struct create_storage : storage_request_base {
+	using protocol_base::protocol_base;
+
+	//chain_block initial_record;
 
 	template<typename S>
 	void serialise(S& s) {
 		serialisation::sequence<S> seq(s);
-		seq & static_cast<protocol_base&>(*this) & storages;
+		seq & static_cast<protocol_base&>(*this);
 	}
 };
 
+/// Remove storage with specific storage id, this required that you also created it
+struct destroy_storage : storage_request_base {
+	using protocol_base::protocol_base;
 
+	template<typename S>
+	void serialise(S& s) {
+		serialisation::sequence<S> seq(s);
+		seq & static_cast<protocol_base&>(*this);
+	}
+};
+
+/// place holder for later storage management functionality
+struct storage_management : storage_request_base {
+	// switch flag if automatic record updates are received
+	// quota handling
+	// list members in storage
+
+	template<typename S>
+	void serialise(S& s) {
+		serialisation::sequence<S> seq(s);
+		seq & static_cast<protocol_base&>(*this);
+	}
+};
+
+/// request the current sequence number for storage
 struct request_sequence_number : storage_request_base {
 
 	template<typename S>
 	void serialise(S& s) {
 		serialisation::sequence<S> seq(s);
+		seq & static_cast<protocol_base&>(*this);
 	}
 };
 
+/**
+ * request records for sequence numbers [start, end].
+ * The server will return only some maximum amount of records and the client needs to re-request the rest.
+ */
 struct request_records : storage_request_base {
 	sequence_number start, end;
 
 	template<typename S>
 	void serialise(S& s) {
 		serialisation::sequence<S> seq(s);
-		seq & start & end;
+		seq & static_cast<protocol_base&>(*this) & start & end;
 	}
 };
 
@@ -69,7 +104,7 @@ struct request_data : storage_request_base {
 	template<typename S>
 	void serialise(S& s) {
 		serialisation::sequence<S> seq(s);
-		seq & record & start & end;
+		seq & static_cast<protocol_base&>(*this) & record & start & end;
 	}
 };
 
@@ -79,7 +114,7 @@ struct request_commit : storage_request_base {
 	template<typename S>
 	void serialise(S& s) {
 		serialisation::sequence<S> seq(s);
-		seq & record;
+		seq & static_cast<protocol_base&>(*this) & record;
 	}
 };
 

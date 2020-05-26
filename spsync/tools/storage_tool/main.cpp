@@ -16,7 +16,7 @@ struct storage_tool : command_parser {
 	std::string storage;
 
 	storage_tool() {
-		add(help, "help", "h", "Show help");
+		add(help, "help", "h", "show help");
 		add(verbose, "verbose", "v", "verbose mode");
 		add(storage, "storage", "s", "storage database");
 	}
@@ -51,7 +51,11 @@ int main(int argc, char* args[]) {
 	try {
 		securepath::sync::storage_tool p;
 		p.parse(argc, args);
-		p.run();
+		if(p.help) {
+			p.print_help(std::cout);
+		} else {
+			p.run();
+		}
 	} catch(std::exception const& ex) {
 		std::cerr << "Error: " << ex.what() << std::endl;
 	}

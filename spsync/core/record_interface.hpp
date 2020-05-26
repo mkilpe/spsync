@@ -14,6 +14,9 @@ namespace securepath::sync {
 enum class record_state {
 	unknown = 0,
 
+	/// the record is invalid, e.g. the aes gcm tag doesn't match
+	invalid,
+
 	/// the record is waiting commit
 	pending_commit,
 
@@ -21,11 +24,11 @@ enum class record_state {
 	pending_sync,
 
 	/// synchronised with the server
-	in_sync,
-
-	/// the record is invalid, e.g. the aes gcm tag doesn't match
-	invalid
+	in_sync
 };
+
+// returns true if in good state, ie. not unknown or invalid
+bool is_valid_state(record_state);
 
 std::ostream& operator<<(std::ostream&, record_state);
 
@@ -52,11 +55,8 @@ public:
 	/// State of this record
 	virtual record_state state() const = 0;
 
-	/// Set the state of this record
-	virtual void set_state(record_state) = 0;
-
-	/// Set the state of this record to in_sync along with the given data
-	virtual void set_in_sync(chain_block_id, octet_vector parent_block_hash) = 0;
+	/// Set the state of this record with optional server provided data. Empty server data does not set anything.
+	virtual void set_state(record_state, chain_block_id = {}, octet_vector parent_block_hash = {}) = 0;
 
 	/// Handle to the record data
 	//t: we need to have enumeration here as one record can have many entities with data
