@@ -3,26 +3,90 @@
 
 #include "protocol_base.hpp"
 
-namespace securepath::sync {
+namespace securepath::sync::protocol {
+inline namespace v1 {
 
-// called as a response to fetch_sequence_number, newest sequence number on server
-//virtual void on_sequence_number_response(request_handle, result<sequence_number> const&) = 0;
+/// always first packet to negotiate version
+struct server_hello : protocol_base {
+	using protocol_base::protocol_base;
 
-// called when record is received as a response to fetch_records call
-//virtual void on_record_response(request_handle, result<std::deque<chain_block>> const&) = 0;
+	int version{current_version};
 
-// called when record data is fully received as a response to fetch_data call
-//virtual void on_data_response(request_handle, result<record_data_handle> const&) = 0;
+	template<typename S>
+	void serialise(S& s) {
+		serialisation::sequence<S> seq(s);
+		seq & static_cast<protocol_base&>(*this) & version;
+	}
+};
 
-// called when getting response to a commit attempt from the server
-//virtual void on_commit_response(request_handle, result<chain_block> const&) = 0;
+struct create_storage_reply : storage_request_base {
+	template<typename S>
+	void serialise(S& s) {
+		serialisation::sequence<S> seq(s);
+		seq & static_cast<storage_request_base&>(*this);
+	}
+};
 
-// called when all data for a record has been uploaded or error occurred
-//virtual void on_data_uploaded(request_handle, std::optional<error>) = 0;
+struct destroy_storage_reply : storage_request_base {
+	template<typename S>
+	void serialise(S& s) {
+		serialisation::sequence<S> seq(s);
+		seq & static_cast<storage_request_base&>(*this);
+	}
+};
 
-// called when new record is received from the server
-//virtual void on_record_received(chain_block const&) = 0;
+struct storage_management_reply : storage_request_base {
+	template<typename S>
+	void serialise(S& s) {
+		serialisation::sequence<S> seq(s);
+		seq & static_cast<storage_request_base&>(*this);
+	}
+};
 
+struct response_sequence_number : storage_request_base {
+	template<typename S>
+	void serialise(S& s) {
+		serialisation::sequence<S> seq(s);
+		seq & static_cast<storage_request_base&>(*this);
+	}
+};
+
+struct response_records : storage_request_base {
+	template<typename S>
+	void serialise(S& s) {
+		serialisation::sequence<S> seq(s);
+		seq & static_cast<storage_request_base&>(*this);
+	}
+};
+
+struct response_data : storage_request_base {
+	template<typename S>
+	void serialise(S& s) {
+		serialisation::sequence<S> seq(s);
+		seq & static_cast<storage_request_base&>(*this);
+	}
+};
+
+struct response_commit : storage_request_base {
+	template<typename S>
+	void serialise(S& s) {
+		serialisation::sequence<S> seq(s);
+		seq & static_cast<storage_request_base&>(*this);
+	}
+};
+
+using serialisation::type_tag;
+using s2c_types =
+	typelist<type_tag<server_hello, 1>,
+			type_tag<create_storage_reply, 2>,
+			type_tag<destroy_storage_reply, 3>,
+			type_tag<storage_management_reply, 4>,
+			type_tag<response_sequence_number, 5>,
+			type_tag<response_records, 6>,
+			type_tag<response_data, 7>,
+			type_tag<response_commit, 8> >;
+
+}
 }
 
 #endif

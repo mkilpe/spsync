@@ -48,5 +48,6 @@ struct storage_request_base : protocol_base {
 };
 
 }
+}
 
 #endif

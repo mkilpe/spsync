@@ -11,17 +11,18 @@
 namespace securepath::sync::protocol {
 inline namespace v1 {
 
-// initial packet with version
-// list storages
+//client side protocol packets:
+// - initial packet with version
+// - list storages
 
-// create storage
-// destroy storage
-// manage storage (request updates, alter settings on server, quota)
+// - create storage
+// - destroy storage
+// - manage storage (request updates, alter settings on server, quota)
 
-// request sequence number
-// request records
-// request data
-// request commit
+// - request sequence number
+// - request records
+// - request data
+// - request commit
 
 /// always first packet to negotiate version
 struct client_hello : protocol_base {
@@ -38,25 +39,25 @@ struct client_hello : protocol_base {
 
 /// Create storage with specific storage id
 struct create_storage : storage_request_base {
-	using protocol_base::protocol_base;
+	using storage_request_base::storage_request_base;
 
 	//chain_block initial_record;
 
 	template<typename S>
 	void serialise(S& s) {
 		serialisation::sequence<S> seq(s);
-		seq & static_cast<protocol_base&>(*this);
+		seq & static_cast<storage_request_base&>(*this);
 	}
 };
 
 /// Remove storage with specific storage id, this required that you also created it
 struct destroy_storage : storage_request_base {
-	using protocol_base::protocol_base;
+	using storage_request_base::storage_request_base;
 
 	template<typename S>
 	void serialise(S& s) {
 		serialisation::sequence<S> seq(s);
-		seq & static_cast<protocol_base&>(*this);
+		seq & static_cast<storage_request_base&>(*this);
 	}
 };
 
@@ -69,7 +70,7 @@ struct storage_management : storage_request_base {
 	template<typename S>
 	void serialise(S& s) {
 		serialisation::sequence<S> seq(s);
-		seq & static_cast<protocol_base&>(*this);
+		seq & static_cast<storage_request_base&>(*this);
 	}
 };
 
@@ -79,7 +80,7 @@ struct request_sequence_number : storage_request_base {
 	template<typename S>
 	void serialise(S& s) {
 		serialisation::sequence<S> seq(s);
-		seq & static_cast<protocol_base&>(*this);
+		seq & static_cast<storage_request_base&>(*this);
 	}
 };
 
@@ -93,18 +94,19 @@ struct request_records : storage_request_base {
 	template<typename S>
 	void serialise(S& s) {
 		serialisation::sequence<S> seq(s);
-		seq & static_cast<protocol_base&>(*this) & start & end;
+		seq & static_cast<storage_request_base&>(*this) & start & end;
 	}
 };
 
 struct request_data : storage_request_base {
 	sequence_number record;
+	/// data from position [start, end];
 	std::uint64_t start, end;
 
 	template<typename S>
 	void serialise(S& s) {
 		serialisation::sequence<S> seq(s);
-		seq & static_cast<protocol_base&>(*this) & record & start & end;
+		seq & static_cast<storage_request_base&>(*this) & record & start & end;
 	}
 };
 
@@ -114,17 +116,20 @@ struct request_commit : storage_request_base {
 	template<typename S>
 	void serialise(S& s) {
 		serialisation::sequence<S> seq(s);
-		seq & static_cast<protocol_base&>(*this) & record;
+		seq & static_cast<storage_request_base&>(*this) & record;
 	}
 };
 
 using serialisation::type_tag;
 using c2s_types =
 	typelist<type_tag<client_hello, 1>,
-			type_tag<request_sequence_number, 2>,
-			type_tag<request_records, 3>,
-			type_tag<request_data, 4>,
-			type_tag<request_commit, 5> >;
+			type_tag<create_storage, 2>,
+			type_tag<destroy_storage, 3>,
+			type_tag<storage_management, 4>,
+			type_tag<request_sequence_number, 5>,
+			type_tag<request_records, 6>,
+			type_tag<request_data, 7>,
+			type_tag<request_commit, 8> >;
 
 }
 }

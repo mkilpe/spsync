@@ -1,6 +1,7 @@
 
 #include <spsync/core/record_storage.hpp>
 
+#include <securepath/version.hpp>
 #include <securepath/database/sqlite/connection.hpp>
 #include <securepath/util/command_parser.hpp>
 
@@ -52,6 +53,7 @@ int main(int argc, char* args[]) {
 		securepath::sync::storage_tool p;
 		p.parse(argc, args);
 		if(p.help) {
+			std::cout << "SPSync Storage Tool (using library version " << securepath::library_version() << ")\n";
 			p.print_help(std::cout);
 		} else {
 			p.run();
