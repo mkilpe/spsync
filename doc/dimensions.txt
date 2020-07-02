@@ -18,3 +18,4 @@ server operations options per storage:
 Require segment end after certain time/amount of records?
 
 q: how to configure the server? should one be able to decide which mode he uses when creating a storage?
+	* yes, but don't allow to change it after storage has been created

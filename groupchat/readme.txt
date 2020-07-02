@@ -10,4 +10,5 @@ The server orders the "messages" for us, so everyone will see messages in same o
 
 Future ideas:
 
-One could introduce editing the messages afterwards by just making change out of it for the same object.
+* Introduce editing the messages afterwards by just making change out of it for the same object.
+* Attach pictures or other data to the message as record data

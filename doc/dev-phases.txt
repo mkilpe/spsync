@@ -23,7 +23,7 @@
 * segment records
 
 
---- phase 4 (full hanling and progress support)
+--- phase 4 (full handling and progress support)
 * user conflict handling
 * progress
 * recording of all actions

@@ -1,12 +1,14 @@
 
 TODO: how to handle other feedback, conflicts et al to the user?
+	* progress should have all the actions, including conflicts. However, those will trigger other actions for the user as well.
 
 Design to handle correct progress indication for everything important that is vital from the beginning. Users always want to see progress!
 
-Design progress type that allow at least progress of the following:
+Design progress type that allows progress of the following:
 
 Communication layer:
 	* per entity upload/download progress
+	* connect/disconnect
 
 Sync Engine:
 	* current seq num/progress to get to the current seq num (separate user change, special changes and data changes)
