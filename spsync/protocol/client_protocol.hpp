@@ -89,7 +89,7 @@ struct request_sequence_number : storage_request_base {
  * The server will return only some maximum amount of records and the client needs to re-request the rest.
  */
 struct request_records : storage_request_base {
-	sequence_number start, end;
+	util::sequence_number start, end;
 
 	template<typename S>
 	void serialise(S& s) {
@@ -99,7 +99,7 @@ struct request_records : storage_request_base {
 };
 
 struct request_data : storage_request_base {
-	sequence_number record;
+	util::sequence_number record;
 	/// data from position [start, end];
 	std::uint64_t start, end;
 

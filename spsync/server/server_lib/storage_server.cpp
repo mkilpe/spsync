@@ -1,5 +1,6 @@
 
 #include "storage_server.hpp"
+#include "connection.hpp"
 
 #include <spsync/protocol/server_protocol.hpp>
 
@@ -16,6 +17,7 @@ asio::ip::tcp::endpoint storage_server_params::create_storage_server_endpoint() 
 class storage_server_client
 : public std::enable_shared_from_this<storage_server_client>
 , public network::encrypted_connection
+, public connection
 {
 public:
 	storage_server_client(
@@ -41,11 +43,17 @@ public:
 	}
 
 	virtual void on_connected() override {
-
+		auto key_id = remote_key_id();
+		if(key_id) {
+			connection::on_connect(*key_id);
+		} else {
+			LOG_WARN("no client key set, closing connection...");
+			close();
+		}
 	}
 
 	virtual void on_disconnected(securepath::error const& error) override {
-
+		LOG_TRACE("client disconnected (%): %", remote_key_id().value_or(crypto::public_key_id{}), error);
 	}
 
 	virtual void on_sent(std::size_t) override {
@@ -53,11 +61,27 @@ public:
 	}
 
 	virtual void on_received(octet_span s) override {
-		//deser_.handle(s, );
+		deser_.handle(s, std::ref(*this));
+	}
+
+	void operator()(protocol::client_hello const& p) {
+		LOG_INFO("client version: %", p.version);
+		//t: check the version et al
+		connection_good_ = true;
+	}
+
+	template<typename T>
+	void operator()(T const& p) {
+		if(connection_good_) {
+			this->handle(p);
+		} else {
+			LOG_WARN("packets before client_hello received");
+		}
 	}
 
 private:
-	serialisation::packet_deserialiser<protocol::s2c_types> deser_;
+	serialisation::packet_deserialiser<protocol::c2s_types> deser_;
+	bool connection_good_{};
 };
 
 class storage_server::impl
