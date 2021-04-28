@@ -102,8 +102,8 @@ private:
 	database table 'record':
 		key: arbitrary table index as integer (primary key)
 		tag: record tag as blob
-		seq: sequence as integer, this is only set after server returns the committed chain block
-		hash: hash of the chain_block, this is only set after server returns the committed chain block
+		seq: sequence as integer, this is the server assigned sequence if state is in_sync, otherwise a prediction
+		hash: hash of the chain_block, either as returned by server or predicted
 		parent_hash: hash of the parent chain block, this is only set after server returns the committed chain block
 		state: record state as integer, this is the record_state enum in record_interface.hpp
 		record: serialised chain_block as blob
@@ -203,10 +203,12 @@ record_storage::~record_storage()
 {
 }
 
-chain_block_id record_storage::last_block() const {
+chain_block_id record_storage::last_block(bool allow_local) const {
 	auto q = impl_->db->prepare("SELECT hash, seq FROM record WHERE"
-		" seq = (SELECT max(seq) FROM record WHERE state = :state);");
-	q.bind(":state", static_cast<std::int64_t>(record_state::in_sync));
+		" seq = (SELECT max(seq) FROM record WHERE state = :state1 OR state = :state2)"
+		" ORDER BY key DESC LIMIT 1;");
+	q.bind(":state1", static_cast<std::int64_t>(record_state::in_sync));
+	q.bind(":state2", static_cast<std::int64_t>(allow_local ? record_state::pending_commit : record_state::in_sync));
 
 	chain_block_id id;
 	auto res = q.execute();
@@ -218,11 +220,13 @@ chain_block_id record_storage::last_block() const {
 	return id;
 }
 
-record_handle record_storage::find_last() const {
+record_handle record_storage::find_last(bool allow_local) const {
 	auto q = impl_->db->prepare(
 		"SELECT key, tag, seq, hash, parent_hash, state FROM record WHERE"
-		" seq = (SELECT max(seq) FROM record WHERE state = :state);");
-	q.bind(":state", static_cast<std::int64_t>(record_state::in_sync));
+		" seq = (SELECT max(seq) FROM record WHERE state = :state1 OR state = :state2)"
+		" ORDER BY key DESC LIMIT 1;");
+	q.bind(":state1", static_cast<std::int64_t>(record_state::in_sync));
+	q.bind(":state2", static_cast<std::int64_t>(allow_local ? record_state::pending_commit : record_state::in_sync));
 	return impl_->load_record(q.execute());
 }
 
@@ -281,8 +285,18 @@ record_handle record_storage::find_tag(octet_vector const& tag) const {
 	return impl_->load_record(q.execute());
 }
 
+record_handle record_storage::find_first_pending_commit() const {
+	auto q = impl_->db->prepare(
+		"SELECT key, tag, seq, hash, parent_hash, state FROM record WHERE state = :state;"
+		" ORDER BY seq ASC, key ASC LIMIT 1");
+	q.bind(":state", static_cast<std::int64_t>(record_state::pending_commit));
+	return impl_->load_record(q.execute());
+}
+
 sequence_number record_storage::highest_sequence_number() const {
-	auto q = impl_->db->prepare("SELECT max(seq) FROM record;");
+	auto q = impl_->db->prepare("SELECT max(seq) FROM record WHERE state = :state1 OR state = :state2;");
+	q.bind(":state1", static_cast<std::int64_t>(record_state::in_sync));
+	q.bind(":state2", static_cast<std::int64_t>(record_state::pending_sync));
 
 	sequence_number ret;
 	auto res = q.execute();
@@ -305,21 +319,19 @@ void record_storage::create_object_records(octet_vector const& tag, data_change_
 	}
 }
 
-record_handle record_storage::create_impl(chain_block const& rec, record_state state) {
+record_handle record_storage::insert_to_db(chain_block const& rec, record_state state) {
 	auto q = impl_->db->prepare(
 		"INSERT INTO record(tag, seq, hash, parent_hash, state, record)"
 		" VALUES(:tag, :seq, :hash, :parent_hash, :state, :record);");
 
 	q.bind(":tag", rec.tag());
-	if(rec.sequence()) {
-		q.bind(":seq", rec.sequence().value);
-		q.bind(":hash", rec.hash());
+	if(!rec.parent_hash().empty()) {
 		q.bind(":parent_hash", rec.parent_hash());
 	} else {
-		q.bind(":seq");
-		q.bind(":hash");
 		q.bind(":parent_hash");
 	}
+	q.bind(":seq", rec.sequence().value);
+	q.bind(":hash", rec.hash());
 	q.bind(":state", static_cast<std::int64_t>(state));
 	q.bind(":record", serialisation::asn_der_serialise(rec));
 	q.execute();
@@ -327,11 +339,10 @@ record_handle record_storage::create_impl(chain_block const& rec, record_state s
 	return find_tag(rec.tag());
 }
 
-record_handle record_storage::create(chain_block const& rec, record_state state)
-{
+record_handle record_storage::create(chain_block const& rec, record_state state) {
 	LOG_TRACE("creating record to storage % (state %)", to_hex(rec.tag()), state);
 	database::transaction tact(*impl_->db);
-	auto handle = create_impl(rec, state);
+	auto handle = insert_to_db(rec, state);
 	if(handle) {
 		rec.deserialise_record([&rec, this](auto const& r)
 			{
@@ -347,7 +358,7 @@ record_handle record_storage::create(auth_record<data_change_record> const& rec)
 	LOG_TRACE("creating record to storage %", to_hex(rec.auth.tag()));
 
 	database::transaction tact(*impl_->db);
-	auto handle = create_impl(chain_block(rec), record_state::unknown);
+	auto handle = insert_to_db(chain_block(rec, rec.record.last_seen_block().sequence + 1), record_state::pending_commit);
 	if(handle) {
 		create_object_records(rec.auth.tag(), rec.record);
 	}

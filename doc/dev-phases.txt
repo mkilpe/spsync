@@ -1,38 +1,38 @@
 
 --- phase half
-* user change, just what is required for inital record
-* single data change without previous oid and without actual data (only metadata)
++ user change, just what is required for inital record
++ single data change without previous oid and without actual data (only metadata)
 * system tests without network
 
 
 --- phase 1 (minimal working state with single change (initial) per oid)
 * server
-* client networking
+- client networking
 * internal conflicting record handling when committing to server
-* multichat PoC
+- multichat PoC
 
 
 --- phase 2 (multi change per oid and per record support)
 * previous oid support
-* record data support
-* multi data change records
+- record data support
+- multi data change records
 
 
 --- phase 3 (full record support)
-* full user change record support
-* segment records
+- full user change record support
+- segment records
 
 
 --- phase 4 (full handling and progress support)
-* user conflict handling
-* progress
-* recording of all actions
+- user conflict handling
+- progress
+- recording of all actions
 
 
 --- phase 5
-* full documentation / examples
-* more tests
+- full documentation / examples
+- more tests
 
 
 --- phase x (specific use case)
-* file synchronisation
+- file synchronisation

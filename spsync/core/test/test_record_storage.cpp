@@ -46,10 +46,10 @@ TEST_CASE("record_storage", "[unit]") {
 	CHECK(!storage.find(record_tag{}));
 
 	{
-		CHECK(root_handle->state() == record_state::unknown);
+		CHECK(root_handle->state() == record_state::pending_commit);
 		CHECK(root_handle->parent_block_hash().empty());
-		CHECK(root_handle->block_id().sequence == sequence_number{});
-		CHECK(root_handle->record().sequence() == sequence_number{});
+		CHECK(root_handle->block_id().sequence == sequence_number{1});
+		CHECK(root_handle->record().sequence() == sequence_number{1});
 	}
 
 	{ //set state and server sequence
@@ -92,8 +92,8 @@ TEST_CASE("record_storage", "[unit]") {
 		REQUIRE(h);
 		CHECK(h->tag() == creator.last_tag);
 		CHECK(h->parent_block_hash().empty());
-		CHECK(h->block_id().sequence == sequence_number{});
-		CHECK(h->state() == record_state::unknown);
+		CHECK(h->block_id().sequence == sequence_number{2});
+		CHECK(h->state() == record_state::pending_commit);
 		CHECK(!h->record().tag().empty());
 
 		h->set_state(record_state::in_sync, chain_block_id{creator.last_server_seq, creator.last_chain_hash}, parent_block_hash);
@@ -113,7 +113,7 @@ TEST_CASE("record_storage", "[unit]") {
 		h->set_state(record_state::invalid);
 		CHECK(h->state() == record_state::invalid);
 		CHECK(!storage.find(creator.last_server_seq));
-		CHECK(storage.highest_sequence_number() == creator.last_server_seq);
+		CHECK(storage.highest_sequence_number() == sequence_number{1});
 
 		CHECK(storage.find_last() != h);
 		auto ih = storage.find_tag(h->tag());

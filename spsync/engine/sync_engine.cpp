@@ -5,6 +5,7 @@
 
 #include <spsync/core/encryption_key_storage.hpp>
 #include <spsync/protocol/types.hpp>
+#include <spsync/protocol/error.hpp>
 
 #include <securepath/log/log.hpp>
 #include <securepath/util/conversions.hpp>
@@ -28,7 +29,6 @@ public:
 	{}
 
 	void commit_record(record_handle h) {
-		h->set_state(record_state::pending_commit);
 		request_handle req = comm.commit_record(h);
 		LINFO("trying to commit record to server [tag = %, request handle = %]", to_hex(h->tag()), req);
 	}
@@ -45,18 +45,6 @@ public:
 			//t: handle error, what to do?
 			LWARN("Server returned invalid record [local tag=%, server tag=%]", to_hex(h->tag()), to_hex(record.tag()));
 		}
-	}
-
-	void handle_in_sync_record(data_change_record_verifier const& ver) {
-		//record is in sync, notify higher layer?
-	}
-
-	void handle_in_sync_record(user_change_record_verifier const& ver) {
-		//record is in sync, notify higher layer?
-	}
-
-	void handle_in_sync_record(segment_record_verifier const& ver) {
-		//record is in sync, notify higher layer?
 	}
 
 	void check_pending_records(chain_block_id id) {
@@ -131,9 +119,12 @@ public:
 		if(enc_key) {
 			record_verifier<Record> ver(*enc_key, rec, record.auth());
 			if(ver.is_authentic()) {
+				update_server_seq(record.sequence());
 				if(handle_block_chain(record, id)) {
-					handle_in_sync_record(ver);
 					check_pending_records(id);
+					if(records.last_block().sequence == server_seq) {
+						try_commit_pending();
+					}
 				}
 			} else {
 				LWARN("Record is not authentic [block id = %, tag = %]", id, to_hex(record.tag()));
@@ -163,6 +154,21 @@ public:
 		}
 	}
 
+	void try_commit_pending() {
+		//t: can we optimise when we are trying to push commits again
+		// ie. pushing currently even if we just did and something came in meanwhile
+		LTRACE("trying to commit pending records");
+
+
+	}
+
+	void update_server_seq(sequence_number s) {
+		if(s > server_seq) {
+			LTRACE("biggest seen server sequence: %", s);
+			server_seq = s;
+		}
+	}
+
 public:
 	mutable engine_mutex_type mutex;
 	comm_input& comm;
@@ -170,6 +176,7 @@ public:
 	record_storage& records;
 	sync_engine_config config;
 	engine_output* output{};
+	sequence_number server_seq;
 };
 
 // redefine to use the impl for normal members
@@ -180,13 +187,15 @@ public:
 #define LINFO(format, ...) LOG_INFO(format " (%)" __VA_OPT__(,) __VA_ARGS__, impl_->config.log_id)
 #define LWARN(format, ...) LOG_WARN(format " (%)" __VA_OPT__(,) __VA_ARGS__, impl_->config.log_id)
 
-sync_engine::sync_engine(comm_input& comm, encryption_key_storage& keys, sync_engine_config config)
-: impl_(std::make_unique<impl>(comm, keys, std::move(config)))
+sync_engine::sync_engine(event_system::event_loop& loop, comm_input& comm, encryption_key_storage& keys, sync_engine_config config)
+: comm_output(loop)
+, impl_(std::make_unique<impl>(comm, keys, std::move(config)))
 {
 }
 
 sync_engine::~sync_engine()
 {
+	 stop_handler();
 }
 
 void sync_engine::set_output(engine_output* output) {
@@ -217,6 +226,7 @@ void sync_engine::on_sequence_number_response(request_handle req_handle, result<
 	std::unique_lock lock{impl_->mutex};
 	if(res) {
 		LINFO("on_sequence_number_response: % (request handle %)", res.value(), req_handle);
+		impl_->update_server_seq(res.value());
 		auto highest_seq = impl_->records.highest_sequence_number();
 		if(highest_seq < res.value()) {
 			// try to fetch all records we don't have
@@ -281,6 +291,15 @@ void sync_engine::on_commit_response(request_handle req_handle, commit_response 
 		//  2. see if there are conflicts and notify higher level if there are
 		//  3. recreate the records with correct previous tag/last seen seq for non-conflicting records
 		//  4. try to commit again
+
+		if(check_result_error(res.data, protocol::errc::record_out_of_sync)) {
+			auto highest_seq = impl_->records.highest_sequence_number();
+			if(highest_seq < res.server_max_sequence) {
+				// try to fetch all records we don't have
+				auto req_h = impl_->comm.fetch_records(highest_seq, sequence_number{});
+				LTRACE("out of sync, requested records [%,-] (request handle %)", highest_seq, req_h);
+			}
+		}
 	}
 }
 

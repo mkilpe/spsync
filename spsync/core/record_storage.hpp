@@ -25,11 +25,17 @@ public:
 
 	// -- overall record chain --
 
-	/// get the last block id in the chain received from server in 'in sync' state
-	chain_block_id last_block() const;
+	/**
+	 * Get the last block id in the chain in 'in sync' state if allow_local is false,
+	 * otherwise also consider pending_commit state records
+	 */
+	chain_block_id last_block(bool allow_local = false) const;
 
-	/// find the last record in the chain
-	record_handle find_last() const;
+	/**
+	 * Find the last record in the chain in_sync if allow_local is false, otherwise also consider
+	 * pending_commit state records
+	 */
+	record_handle find_last(bool allow_local = false) const;
 
 	/// find the first record in the chain
 	record_handle find_root() const;
@@ -43,8 +49,15 @@ public:
 	/// find record that has the given tag
 	record_handle find_tag(octet_vector const&) const;
 
-	/// highest sequence number of record received from server with any state
+	/// highest sequence number of record received from server with state in_sync or pending_sync
 	sequence_number highest_sequence_number() const;
+
+
+	// -- pending commit --
+
+	/// find the first record that is waiting to be committed
+	record_handle find_first_pending_commit() const;
+
 
 	// -- per object operations --
 
@@ -62,8 +75,8 @@ public:
 	record_handle create(chain_block const&, record_state state);
 
 private:
-	void create_object_records(octet_vector const& tag, data_change_record const& rec);
-	record_handle create_impl(chain_block const& rec, record_state state);
+	record_handle insert_to_db(chain_block const&, record_state);
+	void create_object_records(octet_vector const& tag, data_change_record const&);
 
 private:
 	class impl;
@@ -72,7 +85,7 @@ private:
 
 template<typename RecordType>
 record_handle record_storage::create(auth_record<RecordType> const& rec) {
-	return create(chain_block(rec), record_state::unknown);
+	return create(chain_block(rec, rec.record.last_seen_block().sequence + 1), record_state::pending_commit);
 }
 
 }

@@ -2,6 +2,8 @@
 #define SPSYNC_COMM_INTERFACE_HEADER
 
 #include "types.hpp"
+#include <securepath/event_system/event_handler.hpp>
+#include <securepath/event_system/event_loop.hpp>
 
 namespace securepath::sync {
 
@@ -32,7 +34,10 @@ struct comm_input {
 /**
  * The interface which communication layer uses to notify about incoming changes
  */
-struct comm_output {
+struct comm_output : event_system::event_handler {
+
+	comm_output(event_system::event_loop&);
+
 	virtual ~comm_output() = default;
 
 	/// called when connection to server established
@@ -59,8 +64,36 @@ struct comm_output {
 	/// called when new record is received from the server
 	virtual void on_record_received(chain_block const&) = 0;
 
+	// this converts events to above virtual calls
+	void handle_event(std::unique_ptr<event_system::event_base> ev) override;
 };
 
+namespace comm_events {
+struct on_connected {
+	typedef void type();
+};
+struct on_disconnected {
+	typedef void type(std::optional<error>);
+};
+struct on_sequence_number_response {
+	typedef void type(request_handle, result<sequence_number> const&);
+};
+struct on_record_response {
+	typedef void type(request_handle, record_response const&);
+};
+struct on_data_response {
+	typedef void type(request_handle, result<record_data_handle> const&);
+};
+struct on_commit_response {
+	typedef void type(request_handle, commit_response const&);
+};
+struct on_data_uploaded {
+	typedef void type(request_handle, std::optional<error>);
+};
+struct on_record_received {
+	typedef void type(chain_block const&);
+};
+}
 }
 
 #endif

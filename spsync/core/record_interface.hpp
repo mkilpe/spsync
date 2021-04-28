@@ -27,7 +27,7 @@ enum class record_state {
 	in_sync
 };
 
-// returns true if in good state, ie. not unknown or invalid
+/// returns true if in good state, ie. not unknown or invalid
 bool is_valid_state(record_state);
 
 std::ostream& operator<<(std::ostream&, record_state);

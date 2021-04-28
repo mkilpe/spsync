@@ -35,7 +35,7 @@ std::deque<chain_block> chain_sync::get_records(sequence_number start, sequence_
 }
 
 chain_block chain_sync::set_and_save_block(chain_block block) {
-	block.set_server_sequence_and_parent_hash(last_block_.sequence+1, last_block_.hash);
+	block.set_sequence_and_parent_hash(last_block_.sequence+1, last_block_.hash);
 	records_.create(block, record_state::in_sync);
 	last_block_ = block.id();
 	if(current_record_ == rec_type::data_add_remove) {

@@ -1,6 +1,7 @@
 
 #include "storage_server.hpp"
 #include "connection.hpp"
+#include "storage.hpp"
 
 #include <spsync/protocol/server_protocol.hpp>
 
@@ -109,10 +110,22 @@ public:
 
 	}
 
+	std::shared_ptr<storage> acquire_sync(protocol::storage_id const& id) {
+		std::unique_lock lock{mutex_};
+		return nullptr;
+	}
+
+	void release_sync(std::shared_ptr<storage> storage) {
+		std::unique_lock lock{mutex_};
+
+	}
+
 public:
+	mutable std::mutex mutex_;
 	storage_server_params params_;
 	network::context& context_;
 	network::handshake_data handshake_data_;
+	std::map<protocol::storage_id, std::shared_ptr<storage>> storages_;
 };
 
 

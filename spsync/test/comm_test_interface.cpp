@@ -77,7 +77,7 @@ bool comm_test_interface::process_event() {
 
 request_handle comm_test_interface::fetch_sequence_number() {
 	request_handle ret = ++impl_->req_handle;
-	impl_->event_queue.push_back([=, this] {
+	impl_->event_queue.push_back([=] {
 		impl_->output->on_sequence_number_response(ret, impl_->current_seq);
 	});
 	return ret;
@@ -85,7 +85,7 @@ request_handle comm_test_interface::fetch_sequence_number() {
 
 request_handle comm_test_interface::fetch_records(sequence_number start, sequence_number end) {
 	request_handle ret = ++impl_->req_handle;
-	impl_->event_queue.push_back([=, this] {
+	impl_->event_queue.push_back([=] {
 		if(!impl_->fetch_records_queue.empty()) {
 			auto res = impl_->fetch_records_queue.front()(start, end);
 			impl_->fetch_records_queue.pop_front();
@@ -99,7 +99,7 @@ request_handle comm_test_interface::fetch_records(sequence_number start, sequenc
 
 request_handle comm_test_interface::fetch_data(sequence_number record){
 	request_handle ret = ++impl_->req_handle;
-	impl_->event_queue.push_back([=, this] {
+	impl_->event_queue.push_back([=] {
 		if(!impl_->fetch_data_queue.empty()) {
 			auto res = impl_->fetch_data_queue.front()(record);
 			impl_->fetch_data_queue.pop_front();
@@ -113,7 +113,7 @@ request_handle comm_test_interface::fetch_data(sequence_number record){
 
 request_handle comm_test_interface::commit_record(record_handle record) {
 	request_handle ret = ++impl_->req_handle;
-	impl_->event_queue.push_back([=, this] {
+	impl_->event_queue.push_back([=] {
 		if(!impl_->commit_queue.empty()) {
 			auto res = impl_->commit_queue.front()(record);
 			impl_->commit_queue.pop_front();

@@ -6,5 +6,13 @@ initial/connecting/server declined record
 	* push the commits
 
 - needs to queue commits while updating
+* have optional automatic collation of records to multi-change record?
+* allow to change commit mode in the middle (eg. in a segment record)?
 
-
+= Committing
+* keep the order of the records
+* pending commits when new record comes in
+** in seen everything mode, use predicted sequence of the latest pending commit as last seen
+** in every other mode, use the real last seen server sequence
+* out of sync with server -> redo the pending commits
+* user initiates segment record?

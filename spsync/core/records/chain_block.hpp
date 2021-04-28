@@ -63,9 +63,16 @@ public:
 	chain_block() = default;
 
 	template<typename RecordType>
-	chain_block(auth_record<RecordType> record)
+	chain_block(auth_record<RecordType> record, sequence_number s)
 	: record_(serialisation::asn_der_serialise_choice<record_types>(record.record))
 	, auth_(std::move(record.auth))
+	, sequence_(s)
+	{
+	}
+
+	template<typename RecordType>
+	chain_block(auth_record<RecordType> record)
+	: chain_block(record, record.record.last_seen_block().sequence + 1)
 	{
 	}
 
@@ -76,9 +83,9 @@ public:
 	{
 	}
 
-	/// Returns the sequence number set by the server
+	/// Returns the sequence number, this is either set by server (final) or prediction by client
 	sequence_number sequence() const {
-		return server_sequence_;
+		return sequence_;
 	}
 
 	/// Returns the hash of the previous chain block
@@ -86,9 +93,9 @@ public:
 		return parent_hash_;
 	}
 
-	/// sets the server sequence number and the parent hash
-	void set_server_sequence_and_parent_hash(sequence_number const& s, octet_vector hash) {
-		server_sequence_ = s;
+	/// sets the sequence number and the parent hash
+	void set_sequence_and_parent_hash(sequence_number s, octet_vector hash) {
+		sequence_ = s;
 		parent_hash_ = std::move(hash);
 	}
 
@@ -112,13 +119,13 @@ public:
 	}
 
 	chain_block_id id() const {
-		return chain_block_id{server_sequence_, hash()};
+		return chain_block_id{sequence_, hash()};
 	}
 
 	template<typename Ar>
 	void serialise(Ar& ar) {
 		serialisation::sequence<Ar> seq(ar);
-		seq & record_ & auth_ & server_sequence_ & parent_hash_;
+		seq & record_ & auth_ & sequence_ & parent_hash_;
 	}
 
 	/**
@@ -155,10 +162,10 @@ private:
 	// signature/tag that protects the data in the record
 	util::content_auth auth_;
 
-	// sequence from server, the only thing that is not protected by auth_ as the server sets it
-	sequence_number server_sequence_;
+	// sequence from server (final) or prediction by client, not protected by auth_ as the server sets it
+	sequence_number sequence_;
 
-	// hash of the previous chain block
+	// hash of the previous chain block, not protected by auth_ as the server sets it
 	octet_vector parent_hash_;
 };
 

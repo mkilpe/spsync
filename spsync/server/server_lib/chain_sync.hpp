@@ -48,7 +48,7 @@ public:
 	/// returns the latest sequence number
 	sequence_number current_sequence_number() const;
 
-	/// get the records [start, end], returns only maximum of config.max_returned_records records at once
+	/// get the records [start, end], returns only maximum of config.max_returned_records at once
 	std::deque<chain_block> get_records(sequence_number start, sequence_number end) const;
 
 	/// try to commit chain block

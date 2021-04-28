@@ -20,7 +20,7 @@ struct test_block_creator {
 	template<typename Record>
 	chain_block next_block(auth_record<Record> const& test_record) {
 		chain_block block{test_record};
-		block.set_server_sequence_and_parent_hash(last_server_seq, last_chain_hash);
+		block.set_sequence_and_parent_hash(last_server_seq, last_chain_hash);
 		last_chain_hash = block.hash();
 		last_tag = test_record.auth.tag();
 		return block;

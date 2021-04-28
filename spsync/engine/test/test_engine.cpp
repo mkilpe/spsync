@@ -10,6 +10,18 @@
 
 namespace securepath::sync::util {
 namespace {
+
+// + (1) commit initial change
+// + (2) initial change gives error
+// / (3) commit records after initial
+// + (4) bad sequence number is returned for record
+// + (5) bad parent hash is returned for record
+// / (6) commit not accepted
+// - (7) server return invalid record back
+// - (8) server pushes new records
+// - (9) fetch new records on beginning
+// - (10) create records with last seen sequence, when connecting, the server gives new records -> needs to recreate the queued records
+
 struct check_user_change_visitor {
 	users expected_users;
 
@@ -40,7 +52,7 @@ TEST_CASE("engine initial record", "[unit]") {
 
 			auto record = h->record();
 			check_user_change(record, initial);
-			record.set_server_sequence_and_parent_hash(context.io.next_sequence_number(), context.io.previous_block_hash());
+			record.set_sequence_and_parent_hash(context.io.next_sequence_number(), context.io.previous_block_hash());
 			return record;
 		});
 
@@ -104,16 +116,6 @@ TEST_CASE("engine commit multiple records", "[unit]") {
 	}
 }
 
-// * commit not accepted
-/*TEST_CASE("engine commit not accepted", "[unit]") {
-	test::engine_context context;
-	context.add_default_commit_response();
-	context.create_initial_record();
-	CHECK(context.io.process_event());
-
-
-}*/
-
 // * bad sequence number is returned for record
 TEST_CASE("engine bad sequence", "[unit]") {
 	test::engine_context context;
@@ -121,7 +123,7 @@ TEST_CASE("engine bad sequence", "[unit]") {
 	context.io.add_commit_record_response([&](record_handle h)
 			{
 				auto record = h->record();
-				record.set_server_sequence_and_parent_hash(++context.io.next_sequence_number(), context.io.previous_block_hash());
+				record.set_sequence_and_parent_hash(++context.io.next_sequence_number(), context.io.previous_block_hash());
 				return record;
 			});
 
@@ -146,13 +148,13 @@ TEST_CASE("engine bad parent hash", "[unit]") {
 	context.io.add_commit_record_response([&](record_handle h)
 			{
 				auto record = h->record();
-				record.set_server_sequence_and_parent_hash(context.io.next_sequence_number(), securepath::test::random_octet_vector(32));
+				record.set_sequence_and_parent_hash(context.io.next_sequence_number(), securepath::test::random_octet_vector(32));
 				return record;
 			});
 	context.io.add_commit_record_response([&](record_handle h)
 			{
 				auto record = h->record();
-				record.set_server_sequence_and_parent_hash(sequence_number{10}, securepath::test::random_octet_vector(32));
+				record.set_sequence_and_parent_hash(sequence_number{10}, securepath::test::random_octet_vector(32));
 				return record;
 			});
 
@@ -176,11 +178,30 @@ TEST_CASE("engine bad parent hash", "[unit]") {
 	CHECK(rec_handle2->state() == record_state::pending_sync);
 }
 
+// * commit not accepted
+// t: check to retry for non-fatal errors when implemented
+TEST_CASE("engine commit not accepted", "[unit]") {
+	test::engine_context context;
+	context.add_default_commit_response();
+	context.create_initial_record();
+	CHECK(context.io.process_event());
 
-// * server return invalid record back
-// * server pushes new records
-// * fetch new records on beginning
-// * create records with last seen sequence, when connecting, the server gives new records -> needs to recreate the queued records
+	context.io.add_commit_record_response([&](record_handle h)
+		{
+			return make_error(securepath::errc::unknown_error, "test error");
+		});
 
+	auto rec_handle = context.engine.sync_object_change(create_object_id(), metadata{});
+	context.io.process_event();
+
+	REQUIRE(context.storage.find_last());
+
+	// only committing the first change worked
+	CHECK(context.storage.last_block().sequence == sequence_number{1});
+	CHECK(context.storage.find_last()->state() == record_state::in_sync);
+
+	// commit failed, so it is still pending
+	CHECK(rec_handle->state() == record_state::pending_commit);
+}
 
 }

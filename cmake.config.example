@@ -1,1 +1,5 @@
-set(sp_main_repository_path /home/tomi/dev/sp/src)
+
+set(asio_INCLUDE_DIRS "/home/mikael/dev/libs/asio/include")
+
+set(enabled_projects securepath)
+set(sp_main_repository_path /home/mikael/dev/sp-backup/src)
