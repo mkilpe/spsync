@@ -14,6 +14,8 @@
 namespace securepath::sync {
 namespace {
 
+std::int64_t const seq_selector_value(1);
+
 class database_record : public record_interface {
 public:
 	database_record(database::connection_ptr db, std::uint64_t record_key, record_tag tag
@@ -51,11 +53,16 @@ public:
 
 		if(bid.is_valid()) {
 			//update state in database
-			auto q = db_->prepare("UPDATE record SET state = :state, seq = :seq, hash = :hash, parent_hash = :parent_hash WHERE key = :k;");
+			auto q = db_->prepare("UPDATE record SET state = :state, seq = :seq, hash = :hash, parent_hash = :parent_hash, unique_seq_selector = :useq WHERE key = :k;");
 			q.bind(":state", static_cast<std::int64_t>(state));
 			q.bind(":seq", bid.sequence.value);
 			q.bind(":hash", bid.hash);
 			q.bind(":parent_hash", parent_block_hash);
+			if(state == record_state::in_sync) {
+				q.bind(":useq", seq_selector_value);
+			} else {
+				q.bind(":useq");
+			}
 			q.bind(":k", record_key_);
 			q.execute();
 
@@ -63,8 +70,13 @@ public:
 			parent_hash_ = std::move(parent_block_hash);
 		} else {
 			//update just the state in database
-			auto q = db_->prepare("UPDATE record SET state = :state WHERE key = :k;");
+			auto q = db_->prepare("UPDATE record SET state = :state, unique_seq_selector = :useq WHERE key = :k;");
 			q.bind(":state", static_cast<std::int64_t>(state));
+			if(state == record_state::in_sync) {
+				q.bind(":useq", seq_selector_value);
+			} else {
+				q.bind(":useq");
+			}
 			q.bind(":k", record_key_);
 			q.execute();
 
@@ -102,11 +114,12 @@ private:
 	database table 'record':
 		key: arbitrary table index as integer (primary key)
 		tag: record tag as blob
-		seq: sequence as integer, this is the server assigned sequence if state is in_sync, otherwise a prediction
+		seq: sequence as integer, this is the  server assigned sequence if state is in_sync, otherwise a prediction
 		hash: hash of the chain_block, either as returned by server or predicted
 		parent_hash: hash of the parent chain block, this is only set after server returns the committed chain block
 		state: record state as integer, this is the record_state enum in record_interface.hpp
 		record: serialised chain_block as blob
+		unique_seq_selector: used to make combination state == insync and seq unique
 
 	database table 'record_objects':
 		key: arbitrary table index as integer (primary key)
@@ -124,11 +137,13 @@ struct record_storage::impl {
 			db->prepare("CREATE TABLE record("
 				"key INTEGER PRIMARY KEY,"
 				"tag BLOB UNIQUE,"
-				"seq INTEGER UNIQUE,"
+				"seq INTEGER,"
 				"hash BLOB UNIQUE,"
-				"parent_hash BLOB UNIQUE,"
+				"parent_hash BLOB,"
 				"state INTEGER,"
-				"record BLOB);").execute();
+				"record BLOB,"
+				"unique_seq_selector INTEGER DEFAULT NULL,"
+				"UNIQUE(seq, unique_seq_selector));").execute();
 		}
 		if(!db->has_table("record_objects")) {
 			db->prepare("CREATE TABLE record_objects("
@@ -321,8 +336,8 @@ void record_storage::create_object_records(octet_vector const& tag, data_change_
 
 record_handle record_storage::insert_to_db(chain_block const& rec, record_state state) {
 	auto q = impl_->db->prepare(
-		"INSERT INTO record(tag, seq, hash, parent_hash, state, record)"
-		" VALUES(:tag, :seq, :hash, :parent_hash, :state, :record);");
+		"INSERT INTO record(tag, seq, hash, parent_hash, state, record, unique_seq_selector)"
+		" VALUES(:tag, :seq, :hash, :parent_hash, :state, :record, :useq);");
 
 	q.bind(":tag", rec.tag());
 	if(!rec.parent_hash().empty()) {
@@ -334,6 +349,12 @@ record_handle record_storage::insert_to_db(chain_block const& rec, record_state 
 	q.bind(":hash", rec.hash());
 	q.bind(":state", static_cast<std::int64_t>(state));
 	q.bind(":record", serialisation::asn_der_serialise(rec));
+	if(state == record_state::in_sync) {
+		q.bind(":useq", seq_selector_value);
+	} else {
+		q.bind(":useq");
+	}
+
 	q.execute();
 
 	return find_tag(rec.tag());

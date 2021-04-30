@@ -167,6 +167,8 @@ TEST_CASE("record_storage unique seq", "[unit]") {
 	CHECK_THROWS(h3->set_state(record_state::in_sync, chain_block_id{1, creator.last_chain_hash}, h2->block_id().hash));
 	// use same block hash
 	CHECK_THROWS(h3->set_state(record_state::in_sync, chain_block_id{creator.last_server_seq, h1->block_id().hash}, h2->block_id().hash));
+	// same seq with other than in_sync state still works
+	CHECK_NOTHROW(h3->set_state(record_state::pending_commit, chain_block_id{1, creator.last_chain_hash}, h2->block_id().hash));
 }
 
 // test only unique tags work
@@ -300,6 +302,48 @@ TEST_CASE("record_storage long_chain data change", "[unit]") {
 		blocks.pop_back();
 	}
 	CHECK(count == length+1);*/
+}
+
+
+TEST_CASE("record_storage pending commits", "[unit]") {
+	//find_first_pending_commit
+	remove_database_test_db();
+	auto db_conn = database::sqlite::create_sqlite_connection(db_name);
+
+	record_storage storage(db_conn);
+	test_block_creator creator;
+
+	// first record needs to be user_change
+	storage.create(creator.test_user_change(), record_state::in_sync);
+	auto const initial_hash = creator.last_chain_hash;
+
+	auto first_pending = storage.create(creator.test_data_change(), record_state::pending_commit);
+	auto const tag_of_first_pending = first_pending->tag();
+
+	//see we find the pending commit
+	CHECK(storage.find_first_pending_commit());
+	CHECK(storage.find_first_pending_commit()->tag() == tag_of_first_pending);
+
+	storage.create(creator.test_data_change(), record_state::pending_commit);
+	auto const tag_of_second_pending = creator.last_tag;
+
+	//still get the first pending
+	CHECK(storage.find_first_pending_commit());
+	CHECK(storage.find_first_pending_commit()->tag() == tag_of_first_pending);
+
+	auto record = creator.test_data_change();
+	record.set_sequence_and_parent_hash(sequence_number{2}, initial_hash);
+	CHECK_NOTHROW(storage.create(record, record_state::in_sync));
+
+	//still get the first pending
+	CHECK(storage.find_first_pending_commit());
+	CHECK(storage.find_first_pending_commit()->tag() == tag_of_first_pending);
+
+	CHECK_NOTHROW(first_pending->set_state(record_state::in_sync, chain_block_id{3, first_pending->block_id().hash}, creator.last_chain_hash));
+
+	//get the second pending
+	CHECK(storage.find_first_pending_commit());
+	CHECK(storage.find_first_pending_commit()->tag() == tag_of_second_pending);
 }
 
 }
