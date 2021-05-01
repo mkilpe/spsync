@@ -26,14 +26,18 @@ public:
 			& iv_ & encryption_key_id_ & trailing_data_;
 	}
 
-	/// Returns the sequence number that was the last one seen before this record was created
-	chain_block_id last_seen_block() const { return last_seen_block_; }
+	/// Returns the chain block id that was the last one seen before this record was created
+	chain_block_id const& last_seen_block() const { return last_seen_block_; }
 
 	/// Returns the initialisation vector that is used to encrypted the data in this record
 	octet_vector const& iv() const { return iv_; }
 
 	/// Returns the sequence number of the encryption key used for this record
 	sequence_number encryption_key() const { return encryption_key_id_; }
+
+public:
+	/// Re-set the last seen block
+	void set_last_seen_block(chain_block_id id) { last_seen_block_ = std::move(id); }
 
 private:
 	// version of the current structure

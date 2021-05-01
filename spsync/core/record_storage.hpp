@@ -76,7 +76,6 @@ public:
 
 private:
 	record_handle insert_to_db(chain_block const&, record_state);
-	void create_object_records(octet_vector const& tag, data_change_record const&);
 
 private:
 	class impl;

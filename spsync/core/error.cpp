@@ -8,6 +8,7 @@ namespace {
 	char const* errors[] =
 		{ "no encryption key set"
 		, "invalid record chain state"
+		, "constraint violation"
 		};
 
 	static_assert(sizeof(errors)/sizeof(*errors)

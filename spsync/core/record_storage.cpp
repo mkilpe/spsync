@@ -16,6 +16,19 @@ namespace {
 
 std::int64_t const seq_selector_value(1);
 
+void create_object_records(database::connection_ptr db, octet_vector const& tag, data_change_record const& rec) {
+	for(auto& obj : rec) {
+		auto q = db->prepare(
+			"INSERT INTO record_objects(tag, prev_tag, oid, data_ref)"
+			" VALUES(:tag, :prev_tag, :oid, :data_ref);");
+		q.bind(":tag", tag);
+		q.bind(":prev_tag", obj.data.previous_oid_record_tag);
+		q.bind(":oid", obj.data.id.value());
+		q.bind(":data_ref");
+		q.execute();
+	}
+}
+
 class database_record : public record_interface {
 public:
 	database_record(database::connection_ptr db, std::uint64_t record_key, record_tag tag
@@ -96,12 +109,62 @@ public:
 		return database::extract_column_type<chain_block>(res, 0);
 	}
 
+	virtual void set_record(chain_block const& rec) {
+		std::unique_lock lock{mutex_};
+
+		if(state_ == record_state::in_sync) {
+			throw make_error(sync::errc::constraint_violation, "trying to set record data for in sync record");
+		}
+
+		database::transaction tact(*db_);
+
+		update_record(rec);
+		remove_object_records();
+
+		rec.deserialise_record([&rec, this](auto const& r)
+			{
+				if constexpr(std::is_same_v<std::decay_t<decltype(r)>, data_change_record>) {
+					create_object_records(db_, rec.tag(), r);
+				}
+			});
+
+
+		tag_ = rec.tag();
+		parent_hash_ = rec.parent_hash();
+		block_id_ = rec.id();
+	}
+
+	void update_record(chain_block const& rec) {
+		auto q = db_->prepare(
+			"UPDATE record SET tag = :tag, seq = :seq, hash = :hash, parent_hash = :parent_hash,"
+			" record = :record, unique_seq_selector = :useq);");
+
+		q.bind(":tag", rec.tag());
+		if(!rec.parent_hash().empty()) {
+			q.bind(":parent_hash", rec.parent_hash());
+		} else {
+			q.bind(":parent_hash");
+		}
+		q.bind(":seq", rec.sequence().value);
+		q.bind(":hash", rec.hash());
+		q.bind(":record", serialisation::asn_der_serialise(rec));
+		q.bind(":useq");
+
+		q.execute();
+	}
+
+	void remove_object_records() {
+		auto q = db_->prepare("DELETE FROM record_objects WHERE tag = :tag;");
+		q.bind(":tag", tag_);
+		q.execute();
+	}
+
 private:
 	mutable std::mutex mutex_;
 	database::connection_ptr db_;
 
 	// -- cached data --
-	std::uint64_t record_key_;
+	std::uint64_t const record_key_;
 	record_tag tag_;
 	octet_vector parent_hash_;
 	chain_block_id block_id_;
@@ -321,19 +384,6 @@ sequence_number record_storage::highest_sequence_number() const {
 	return ret;
 }
 
-void record_storage::create_object_records(octet_vector const& tag, data_change_record const& rec) {
-	for(auto& obj : rec) {
-		auto q = impl_->db->prepare(
-			"INSERT INTO record_objects(tag, prev_tag, oid, data_ref)"
-			" VALUES(:tag, :prev_tag, :oid, :data_ref);");
-		q.bind(":tag", tag);
-		q.bind(":prev_tag", obj.data.previous_oid_record_tag);
-		q.bind(":oid", obj.data.id.value());
-		q.bind(":data_ref");
-		q.execute();
-	}
-}
-
 record_handle record_storage::insert_to_db(chain_block const& rec, record_state state) {
 	auto q = impl_->db->prepare(
 		"INSERT INTO record(tag, seq, hash, parent_hash, state, record, unique_seq_selector)"
@@ -368,7 +418,7 @@ record_handle record_storage::create(chain_block const& rec, record_state state)
 		rec.deserialise_record([&rec, this](auto const& r)
 			{
 				if constexpr(std::is_same_v<std::decay_t<decltype(r)>, data_change_record>) {
-					create_object_records(rec.tag(), r);
+					create_object_records(impl_->db, rec.tag(), r);
 				}
 			});
 	}
@@ -381,7 +431,7 @@ record_handle record_storage::create(auth_record<data_change_record> const& rec)
 	database::transaction tact(*impl_->db);
 	auto handle = insert_to_db(chain_block(rec, rec.record.last_seen_block().sequence + 1), record_state::pending_commit);
 	if(handle) {
-		create_object_records(rec.auth.tag(), rec.record);
+		create_object_records(impl_->db, rec.auth.tag(), rec.record);
 	}
 	return handle;
 }

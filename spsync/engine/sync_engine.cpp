@@ -158,7 +158,10 @@ public:
 		//t: can we optimise when we are trying to push commits again
 		// ie. pushing currently even if we just did and something came in meanwhile
 		LTRACE("trying to commit pending records");
+		auto handle = records.find_first_pending_commit();
+		if(handle) {
 
+		}
 
 	}
 

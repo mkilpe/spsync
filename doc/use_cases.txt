@@ -15,5 +15,5 @@ x: Database synchronisation/replication
 
 
 
-GroupChat:
+Group chat:
 	* simple chat where each message makes a new object in the chain

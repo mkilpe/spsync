@@ -161,8 +161,7 @@ TEST_CASE("record_storage unique seq", "[unit]") {
 	h2->set_state(record_state::in_sync, chain_block_id{creator.last_server_seq, creator.last_chain_hash}, h1->block_id().hash);
 
 	auto h3 = storage.create(creator.test_user_change().to_auth_record<user_change_record>());
-	// use same parent block hash
-	CHECK_THROWS(h3->set_state(record_state::in_sync, chain_block_id{creator.last_server_seq, creator.last_chain_hash}, h1->block_id().hash));
+
 	// use same sequence number
 	CHECK_THROWS(h3->set_state(record_state::in_sync, chain_block_id{1, creator.last_chain_hash}, h2->block_id().hash));
 	// use same block hash
@@ -316,6 +315,8 @@ TEST_CASE("record_storage pending commits", "[unit]") {
 	// first record needs to be user_change
 	storage.create(creator.test_user_change(), record_state::in_sync);
 	auto const initial_hash = creator.last_chain_hash;
+
+	CHECK(!storage.find_first_pending_commit());
 
 	auto first_pending = storage.create(creator.test_data_change(), record_state::pending_commit);
 	auto const tag_of_first_pending = first_pending->tag();

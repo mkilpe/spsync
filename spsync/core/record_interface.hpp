@@ -67,6 +67,9 @@ public:
 
 	/// Get the record in serialised formats
 	virtual chain_block record() const = 0;
+
+	/// Set the record data, this used in case the record is changed due to being out of sync
+	virtual void set_record(chain_block const&) = 0;
 };
 
 using record_handle = std::shared_ptr<record_interface>;
