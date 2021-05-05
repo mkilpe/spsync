@@ -13,9 +13,9 @@
 #include <map>
 #include <mutex>
 
-#define LTRACE(format, ...) LOG_TRACE(format " (%)" __VA_OPT__(,) __VA_ARGS__, config.log_id)
-#define LINFO(format, ...) LOG_INFO(format " (%)" __VA_OPT__(,) __VA_ARGS__, config.log_id)
-#define LWARN(format, ...) LOG_WARN(format " (%)" __VA_OPT__(,) __VA_ARGS__, config.log_id)
+#define LTRACE(format, ...) LOG_TRACE(format " (rsid=%)" __VA_OPT__(,) __VA_ARGS__, config.log_id)
+#define LINFO(format, ...) LOG_INFO(format " (rsid=%)" __VA_OPT__(,) __VA_ARGS__, config.log_id)
+#define LWARN(format, ...) LOG_WARN(format " (rsid=%)" __VA_OPT__(,) __VA_ARGS__, config.log_id)
 
 namespace securepath::sync {
 
@@ -154,13 +154,64 @@ public:
 		}
 	}
 
+	auth_record<data_change_record> update_record(encryption_key const& key, data_change_record_verifier& ver) const {
+		auto last_block = records.last_block();
+		LINFO("updating last block to %", last_block);
+		data_change_record_creator creator(key, last_block);
+		for(auto const& r : ver.headers()) {
+			//f: conflict handling
+			if(!r.data.previous_oid_record_tag.empty()) {
+				LWARN("oid for out of sync not implemented");
+				throw error(securepath::errc::not_implemented, "oid for out of sync not implemented");
+			}
+
+			creator.add_change(r.header, r.data);
+		}
+		return creator.result();
+	}
+
+	auth_record<user_change_record> update_record(encryption_key const& key, user_change_record_verifier& ver) const {
+		auto last_block = records.last_block();
+		LINFO("updating last block to %", last_block);
+		user_change_record_creator creator(key, last_block);
+		creator.set_data(ver.header(), ver.data());
+		return creator.result();
+	}
+
+	auth_record<segment_record> update_record(encryption_key const& key, segment_record_verifier& ver) const {
+		auto last_block = records.last_block();
+		LINFO("updating last block to %", last_block);
+		segment_record_creator creator(key, last_block);
+		//f: implement
+		return creator.result();
+	}
+
+	chain_block update_pending_commit(chain_block const& record) {
+		return record.deserialise_record<chain_block>([&](auto const& rec) {
+				auto enc_key = keys.find(rec.encryption_key());
+				if(!enc_key) {
+					LWARN("could not find encryption key for pending commit (key=%)", rec.encryption_key());
+					throw error(errc::constraint_violation, "could not find encryption key for pending commit");
+				}
+
+				record_verifier<std::decay_t<decltype(rec)>> ver(*enc_key, rec, record.auth());
+				if(!ver.is_authentic()) {
+					throw make_error(errc::constraint_violation, "failed to authenticate record");
+				}
+
+				return update_record(*enc_key, ver);
+			});
+	}
+
 	void try_commit_pending() {
 		//t: can we optimise when we are trying to push commits again
 		// ie. pushing currently even if we just did and something came in meanwhile
 		LTRACE("trying to commit pending records");
 		auto handle = records.find_first_pending_commit();
 		if(handle) {
-
+			auto record = update_pending_commit(handle->record());
+			handle->set_record(record);
+			commit_record(handle);
 		}
 
 	}
@@ -186,9 +237,9 @@ public:
 #undef LTRACE
 #undef LINFO
 #undef LWARN
-#define LTRACE(format, ...) LOG_TRACE(format " (%)" __VA_OPT__(,) __VA_ARGS__, impl_->config.log_id)
-#define LINFO(format, ...) LOG_INFO(format " (%)" __VA_OPT__(,) __VA_ARGS__, impl_->config.log_id)
-#define LWARN(format, ...) LOG_WARN(format " (%)" __VA_OPT__(,) __VA_ARGS__, impl_->config.log_id)
+#define LTRACE(format, ...) LOG_TRACE(format " (rsid=%)" __VA_OPT__(,) __VA_ARGS__, impl_->config.log_id)
+#define LINFO(format, ...) LOG_INFO(format " (rsid=%)" __VA_OPT__(,) __VA_ARGS__, impl_->config.log_id)
+#define LWARN(format, ...) LOG_WARN(format " (rsid=%)" __VA_OPT__(,) __VA_ARGS__, impl_->config.log_id)
 
 sync_engine::sync_engine(event_system::event_loop& loop, comm_input& comm, encryption_key_storage& keys, sync_engine_config config)
 : comm_output(loop)

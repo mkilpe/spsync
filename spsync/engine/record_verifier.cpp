@@ -40,11 +40,17 @@ user_change_record_verifier::user_change_record_verifier(encryption_key const& k
 	decryptor_->process_auth(serialisation::asn_der_serialise(rec.data()));
 	// decrypt the header
 	header_ = serialisation::asn_der_deserialise<user_change_header>(decryptor_->process(rec.header().data()));
+
+	data_ = rec.data();
 }
 
 user_change_header user_change_record_verifier::header() const {
 	assert(header_);
 	return *header_;
+}
+
+plain_user_change_data user_change_record_verifier::data() const {
+	return data_;
 }
 
 segment_record_verifier::segment_record_verifier(encryption_key const& key, segment_record const& rec, util::content_auth auth)

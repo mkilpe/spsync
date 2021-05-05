@@ -135,9 +135,11 @@ public:
 	}
 
 	void update_record(chain_block const& rec) {
+		LOG_TRACE("updating record to storage %", to_hex(rec.tag()));
+
 		auto q = db_->prepare(
 			"UPDATE record SET tag = :tag, seq = :seq, hash = :hash, parent_hash = :parent_hash,"
-			" record = :record, unique_seq_selector = :useq);");
+			" record = :record, unique_seq_selector = :useq WHERE key = :k;");
 
 		q.bind(":tag", rec.tag());
 		if(!rec.parent_hash().empty()) {
@@ -149,6 +151,7 @@ public:
 		q.bind(":hash", rec.hash());
 		q.bind(":record", serialisation::asn_der_serialise(rec));
 		q.bind(":useq");
+		q.bind(":k", record_key_);
 
 		q.execute();
 	}

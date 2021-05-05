@@ -60,8 +60,12 @@ public:
 
 	/// Returns the decrypted header from the record
 	user_change_header header() const;
+
+	/// Returns the plain user change data from the record
+	plain_user_change_data data() const;
 private:
 	std::optional<user_change_header> header_;
+	plain_user_change_data data_;
 };
 
 /**

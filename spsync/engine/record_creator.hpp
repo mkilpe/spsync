@@ -41,6 +41,8 @@ public:
 	/// Returns the ready data_change_record, it can be called only once as it will move content
 	auth_record<data_change_record> result();
 
+	/// Add the data structures (e.g. from verifier)
+	void add_change(data_change_header, plain_single_change_data);
 private:
 	std::deque<single_change> changes_;
 };
@@ -60,10 +62,11 @@ public:
 	/// Returns the ready user_change_record, it can be called only once as it will move content
 	auth_record<user_change_record> result();
 
+	/// Set the data in one go (e.g. from verifier)
+	void set_data(user_change_header, plain_user_change_data);
 private:
 	plain_user_change_data plain_record_;
-	metadata meta_;
-	user_change_info info_;
+	user_change_header header_;
 };
 
 /**

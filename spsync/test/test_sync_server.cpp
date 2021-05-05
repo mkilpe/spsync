@@ -80,8 +80,8 @@ request_handle test_sync_server_client::fetch_data(sequence_number record) {
 request_handle test_sync_server_client::commit_record(record_handle h) {
 	assert(output_ && server_);
 	request_handle ret = ++req_handle;
-	events_.push_back([=] {
-			auto commit_result = server_->sync.commit_block(h->record());
+	events_.push_back([=, record = h->record()] {
+			auto commit_result = server_->sync.commit_block(record);
 			output_->on_commit_response(ret, commit_response{server_->sync.current_sequence_number(), commit_result});
 	});
 	return ret;
@@ -135,10 +135,12 @@ void test_sync_context::disconnect_client(int n) {
 }
 
 bool test_sync_context::handle_events() {
+	LOG_INFO("handle_events start");
 	bool ret = false;
 	for(auto&& v : clients) {
 		ret |= v->io.handle_events();
 	}
+	LOG_INFO("handle_events end");
 	return ret;
 }
 

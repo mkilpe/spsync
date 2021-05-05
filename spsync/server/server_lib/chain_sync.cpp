@@ -43,7 +43,7 @@ chain_block chain_sync::set_and_save_block(chain_block block) {
 	} else if(current_record_ == rec_type::special) {
 		last_user_change_or_segment_ = block.sequence();
 	}
-	LOG_TRACE("committed block [block id=(%,%), tag=%, current_type=%] (%)", last_block_.sequence, to_hex(last_block_.hash), to_hex(block.tag()), int(current_record_), config_.log_id);
+	LOG_TRACE("committed block [block id=(%,%), tag=%, current_type=%] (rsid=%)", last_block_.sequence, to_hex(last_block_.hash), to_hex(block.tag()), int(current_record_), config_.log_id);
 	return block;
 }
 
@@ -64,7 +64,7 @@ error chain_sync::check_rules_add(data_change_record const& rec, single_change c
 
 	if(config_.mode == sync_mode::require_all_seen) {
 		if(rec.last_seen_block() != last_block_) {
-			LOG_TRACE("out of sync [(%,%) != (%,%) (%)"
+			LOG_TRACE("out of sync [(%,%) != (%,%) (rsid=%)"
 				, last_block_.sequence, to_hex(last_block_.hash), rec.last_seen_block().sequence, to_hex(rec.last_seen_block().hash), config_.log_id);
 			err = make_error(protocol::errc::record_out_of_sync);
 		}
@@ -73,7 +73,7 @@ error chain_sync::check_rules_add(data_change_record const& rec, single_change c
 		if(!err && config_.mode == sync_mode::require_data_add_remove_seen) {
 			if(last_data_add_remove_.is_valid() && last_data_add_remove_ > rec.last_seen_block().sequence) {
 				err = make_error(protocol::errc::record_out_of_sync);
-				LOG_TRACE("out of sync (not seen all data adds/removes) [% > % (%)] (%)"
+				LOG_TRACE("out of sync (not seen all data adds/removes) [% > % (%)] (rsid=%)"
 					, last_data_add_remove_, rec.last_seen_block().sequence, to_hex(rec.last_seen_block().hash), config_.log_id);
 			}
 		}
@@ -85,7 +85,7 @@ error chain_sync::check_rules_existing(data_change_record const& rec, single_cha
 	error err;
 	if(config_.mode == sync_mode::require_all_seen) {
 		if(rec.last_seen_block() != last_block_) {
-			LOG_TRACE("out of sync [(%,%) != (%,%) (%)"
+			LOG_TRACE("out of sync [(%,%) != (%,%) (rsid=%)"
 				, last_block_.sequence, to_hex(last_block_.hash), rec.last_seen_block().sequence, to_hex(rec.last_seen_block().hash), config_.log_id);
 			err = make_error(protocol::errc::record_out_of_sync);
 		}
@@ -100,7 +100,7 @@ error chain_sync::check_rules(data_change_record const& rec) const {
 	for(auto it = rec.begin(); it != rec.end() && !err; ++it) {
 		//LOG_TRACE("GGG: % -- %", it->data.id, to_hex(it->data.previous_oid_record_tag));
 		if(!it->data.id.is_valid()) {
-			LOG_TRACE("data id is invalid [id=%] (%)", it->data.id, config_.log_id);
+			LOG_TRACE("data id is invalid [id=%] (rsid=%)", it->data.id, config_.log_id);
 			err = make_error(protocol::errc::invalid_record);
 		} else {
 			auto handle = records_.find_last(it->data.id);
@@ -109,7 +109,7 @@ error chain_sync::check_rules(data_change_record const& rec) const {
 			} else if(handle && handle->tag() == it->data.previous_oid_record_tag) {
 				err = check_rules_existing(rec, *it);
 			} else {
-				LOG_TRACE("previous oid record tag is invalid [oid=%] (%)", to_hex(it->data.previous_oid_record_tag), config_.log_id);
+				LOG_TRACE("previous oid record tag is invalid [oid=%] (rsid=%)", to_hex(it->data.previous_oid_record_tag), config_.log_id);
 				err = make_error(protocol::errc::record_out_of_sync);
 			}
 		}
@@ -122,7 +122,7 @@ error chain_sync::check_rules_special_seen(chain_block_id const& last_seen_block
 	if(config_.mode >= sync_mode::require_special_seen) {
 		if(last_user_change_or_segment_.is_valid() && last_user_change_or_segment_ > last_seen_block.sequence) {
 			err = make_error(protocol::errc::record_out_of_sync);
-			LOG_TRACE("out of sync (not seen all special changes) [% > % (%)] (%)"
+			LOG_TRACE("out of sync (not seen all special changes) [% > % (%)] (rsid=%)"
 				, last_user_change_or_segment_, last_seen_block.sequence, to_hex(last_seen_block.hash), config_.log_id);
 		}
 	}
@@ -135,7 +135,7 @@ error chain_sync::check_rules(user_change_record const& rec) const {
 	if(config_.mode == sync_mode::require_all_seen) {
 		if(rec.last_seen_block() != last_block_) {
 			err = make_error(protocol::errc::record_out_of_sync);
-			LOG_TRACE("out of sync [(%,%) != (%,%) (%)"
+			LOG_TRACE("out of sync [(%,%) != (%,%) (rsid=%)"
 				, last_block_.sequence, to_hex(last_block_.hash), rec.last_seen_block().sequence, to_hex(rec.last_seen_block().hash), config_.log_id);
 		}
 	} else {
@@ -150,7 +150,7 @@ error chain_sync::check_rules(segment_record const& rec) const {
 	if(config_.mode >= sync_mode::require_special_seen) {
 		if(rec.last_seen_block() != last_block_) {
 			err = make_error(protocol::errc::record_out_of_sync);
-			LOG_TRACE("out of sync [(%,%) != (%,%) (%)"
+			LOG_TRACE("out of sync [(%,%) != (%,%) (rsid=%)"
 				, last_block_.sequence, to_hex(last_block_.hash), rec.last_seen_block().sequence, to_hex(rec.last_seen_block().hash), config_.log_id);
 		}
 	}
@@ -158,6 +158,7 @@ error chain_sync::check_rules(segment_record const& rec) const {
 }
 
 util::result<chain_block> chain_sync::commit_block(chain_block const& block) {
+	LOG_TRACE("commit_block (rsid=%)", config_.log_id);
 	util::result<chain_block> res;
 	try {
 		current_record_ = rec_type::none;
@@ -166,13 +167,13 @@ util::result<chain_block> chain_sync::commit_block(chain_block const& block) {
 			res = set_and_save_block(block);
 		} else {
 			res = err;
-			LOG_WARN("error while processing new block [err=%, block tag=%] (%)", err, to_hex(block.tag()), config_.log_id);
+			LOG_WARN("error while processing new block [err=%, block tag=%] (rsid=%)", err, to_hex(block.tag()), config_.log_id);
 		}
 	} catch(error const& err) {
-		LOG_WARN("exception while processing new block [err=%, block tag=%] (%)", err, to_hex(block.tag()), config_.log_id);
+		LOG_WARN("exception while processing new block [err=%, block tag=%] (rsid=%)", err, to_hex(block.tag()), config_.log_id);
 		res = err;
 	} catch(std::exception const& exp) {
-		LOG_WARN("exception while processing new block [exp=%, block tag=%] (%)", exp.what(), to_hex(block.tag()), config_.log_id);
+		LOG_WARN("exception while processing new block [exp=%, block tag=%] (rsid=%)", exp.what(), to_hex(block.tag()), config_.log_id);
 		res = make_error(securepath::errc::exception_occurred);
 	}
 	return res;

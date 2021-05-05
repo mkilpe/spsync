@@ -347,4 +347,29 @@ TEST_CASE("record_storage pending commits", "[unit]") {
 	CHECK(storage.find_first_pending_commit()->tag() == tag_of_second_pending);
 }
 
+
+TEST_CASE("record_storage set record", "[unit]") {
+	//find_first_pending_commit
+	remove_database_test_db();
+	auto db_conn = database::sqlite::create_sqlite_connection(db_name);
+
+	record_storage storage(db_conn);
+	test_block_creator creator;
+
+	// first record needs to be user_change
+	storage.create(creator.test_user_change(), record_state::in_sync);
+	auto creator_copy = creator;
+	auto pending = storage.create(creator_copy.test_data_change(), record_state::pending_commit);
+	auto last_seen = storage.create(creator.test_data_change(), record_state::in_sync);
+
+	auto rec = pending->record().deserialise_to<data_change_record>();
+	rec.set_last_seen_block(last_seen->block_id());
+	chain_block block{rec, content_auth{securepath::test::random_octet_vector(16)}};
+	block.set_sequence_and_parent_hash(last_seen->block_id().sequence + 1, last_seen->block_id().hash);
+	CHECK_NOTHROW(pending->set_record(block));
+
+	// in_sync state record cannot be changed
+	CHECK_THROWS(last_seen->set_record(block));
+}
+
 }
