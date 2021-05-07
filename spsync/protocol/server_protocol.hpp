@@ -7,71 +7,107 @@ namespace securepath::sync::protocol {
 inline namespace v1 {
 
 /// always first packet to negotiate version
-struct server_hello : protocol_base {
-	using protocol_base::protocol_base;
+struct server_hello : reply_base {
+	using reply_base::reply_base;
 
 	int version{current_version};
 
 	template<typename S>
 	void serialise(S& s) {
 		serialisation::sequence<S> seq(s);
-		seq & static_cast<protocol_base&>(*this) & version;
+		seq & static_cast<reply_base&>(*this) & version;
 	}
 };
 
-struct create_storage_reply : storage_request_base {
+struct create_storage_reply : reply_base {
+	using reply_base::reply_base;
+
 	template<typename S>
 	void serialise(S& s) {
 		serialisation::sequence<S> seq(s);
-		seq & static_cast<storage_request_base&>(*this);
+		seq & static_cast<reply_base&>(*this);
 	}
 };
 
-struct destroy_storage_reply : storage_request_base {
+struct destroy_storage_reply : reply_base {
+	using reply_base::reply_base;
+
 	template<typename S>
 	void serialise(S& s) {
 		serialisation::sequence<S> seq(s);
-		seq & static_cast<storage_request_base&>(*this);
+		seq & static_cast<reply_base&>(*this);
 	}
 };
 
-struct storage_management_reply : storage_request_base {
+struct storage_management_reply : reply_base {
+	using reply_base::reply_base;
+
 	template<typename S>
 	void serialise(S& s) {
 		serialisation::sequence<S> seq(s);
-		seq & static_cast<storage_request_base&>(*this);
+		seq & static_cast<reply_base&>(*this);
 	}
 };
 
-struct response_sequence_number : storage_request_base {
+struct response_sequence_number : reply_base {
+	using reply_base::reply_base;
+
+	response_sequence_number(protocol_base const& p, sequence_number seq)
+	: reply_base(p)
+	, sequence(seq)
+	{
+	}
+
+	sequence_number sequence;
+
 	template<typename S>
 	void serialise(S& s) {
 		serialisation::sequence<S> seq(s);
-		seq & static_cast<storage_request_base&>(*this);
+		seq & static_cast<reply_base&>(*this) & sequence;
 	}
 };
 
-struct response_records : storage_request_base {
+struct response_records : reply_base {
+	using reply_base::reply_base;
+
+	response_records(protocol_base const& p, std::deque<chain_block> blocks)
+	: reply_base(p)
+	, records(std::move(blocks))
+	{}
+
+	std::deque<chain_block> records;
+
 	template<typename S>
 	void serialise(S& s) {
 		serialisation::sequence<S> seq(s);
-		seq & static_cast<storage_request_base&>(*this);
+		seq & static_cast<reply_base&>(*this) & records;
 	}
 };
 
-struct response_data : storage_request_base {
+struct response_data : reply_base {
+	using reply_base::reply_base;
+
 	template<typename S>
 	void serialise(S& s) {
 		serialisation::sequence<S> seq(s);
-		seq & static_cast<storage_request_base&>(*this);
+		seq & static_cast<reply_base&>(*this);
 	}
 };
 
-struct response_commit : storage_request_base {
+struct response_commit : reply_base {
+	using reply_base::reply_base;
+
+	response_commit(protocol_base const& p, chain_block r)
+	: reply_base(p)
+	, record(std::move(r))
+	{}
+
+	std::optional<chain_block> record;
+
 	template<typename S>
 	void serialise(S& s) {
 		serialisation::sequence<S> seq(s);
-		seq & static_cast<storage_request_base&>(*this);
+		seq & static_cast<reply_base&>(*this) & record;
 	}
 };
 

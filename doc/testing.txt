@@ -4,6 +4,8 @@
 
 * four kind of tests:
 	- normal unit/system tests (divide by unit and system tests by tag? tags [unit] [system])
+		- unit tests should never fail due to out side conditions
+		- system tests might fail because of set-up, for example networking
 	- security related tests (flip a bit in crypto etc) tag: [security]
 	- stress tests (randomised timing/input/output, might run indefinitely) tag: [stress]
 	- performance tests (decide/record baseline and make test of the most important things based on that) tag: [performance]

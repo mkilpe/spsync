@@ -25,6 +25,7 @@ public:
 	storage_server(network::context, storage_server_params = {});
 	~storage_server();
 
+	void start();
 	void close();
 private:
 	class impl;

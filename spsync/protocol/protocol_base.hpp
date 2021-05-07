@@ -3,6 +3,7 @@
 
 #include "types.hpp"
 
+#include <securepath/network/net_error.hpp>
 #include <securepath/util/typelist.hpp>
 #include <securepath/serialisation/choice.hpp>
 #include <securepath/serialisation/sequence.hpp>
@@ -44,6 +45,26 @@ struct storage_request_base : protocol_base {
 	void serialise(S& s) {
 		serialisation::sequence<S> seq(s);
 		seq & static_cast<protocol_base&>(*this) & sid;
+	}
+};
+
+/// common data for all replies
+struct reply_base : protocol_base {
+	reply_base(protocol_base const& p, securepath::error err = {})
+	: reply_base(p.cid, std::move(err))
+	{}
+
+	reply_base(call_id cid = 0, securepath::error err = {})
+	: protocol_base(cid)
+	, error(std::move(err))
+	{}
+
+	network::net_error error;
+
+	template<typename S>
+	void serialise(S& s) {
+		serialisation::sequence<S> seq(s);
+		seq & static_cast<protocol_base&>(*this) & error;
 	}
 };
 

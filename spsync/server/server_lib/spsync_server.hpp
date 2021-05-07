@@ -15,8 +15,10 @@ struct spsync_server_params
 class spsync_server {
 public:
 	spsync_server(spsync_server_params params);
+	~spsync_server();
 
 	int run_and_wait();
+	void close();
 
 private:
 	spsync_server_params params_;

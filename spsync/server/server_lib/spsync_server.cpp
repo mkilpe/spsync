@@ -14,8 +14,18 @@ spsync_server::spsync_server(spsync_server_params params)
 		});
 }
 
+spsync_server::~spsync_server() {
+	close();
+}
+
 int spsync_server::run_and_wait() {
-	return 0;
+	storage_server_.start();
+	return key_server_.run_and_wait();
+}
+
+void spsync_server::close() {
+	storage_server_.close();
+	key_server_.close();
 }
 
 }

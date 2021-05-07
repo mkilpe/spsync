@@ -8,6 +8,11 @@
 
 #include <spsync/test/test_block_creator.hpp>
 
+// + (1) basic test for committing with 'all seen' mode
+// + (2) basic test for committing with 'allow all' mode
+// + (3) basic test for committing with 'require special' mode
+// + (4) basic test for committing with 'require object add/remove' mode
+
 namespace securepath::sync {
 
 using test::test_block_creator;
@@ -17,14 +22,7 @@ static void remove_database_test_db() {
 	std::remove(db_name.c_str());
 }
 
-/*
-enum class sync_mode {
-	allow_all,
-	require_special_seen,
-	require_data_add_remove_seen,
-	require_all_seen
-}; chain_sync_config*/
-
+// (1) basic test for committing with 'all seen' mode
 TEST_CASE("chain_sync require all config", "[unit]") {
 	remove_database_test_db();
 	chain_sync sync(database::sqlite::create_sqlite_connection(db_name), chain_sync_config{sync_mode::require_all_seen});
@@ -62,7 +60,7 @@ TEST_CASE("chain_sync require all config", "[unit]") {
 	CHECK(sync.get_records(sequence_number{1}, sequence_number{100}).size() == creator.last_server_seq.value);
 }
 
-
+// (2) basic test for committing with 'allow all' mode
 TEST_CASE("chain_sync allow all config", "[unit]") {
 	remove_database_test_db();
 	chain_sync sync(database::sqlite::create_sqlite_connection(db_name), chain_sync_config{sync_mode::allow_all});
@@ -92,7 +90,7 @@ TEST_CASE("chain_sync allow all config", "[unit]") {
 	}
 }
 
-
+// (3) basic test for committing with 'require special' mode
 TEST_CASE("chain_sync require special config", "[unit]") {
 	remove_database_test_db();
 	chain_sync sync(database::sqlite::create_sqlite_connection(db_name), chain_sync_config{sync_mode::require_special_seen});
@@ -129,7 +127,7 @@ TEST_CASE("chain_sync require special config", "[unit]") {
 	}
 }
 
-
+// (4) basic test for committing with 'require object add/remove' mode
 TEST_CASE("chain_sync require data add remove config", "[unit]") {
 	remove_database_test_db();
 	chain_sync sync(database::sqlite::create_sqlite_connection(db_name), chain_sync_config{sync_mode::require_data_add_remove_seen});

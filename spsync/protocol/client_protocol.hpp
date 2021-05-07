@@ -41,8 +41,6 @@ struct client_hello : protocol_base {
 struct create_storage : storage_request_base {
 	using storage_request_base::storage_request_base;
 
-	//chain_block initial_record;
-
 	template<typename S>
 	void serialise(S& s) {
 		serialisation::sequence<S> seq(s);

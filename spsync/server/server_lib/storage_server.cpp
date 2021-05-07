@@ -3,6 +3,7 @@
 #include "connection.hpp"
 #include "storage.hpp"
 
+#include <spsync/protocol/error.hpp>
 #include <spsync/protocol/server_protocol.hpp>
 
 #include <securepath/network/encryption/encrypted_server.hpp>
@@ -24,8 +25,10 @@ public:
 	storage_server_client(
 		network::context& c,
 		std::shared_ptr<network::encrypted_server> server,
-		network::handshake_data hdata)
+		network::handshake_data hdata,
+		storage_server_context& context)
 	: encrypted_connection(c, std::move(hdata), server)
+	, connection(context)
 	{
 		LOG_TRACE("constructing storage_server_client %", this);
 	}
@@ -39,17 +42,26 @@ public:
 	}
 
 	virtual void close() override {
+		terminate(securepath::error());
+	}
+
+	void terminate(securepath::error const& err) {
 		encrypted_connection::close();
-		on_disconnected(securepath::error());
+		on_disconnected(err);
 	}
 
 	virtual void on_connected() override {
 		auto key_id = remote_key_id();
 		if(key_id) {
-			connection::on_connect(*key_id);
+			auto err = connection::on_connect(*key_id);
+			if(err) {
+				//on_connect failed, lets close, maybe client is too old version
+				LOG_INFO("failed to connect, closing connection...");
+				terminate(err);
+			}
 		} else {
 			LOG_WARN("no client key set, closing connection...");
-			close();
+			terminate(make_error(protocol::errc::invalid_client_key));
 		}
 	}
 
@@ -62,7 +74,11 @@ public:
 	}
 
 	virtual void on_received(octet_span s) override {
-		deser_.handle(s, std::ref(*this));
+		try {
+			deser_.handle(s, std::ref(*this));
+		} catch(...) {
+			LOG_WARN("unknown exception while handing network packet");
+		}
 	}
 
 	void operator()(protocol::client_hello const& p) {
@@ -87,6 +103,7 @@ private:
 
 class storage_server::impl
 	: public network::encrypted_server
+	, public storage_server_context
 {
 public:
 	impl(network::context context, storage_server_params params)
@@ -103,21 +120,31 @@ public:
 	}
 
 	virtual std::shared_ptr<network::encrypted_connection> create_connection() override {
-		return std::make_shared<storage_server_client>(context_, shared_from_this(), handshake_data_);
+		return std::make_shared<storage_server_client>(context_, shared_from_this(), handshake_data_, *this);
 	}
 
 	virtual void on_accept(std::shared_ptr<network::encrypted_connection> const&) override {
 
 	}
 
-	std::shared_ptr<storage> acquire_sync(protocol::storage_id const& id) {
+	virtual std::shared_ptr<storage> acquire_sync(protocol::storage_id const& id) override {
 		std::unique_lock lock{mutex_};
-		return nullptr;
+		auto it = storages_.find(id);
+		if(it == storages_.end()) {
+			LOG_TRACE("creating storage object (id=%)", to_hex(id));
+			std::shared_ptr<storage> p = std::make_shared<storage>(id, default_storage_config_);
+			it = storages_.emplace(id, std::move(p)).first;
+		}
+		return it->second;
 	}
 
-	void release_sync(std::shared_ptr<storage> storage) {
+	virtual void release_sync(std::shared_ptr<storage> storage) override {
 		std::unique_lock lock{mutex_};
-
+		if(storage.use_count() == 1) {
+			LOG_TRACE("destroying storage object (id=%)", to_hex(storage->id()));
+			storages_.erase(storage->id());
+			storage.reset();
+		}
 	}
 
 public:
@@ -126,6 +153,7 @@ public:
 	network::context& context_;
 	network::handshake_data handshake_data_;
 	std::map<protocol::storage_id, std::shared_ptr<storage>> storages_;
+	storage_config default_storage_config_;
 };
 
 
@@ -140,8 +168,13 @@ storage_server::~storage_server()
 	close();
 }
 
+void storage_server::start() {
+	impl_->start(impl_->params_.create_storage_server_endpoint());
+}
+
 void storage_server::close() {
 	impl_->close();
 }
 
 }
+
