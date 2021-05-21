@@ -8,7 +8,7 @@
 --- phase 1 (minimal working state with single change (initial) per oid)
 * server
 - client networking
-* internal conflicting record handling when committing to server
++ internal conflicting record handling when committing to server (out of sync handling)
 - multichat PoC
 
 

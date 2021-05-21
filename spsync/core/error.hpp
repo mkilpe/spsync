@@ -1,4 +1,4 @@
-#ifndef SPSYNC_CORE_ERROR_HEADER
+F#ifndef SPSYNC_CORE_ERROR_HEADER
 #define SPSYNC_CORE_ERROR_HEADER
 
 #include <securepath/util/error.hpp>
