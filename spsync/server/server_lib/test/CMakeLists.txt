@@ -1,1 +1,1 @@
-add_sp_test_application(test_spsync_server_lib spsync_server_lib)
+add_sp_test_application(test_spsync_server_lib network_test_support spsync_server_lib key_client_lib client_common)

@@ -7,14 +7,15 @@
 namespace securepath::sync {
 
 struct spsync_server_params
-	: key_server::unknown_user_key_server_params
-	, storage_server_params
 {
+	key_server::unknown_user_key_server_params key_params;
+	storage_server_params storage_params;
 };
 
 class spsync_server {
 public:
-	spsync_server(spsync_server_params params);
+	explicit spsync_server(spsync_server_params params);
+	spsync_server(network::context& context, spsync_server_params params);
 	~spsync_server();
 
 	int run_and_wait();
@@ -23,7 +24,7 @@ public:
 private:
 	spsync_server_params params_;
 	key_server::unknown_user_key_server key_server_;
-	network::context storage_context_;
+	std::optional<network::context> storage_context_store_;
 	storage_server storage_server_;
 };
 

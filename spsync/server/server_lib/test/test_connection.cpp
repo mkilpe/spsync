@@ -5,6 +5,8 @@
 #include <securepath/test_frame/test_serialisation.hpp>
 #include <securepath/test_frame/test_utils.hpp>
 #include <securepath/database/sqlite/connection.hpp>
+#include <securepath/network/test/support/testing_context.hpp>
+#include <infrastructure/key_client_lib/unknown_user_key_client.hpp>
 
 #include <future>
 
@@ -12,12 +14,14 @@
 
 namespace securepath::sync {
 namespace {
-class test_server
+class test_server : public network::test::testing_context
 {
 public:
 	test_server()
 	: server_(params_)
 	{
+		set_server_dh_parameters();
+		set_server_pk_parameters();
 	}
 
 	~test_server() {
@@ -50,6 +54,9 @@ private:
 
 TEST_CASE("connection test", "[system]") {
 	test_server server;
+
+	key_client::unknown_user_key_client key_client(server.client_context);
+	key_client.register_key(server.client_private_data.my_private_key()->public_key());
 }
 
 }

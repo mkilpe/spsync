@@ -1,0 +1,12 @@
+
+Network interaction:
+	1. client public key handling (register_key for server et al)
+	2. storage handling (create/destroy storages etc)
+	3. per storage communication (comm interface)
+
+client
+ -> multiple spsync server clients
+   -> public key handling
+      multiple physical connection to server
+        -> storage handling
+           many storage communication connections
