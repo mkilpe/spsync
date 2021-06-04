@@ -1,18 +1,10 @@
 #include "comm.hpp"
 
-#include <securepath/network/encryption/encrypted_connection.hpp>
+#include <spsync/protocol/error.hpp>
 
 namespace securepath::sync {
 
-struct comm::impl {
-	impl()
-	{}
-
-	comm_output* output{};
-};
-
 comm::comm()
-: impl_(std::make_unique<impl>())
 {
 }
 
@@ -20,8 +12,74 @@ comm::~comm()
 {
 }
 
-void comm::set_output(comm_output& out) {
-	impl_->output = &out;
+void comm::set_output(event_system::event_handler& handler) {
+	output_ = &handler;
+}
+
+
+void comm::on_connected() {
+	assert(output_);
+	output_->emit<comm_events::on_connected>();
+}
+
+void comm::on_disconnected(error const& err) {
+	assert(output_);
+	std::optional<error> opt_err;
+	if(err) {
+		opt_err = err;
+	}
+	output_->emit<comm_events::on_disconnected>(opt_err);
+}
+
+void comm::handle(protocol::response_sequence_number const& p) {
+	assert(output_);
+	result<sequence_number> arg;
+	if(p.error) {
+		arg = result<sequence_number>{protocol::to_error(p.error)};
+	} else {
+		arg = result<sequence_number>{p.sequence};
+	}
+	output_->emit<comm_events::on_sequence_number_response>(p.cid, std::move(arg));
+}
+
+void comm::handle(protocol::response_records const& p) {
+	assert(output_);
+	record_response arg;
+	if(p.error) {
+		arg.data = result<std::deque<chain_block>>{protocol::to_error(p.error)};
+	} else {
+		arg.data = result<std::deque<chain_block>>{p.records};
+	}
+	arg.requested_max = p.requested_max;
+	arg.server_max_sequence = p.server_max_sequence;
+
+	output_->emit<comm_events::on_record_response>(p.cid, std::move(arg));
+}
+
+void comm::handle(protocol::response_commit const& p) {
+	assert(output_);
+	commit_response arg;
+	if(p.error) {
+		arg.data = result<chain_block>{protocol::to_error(p.error)};
+	} else {
+		if(p.record) {
+			arg.data = result<chain_block>{*p.record};
+		} else {
+			arg.data = result<chain_block>{make_error(securepath::errc::unknown_error)};
+		}
+	}
+	arg.server_max_sequence = p.server_max_sequence;
+
+	output_->emit<comm_events::on_commit_response>(p.cid, std::move(arg));
+}
+
+void comm::handle(protocol::response_data const& p) {
+	assert(output_);
+}
+
+void comm::handle(protocol::notify_record const& p) {
+	assert(output_);
+	output_->emit<comm_events::on_record_received>(p.record);
 }
 
 request_handle comm::fetch_sequence_number() {
@@ -44,11 +102,11 @@ request_handle comm::commit_record(record_handle) {
 	return request_handle{};
 }
 
-sync::progress& comm::progress() {
+sync::progress& comm::progress() const {
 	assert(0);
 }
 
-record_storage& comm::records() {
+record_storage& comm::records() const {
 	assert(0);
 }
 

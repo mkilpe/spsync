@@ -8,6 +8,7 @@
 #include <securepath/serialisation/choice.hpp>
 #include <securepath/serialisation/sequence.hpp>
 #include <securepath/serialisation/vector.hpp>
+#include <securepath/serialisation/deque.hpp>
 
 namespace securepath::sync::protocol {
 inline namespace v1 {
@@ -51,20 +52,26 @@ struct storage_request_base : protocol_base {
 /// common data for all replies
 struct reply_base : protocol_base {
 	reply_base(protocol_base const& p, securepath::error err = {})
-	: reply_base(p.cid, std::move(err))
+	: reply_base(p.cid, {}, std::move(err))
 	{}
 
-	reply_base(call_id cid = 0, securepath::error err = {})
+	reply_base(storage_request_base const& p, securepath::error err = {})
+	: reply_base(p.cid, p.sid, std::move(err))
+	{}
+
+	reply_base(call_id cid = 0, storage_id sid = {}, securepath::error err = {})
 	: protocol_base(cid)
+	, sid(std::move(sid))
 	, error(std::move(err))
 	{}
 
+	storage_id sid;
 	network::net_error error;
 
 	template<typename S>
 	void serialise(S& s) {
 		serialisation::sequence<S> seq(s);
-		seq & static_cast<protocol_base&>(*this) & error;
+		seq & static_cast<protocol_base&>(*this) & sid & error;
 	}
 };
 

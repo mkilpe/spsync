@@ -11,7 +11,7 @@
 
 namespace securepath::sync {
 
-asio::ip::tcp::endpoint storage_server_params::create_storage_server_endpoint() const {
+asio::ip::tcp::endpoint storage_server_params::create_endpoint() const {
 	return storage_server_endpoint.value_or(asio::ip::tcp::endpoint(asio::ip::address_v4::any(), storage_server_port));
 }
 
@@ -51,18 +51,11 @@ public:
 	}
 
 	virtual void on_connected() override {
-		auto key_id = remote_key_id();
-		if(key_id) {
-			auto err = connection::on_connect(*key_id);
-			if(err) {
-				//on_connect failed, lets close, maybe client is too old version
-				LOG_INFO("failed to connect, closing connection...");
-				terminate(err);
-			}
-		} else {
+		if(!remote_key_id()) {
 			LOG_WARN("no client key set, closing connection...");
 			terminate(make_error(protocol::errc::invalid_client_key));
 		}
+		// if key was set, we are waiting to receive client_hello next
 	}
 
 	virtual void on_disconnected(securepath::error const& error) override {
@@ -77,14 +70,24 @@ public:
 		try {
 			deser_.handle(s, std::ref(*this));
 		} catch(...) {
-			LOG_WARN("unknown exception while handing network packet");
+			LOG_WARN("unknown exception while handling network packet");
 		}
 	}
 
 	void operator()(protocol::client_hello const& p) {
 		LOG_INFO("client version: %", p.version);
-		//t: check the version et al
-		connection_good_ = true;
+		auto key_id = remote_key_id();
+		assert(key_id);
+		auto err = connection::on_connect(p, *key_id);
+		if(err) {
+			//on_connect failed, lets close, maybe client is too old version
+			LOG_INFO("failed to connect, closing connection...");
+			terminate(err);
+		} else {
+			//all good
+			connection_good_ = true;
+			LOG_TRACE("client connection successfully connected (%)", *key_id);
+		}
 	}
 
 	template<typename T>
@@ -93,6 +96,7 @@ public:
 			this->handle(p);
 		} else {
 			LOG_WARN("packets before client_hello received");
+			terminate(make_error(protocol::errc::invalid_client_key));
 		}
 	}
 
@@ -106,7 +110,7 @@ class storage_server::impl
 	, public storage_server_context
 {
 public:
-	impl(network::context context, storage_server_params params)
+	impl(network::context& context, storage_server_params params)
 	: encrypted_server(context)
 	, params_(std::move(params))
 	, context_(context)
@@ -157,8 +161,8 @@ public:
 };
 
 
-storage_server::storage_server(network::context context, storage_server_params params)
-: impl_(std::make_unique<impl>(context, params))
+storage_server::storage_server(network::context& context, storage_server_params params)
+: impl_(std::make_shared<impl>(context, params))
 {
 }
 
@@ -169,7 +173,7 @@ storage_server::~storage_server()
 }
 
 void storage_server::start() {
-	impl_->start(impl_->params_.create_storage_server_endpoint());
+	impl_->start(impl_->params_.create_endpoint());
 }
 
 void storage_server::close() {

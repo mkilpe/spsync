@@ -52,7 +52,7 @@ struct storage_management_reply : reply_base {
 struct response_sequence_number : reply_base {
 	using reply_base::reply_base;
 
-	response_sequence_number(protocol_base const& p, sequence_number seq)
+	response_sequence_number(storage_request_base const& p, sequence_number seq)
 	: reply_base(p)
 	, sequence(seq)
 	{
@@ -70,17 +70,21 @@ struct response_sequence_number : reply_base {
 struct response_records : reply_base {
 	using reply_base::reply_base;
 
-	response_records(protocol_base const& p, std::deque<chain_block> blocks)
+	response_records(storage_request_base const& p, sequence_number rmax, sequence_number smax, std::deque<chain_block> blocks)
 	: reply_base(p)
+	, requested_max(rmax)
+	, server_max_sequence(smax)
 	, records(std::move(blocks))
 	{}
 
+	sequence_number requested_max;
+	sequence_number server_max_sequence;
 	std::deque<chain_block> records;
 
 	template<typename S>
 	void serialise(S& s) {
 		serialisation::sequence<S> seq(s);
-		seq & static_cast<reply_base&>(*this) & records;
+		seq & static_cast<reply_base&>(*this) & requested_max & server_max_sequence & records;
 	}
 };
 
@@ -97,17 +101,35 @@ struct response_data : reply_base {
 struct response_commit : reply_base {
 	using reply_base::reply_base;
 
-	response_commit(protocol_base const& p, chain_block r)
+	response_commit(storage_request_base const& p, sequence_number max, chain_block r)
 	: reply_base(p)
+	, server_max_sequence(max)
 	, record(std::move(r))
 	{}
 
+	sequence_number server_max_sequence;
 	std::optional<chain_block> record;
 
 	template<typename S>
 	void serialise(S& s) {
 		serialisation::sequence<S> seq(s);
-		seq & static_cast<reply_base&>(*this) & record;
+		seq & static_cast<reply_base&>(*this) & server_max_sequence & record;
+	}
+};
+
+struct notify_record {
+	notify_record(storage_id sid = {}, chain_block r = {})
+	: sid(std::move(sid))
+	, record(std::move(r))
+	{}
+
+	storage_id sid;
+	chain_block record;
+
+	template<typename S>
+	void serialise(S& s) {
+		serialisation::sequence<S> seq(s);
+		seq & sid & record;
 	}
 };
 
@@ -120,7 +142,8 @@ using s2c_types =
 			type_tag<response_sequence_number, 5>,
 			type_tag<response_records, 6>,
 			type_tag<response_data, 7>,
-			type_tag<response_commit, 8> >;
+			type_tag<response_commit, 8>,
+			type_tag<notify_record, 9> >;
 
 }
 }

@@ -17,19 +17,19 @@ struct storage_server_params {
 	/// this will override the above port if set
 	std::optional<asio::ip::tcp::endpoint> storage_server_endpoint;
 
-	asio::ip::tcp::endpoint create_storage_server_endpoint() const;
+	asio::ip::tcp::endpoint create_endpoint() const;
 };
 
 class storage_server {
 public:
-	storage_server(network::context, storage_server_params = {});
+	storage_server(network::context&, storage_server_params = {});
 	~storage_server();
 
 	void start();
 	void close();
 private:
 	class impl;
-	std::unique_ptr<impl> impl_;
+	std::shared_ptr<impl> impl_;
 };
 
 }

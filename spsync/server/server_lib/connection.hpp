@@ -15,8 +15,9 @@ public:
 	connection(storage_server_context&);
 	virtual ~connection() = default;
 
-	securepath::error on_connect(crypto::public_key_id id);
+	securepath::error on_connect(protocol::client_hello const& p, crypto::public_key_id id);
 
+	// the client_hello is handled in storage_server.cpp
 	void handle(protocol::create_storage const&);
 	void handle(protocol::destroy_storage const&);
 	void handle(protocol::storage_management const&);
@@ -27,12 +28,12 @@ public:
 
 private:
 	virtual void send(octet_span s) = 0;
-	template<typename T>
-	void send(T const& p);
+	template<typename T> void send_packet(T const& p);
 private:
 	storage_server_context& context_;
 	crypto::public_key_id id_;
 	std::map<protocol::storage_id, std::shared_ptr<storage>> syncs_;
+	bool hello_done_{};
 };
 
 }

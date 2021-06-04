@@ -27,7 +27,9 @@ spsync_server::~spsync_server() {
 }
 
 int spsync_server::run_and_wait() {
+	LOG_INFO("Starting spsync server (%, %)", params_.key_params.create_endpoint(), params_.storage_params.create_endpoint());
 	storage_server_.start();
+	LOG_INFO("starting key server next...");
 	return key_server_.run_and_wait();
 }
 

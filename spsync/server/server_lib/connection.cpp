@@ -13,14 +13,14 @@ connection::connection(storage_server_context& c)
 }
 
 template<typename T>
-void connection::send(T const& p) {
+void connection::send_packet(T const& p) {
 	send(serialisation::asn_der_serialise_choice<protocol::s2c_types>(p));
 }
 
-securepath::error connection::on_connect(crypto::public_key_id id) {
+securepath::error connection::on_connect(protocol::client_hello const& p, crypto::public_key_id id) {
 	id_ = std::move(id);
 	//t: see access
-	send(protocol::server_hello{});
+	send_packet(protocol::server_hello{p});
 
 	// no error
 	return securepath::error();
@@ -37,17 +37,17 @@ void connection::handle(protocol::create_storage const& p) {
 		LOG_WARN("exception while creating storage: %", ex);
 		error = make_error(securepath::errc::unknown_error);
 	}
-	send(protocol::create_storage_reply{p, std::move(error)});
+	send_packet(protocol::create_storage_reply{p, std::move(error)});
 }
 
 void connection::handle(protocol::destroy_storage const& p) {
 	//t: implement
-	send(protocol::destroy_storage_reply{p, make_error(securepath::errc::not_implemented)});
+	send_packet(protocol::destroy_storage_reply{p, make_error(securepath::errc::not_implemented)});
 }
 
 void connection::handle(protocol::storage_management const& p) {
 	//t: implement
-	send(protocol::storage_management_reply{p, make_error(securepath::errc::not_implemented)});
+	send_packet(protocol::storage_management_reply{p, make_error(securepath::errc::not_implemented)});
 }
 
 void connection::handle(protocol::request_sequence_number const& p) {
@@ -68,19 +68,21 @@ void connection::handle(protocol::request_sequence_number const& p) {
 		error = make_error(securepath::errc::unknown_error);
 	}
 	if(error) {
-		send(protocol::response_sequence_number{p, error});
+		send_packet(protocol::response_sequence_number{p, error});
 	} else {
-		send(protocol::response_sequence_number{p, seq});
+		send_packet(protocol::response_sequence_number{p, seq});
 	}
 }
 
 void connection::handle(protocol::request_records const& p) {
 	securepath::error error;
 	std::deque<chain_block> records;
+	sequence_number server_max;
 	try {
 		auto it = syncs_.find(p.sid);
 		if(it != syncs_.end()) {
 			records = it->second->get_records(p.start, p.end);
+			server_max = it->second->current_sequence_number();
 		} else {
 			error = make_error(protocol::errc::no_such_storage);
 		}
@@ -92,24 +94,26 @@ void connection::handle(protocol::request_records const& p) {
 		error = make_error(securepath::errc::unknown_error);
 	}
 	if(error) {
-		send(protocol::response_records{p, std::move(error)});
+		send_packet(protocol::response_records{p, std::move(error)});
 	} else {
-		send(protocol::response_records{p, std::move(records)});
+		send_packet(protocol::response_records{p, p.end, server_max, std::move(records)});
 	}
 }
 
 void connection::handle(protocol::request_data const& p) {
 	//t: implement
-	send(protocol::response_data{p, make_error(securepath::errc::not_implemented)});
+	send_packet(protocol::response_data{p, make_error(securepath::errc::not_implemented)});
 }
 
 void connection::handle(protocol::request_commit const& p) {
 	securepath::error error;
 	util::result<chain_block> result;
+	sequence_number server_max;
 	try {
 		auto it = syncs_.find(p.sid);
 		if(it != syncs_.end()) {
 			result = it->second->commit_block(p.record);
+			server_max = it->second->current_sequence_number();
 		} else {
 			result = make_error(protocol::errc::no_such_storage);
 		}
@@ -121,9 +125,9 @@ void connection::handle(protocol::request_commit const& p) {
 		result = make_error(securepath::errc::unknown_error);
 	}
 	if(result) {
-		send(protocol::response_commit{p, std::move(result.value())});
+		send_packet(protocol::response_commit{p, server_max, std::move(result.value())});
 	} else {
-		send(protocol::response_commit{p, std::move(result.get_error())});
+		send_packet(protocol::response_commit{p, std::move(result.get_error())});
 	}
 }
 

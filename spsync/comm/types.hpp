@@ -19,8 +19,11 @@ using util::result;
 using request_handle = std::uint32_t;
 
 struct record_response {
+	/// the biggest sequence that was returned
 	sequence_number requested_max;
+	/// the biggest sequence on the server, this combined with the previous one can be used to query records in chunks
 	sequence_number server_max_sequence;
+	/// returned chain blocks, notice that the server will return some maximum amount of records at once
 	result<std::deque<chain_block>> data;
 };
 

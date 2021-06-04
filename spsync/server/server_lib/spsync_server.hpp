@@ -8,7 +8,7 @@ namespace securepath::sync {
 
 struct spsync_server_params
 {
-	key_server::unknown_user_key_server_params key_params;
+	key_server::unknown_user_key_server_params key_params{.port=key_server::default_unknown_user_key_server_port};
 	storage_server_params storage_params;
 };
 

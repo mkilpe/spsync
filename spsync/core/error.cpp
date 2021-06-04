@@ -14,7 +14,7 @@ namespace {
 	static_assert(sizeof(errors)/sizeof(*errors)
 		 == static_cast<int>(errc::end_of_list)-start_value, "wrong number of errors");
 
-	using category_type = error_category<errc, errc::no_encryption_key_set, errc::end_of_list>;
+	using category_type = def_error_category<errc, errc::no_encryption_key_set, errc::end_of_list>;
 
 	category_type& err_cat() {
 		static category_type cat("spsync error", errors);

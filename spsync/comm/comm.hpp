@@ -2,6 +2,7 @@
 #define SPSYNC_COMM_COMM_HEADER
 
 #include "interface.hpp"
+#include <spsync/protocol/server_protocol.hpp>
 
 #include <memory>
 
@@ -15,21 +16,30 @@ public:
 	comm();
 	~comm();
 
-	/// Set the comm_output interface which is used to communicate with higher layer
-	void set_output(comm_output&);
+	void set_output(event_system::event_handler&);
+
+	void on_connected();
+	void on_disconnected(error const& err);
+
+	/// The incoming packet handling functions
+	void handle(protocol::response_sequence_number const& p);
+	void handle(protocol::response_records const& p);
+	void handle(protocol::response_commit const& p);
+	void handle(protocol::response_data const& p);
+	void handle(protocol::notify_record const& p);
 
 protected:
 
 	// -- comm_input interface, see interface.hpp --
-	virtual request_handle fetch_sequence_number();
-	virtual request_handle fetch_records(sequence_number start, sequence_number end);
-	virtual request_handle fetch_data(sequence_number record);
-	virtual request_handle commit_record(record_handle);
-	virtual sync::progress& progress();
-	virtual record_storage& records();
+	virtual request_handle fetch_sequence_number() override;
+	virtual request_handle fetch_records(sequence_number start, sequence_number end) override;
+	virtual request_handle fetch_data(sequence_number record) override;
+	virtual request_handle commit_record(record_handle) override;
+	virtual sync::progress& progress() const override;
+	virtual record_storage& records() const override;
+
 private:
-	class impl;
-	std::unique_ptr<impl> impl_;
+	event_system::event_handler* output_{};
 };
 
 }

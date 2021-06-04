@@ -36,7 +36,7 @@ struct comm_input {
  */
 struct comm_output : event_system::event_handler {
 
-	comm_output(event_system::event_loop&);
+	comm_output(event_system::event_loop_base&);
 
 	virtual ~comm_output() = default;
 

@@ -12,7 +12,7 @@ storage::storage(protocol::storage_id id, storage_config config)
 : config_(std::move(config))
 , id_(std::move(id))
 {
-	std::string path = config.storage_root_path() + "/" + to_hex(id_);
+	std::string path = config_.storage_root_path() + "/" + to_hex(id_);
 	std::string db = path + "/storage.db";
 	LOG_INFO("Constructing storage using path: %", db);
 
