@@ -4,7 +4,9 @@
 
 namespace securepath::sync {
 
-comm::comm()
+comm::comm(record_storage& s, sync::progress& p)
+: storage_(s)
+, progress_(p)
 {
 }
 
@@ -103,11 +105,11 @@ request_handle comm::commit_record(record_handle) {
 }
 
 sync::progress& comm::progress() const {
-	assert(0);
+	return progress_;
 }
 
 record_storage& comm::records() const {
-	assert(0);
+	return storage_;
 }
 
 }

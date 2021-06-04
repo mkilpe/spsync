@@ -13,7 +13,7 @@ namespace securepath::sync {
  */
 class comm : public comm_input {
 public:
-	comm();
+	comm(record_storage&, sync::progress&);
 	~comm();
 
 	void set_output(event_system::event_handler&);
@@ -39,6 +39,8 @@ protected:
 	virtual record_storage& records() const override;
 
 private:
+	record_storage& storage_;
+	sync::progress& progress_;
 	event_system::event_handler* output_{};
 };
 

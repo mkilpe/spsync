@@ -148,8 +148,8 @@ void network_connection::destroy_storage(storage_id const&) {
 	assert(0 && "not implemented");
 }
 
-storage_connection network_connection::create_storage_connection(storage_id id) {
-	auto p = std::make_unique<comm>();
+storage_connection network_connection::create_storage_connection(storage_id id, record_storage& storage, sync::progress& progress) {
+	auto p = std::make_unique<comm>(storage, progress);
 	std::unique_lock lock{impl_->mutex};
 	auto ret = impl_->comms.insert(std::make_pair(id, std::move(p)));
 	if(!ret.second || impl_->attached_comms.count(id)) {

@@ -65,7 +65,7 @@ public:
 	void destroy_storage(storage_id const&);
 
 	/// Create storage connection, returns storage connection helper. Nothing is received before the attach on the returned object is called.
-	storage_connection create_storage_connection(storage_id);
+	storage_connection create_storage_connection(storage_id, record_storage&, sync::progress&);
 
 	// This will destroy the underlying comm_input, so make sure nothing is using it any more when this called
 	void detach(storage_id const& id);

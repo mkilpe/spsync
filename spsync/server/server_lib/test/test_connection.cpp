@@ -75,7 +75,7 @@ public:
 	void connect_to_storage(storage_id const& sid) {
 		assert(!sid.empty());
 
-		storage_connection sconn{net.create_storage_connection(sid)};
+		storage_connection sconn{net.create_storage_connection(sid, storage, progress)};
 		engine = std::make_unique<sync_engine>(event_loop(), sconn.input(), enc_keys, engine_config);
 
 		//after this the events will be received
@@ -156,13 +156,9 @@ TEST_CASE("connection test", "[system]") {
 	key_client.register_key(net_context.client_private_data.my_private_key()->public_key());
 
 	test_client client(net_context.client_context, event_loop);
-	LOG_TRACE("AAA1");
 	client.connect();
-	LOG_TRACE("AAA2");
 	client.wait_for_connection();
-	LOG_TRACE("AAA3");
 	client.create_remote_storage();
-	LOG_TRACE("AAA4");
 	client.wait_for_storage_created();
 }
 
