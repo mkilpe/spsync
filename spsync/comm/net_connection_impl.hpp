@@ -100,6 +100,23 @@ struct network_connection_impl : network::encrypted_connection {
 			attached_comms.insert(std::move(node));
 		}
 	}
+
+	request_handle fetch_sequence_number(storage_id id) {
+		send(protocol::request_sequence_number{++last_call_id_, std::move(id)});
+	}
+
+	request_handle fetch_records(storage_id id, sequence_number start, sequence_number end) {
+
+	}
+
+	request_handle fetch_data(storage_id id, sequence_number record) {
+
+	}
+
+	request_handle commit_record(storage_id id, record_handle) {
+
+	}
+
 public:
 	mutable std::mutex mutex;
 	event_system::event_handler& handler;

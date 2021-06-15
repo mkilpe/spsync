@@ -74,6 +74,7 @@ struct storage_management : storage_request_base {
 
 /// request the current sequence number for storage
 struct request_sequence_number : storage_request_base {
+	using storage_request_base::storage_request_base;
 
 	template<typename S>
 	void serialise(S& s) {
