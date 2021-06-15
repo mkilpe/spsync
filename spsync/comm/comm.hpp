@@ -8,12 +8,15 @@
 
 namespace securepath::sync {
 
+using storage_id = octet_vector;
+class network_connection_impl;
+
 /**
  * The default implementation of the comm_input interface to talk with the server
  */
 class comm : public comm_input {
 public:
-	comm(record_storage&, sync::progress&);
+	comm(network_connection_impl* nc_impl, storage_id, record_storage&, sync::progress&);
 	~comm();
 
 	void set_output(event_system::event_handler&);
@@ -39,6 +42,8 @@ protected:
 	virtual record_storage& records() const override;
 
 private:
+	network_connection_impl* nc_impl_{};
+	storage_id const sid_;
 	record_storage& storage_;
 	sync::progress& progress_;
 	event_system::event_handler* output_{};

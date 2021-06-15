@@ -88,6 +88,13 @@ struct request_sequence_number : storage_request_base {
  * The server will return only some maximum amount of records and the client needs to re-request the rest.
  */
 struct request_records : storage_request_base {
+	request_records(call_id cid = 0, storage_id sid = {}, util::sequence_number start = {}, util::sequence_number end = {})
+	: storage_request_base(cid, sid)
+	, start(start)
+	, end(end)
+	{
+	}
+
 	util::sequence_number start, end;
 
 	template<typename S>
@@ -110,6 +117,12 @@ struct request_data : storage_request_base {
 };
 
 struct request_commit : storage_request_base {
+	request_commit(call_id cid = 0, storage_id sid = {}, chain_block record = {})
+	: storage_request_base(cid, sid)
+	, record(record)
+	{
+	}
+
 	chain_block record;
 
 	template<typename S>

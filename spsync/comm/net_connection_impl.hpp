@@ -102,19 +102,27 @@ struct network_connection_impl : network::encrypted_connection {
 	}
 
 	request_handle fetch_sequence_number(storage_id id) {
-		send(protocol::request_sequence_number{++last_call_id_, std::move(id)});
+		auto h = ++call_id;
+		send(protocol::request_sequence_number{h, std::move(id)});
+		return h;
 	}
 
 	request_handle fetch_records(storage_id id, sequence_number start, sequence_number end) {
-
+		auto h = ++call_id;
+		send(protocol::request_records{h, std::move(id), start, end});
+		return h;
 	}
 
 	request_handle fetch_data(storage_id id, sequence_number record) {
-
+		auto h = ++call_id;
+		//todo
+		return h;
 	}
 
-	request_handle commit_record(storage_id id, record_handle) {
-
+	request_handle commit_record(storage_id id, chain_block record) {
+		auto h = ++call_id;
+		send(protocol::request_commit{h, std::move(id), std::move(record)});
+		return h;
 	}
 
 public:

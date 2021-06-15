@@ -1,11 +1,14 @@
 #include "comm.hpp"
+#include "net_connection_impl.hpp"
 
 #include <spsync/protocol/error.hpp>
 
 namespace securepath::sync {
 
-comm::comm(record_storage& s, sync::progress& p)
-: storage_(s)
+comm::comm(network_connection_impl* nc_impl, storage_id sid, record_storage& s, sync::progress& p)
+: nc_impl_(nc_impl)
+, sid_(std::move(sid))
+, storage_(s)
 , progress_(p)
 {
 }
@@ -85,13 +88,11 @@ void comm::handle(protocol::notify_record const& p) {
 }
 
 request_handle comm::fetch_sequence_number() {
-	assert(0);
-	return request_handle{};
+	return nc_impl_->fetch_sequence_number(sid_);
 }
 
 request_handle comm::fetch_records(sequence_number start, sequence_number end) {
-	assert(0);
-	return request_handle{};
+	return nc_impl_->fetch_records(sid_, start, end);
 }
 
 request_handle comm::fetch_data(sequence_number record) {
@@ -99,9 +100,8 @@ request_handle comm::fetch_data(sequence_number record) {
 	return request_handle{};
 }
 
-request_handle comm::commit_record(record_handle) {
-	assert(0);
-	return request_handle{};
+request_handle comm::commit_record(record_handle h) {
+	return nc_impl_->commit_record(sid_, h->record());
 }
 
 sync::progress& comm::progress() const {

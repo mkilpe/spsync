@@ -60,6 +60,7 @@ class test_client : public event_system::event_handler {
 public:
 	test_client(network::context& context, event_system::event_loop& eloop)
 	: event_handler(eloop)
+	, context(context)
 	, net(context, *this)
 	{
 	}
@@ -118,6 +119,17 @@ public:
 				, event_dest<events::on_create_storage>(&test_client::on_create_storage) );
 	}
 
+	void create_initial_record() {
+		// set initial key, use hard coded one for testing
+		enc_keys.insert(encryption_key{sequence_number{1}, to_octet_vector("12345678901234567890123456789012")});
+		auto own_key = context.private_data().my_private_key();
+		assert(own_key);
+		users initial;
+		initial.add(util::user_access{own_key->id(), util::access_type::user_management_access});
+		engine->sync_user_change(initial);
+	}
+
+	network::context& context;
 	network_connection net;
 
 	database::connection_ptr database{test::create_test_database()};
@@ -160,6 +172,10 @@ TEST_CASE("connection test", "[system]") {
 	client.wait_for_connection();
 	client.create_remote_storage();
 	client.wait_for_storage_created();
+	client.create_initial_record();
+
+	std::this_thread::sleep_for(4s);
+
 }
 
 }
