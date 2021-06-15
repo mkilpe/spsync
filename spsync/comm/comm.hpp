@@ -13,15 +13,20 @@ class network_connection_impl;
 
 /**
  * The default implementation of the comm_input interface to talk with the server
+ * This is not used directly but rather by network_connection
  */
 class comm : public comm_input {
 public:
 	comm(network_connection_impl* nc_impl, storage_id, record_storage&, sync::progress&);
 	~comm();
 
+	/// set the handler for incoming event from network
 	void set_output(event_system::event_handler&);
 
+	/// called when virtual storage connection is connected
 	void on_connected();
+
+	/// called when virtual storage connection is disconnected
 	void on_disconnected(error const& err);
 
 	/// The incoming packet handling functions

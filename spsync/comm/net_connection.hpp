@@ -15,6 +15,7 @@ class network_connection_impl;
 
 /**
  * Helper to connect input and output of storage to the network connection
+ * Use network_connection.create_storage_connection to construct one
  */
 class storage_connection {
 public:
@@ -58,9 +59,11 @@ public:
 	network_connection(network::context& context, event_system::event_handler& handler);
 	~network_connection();
 
+	/// Connect this network connection to server
 	void connect(std::string_view host, std::uint16_t port);
 	void close();
 
+	/// Create storage on the server, one should wait for the on_create_storage event to see if the network call succeeded
 	storage_id create_storage();
 	void destroy_storage(storage_id const&);
 

@@ -64,10 +64,11 @@ struct comm_output : event_system::event_handler {
 	/// called when new record is received from the server
 	virtual void on_record_received(chain_block const&) = 0;
 
-	// this converts events to above virtual calls
+	/// this converts events to above virtual calls
 	void handle_event(std::unique_ptr<event_system::event_base> ev) override;
 };
 
+/// Events that map to the comm_output virtual functions
 namespace comm_events {
 struct on_connected {
 	typedef void type();

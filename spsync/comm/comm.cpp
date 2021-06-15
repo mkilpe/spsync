@@ -21,7 +21,6 @@ void comm::set_output(event_system::event_handler& handler) {
 	output_ = &handler;
 }
 
-
 void comm::on_connected() {
 	assert(output_);
 	output_->emit<comm_events::on_connected>();
