@@ -4,6 +4,7 @@
 #include "message.hpp"
 
 #include <spsync/util/object_id.hpp>
+#include <securepath/event_system/event_loop.hpp>
 
 #include <cstdint>
 #include <memory>
@@ -15,6 +16,8 @@ namespace securepath::groupchat {
 struct groupchat_config {
 	std::string server_address;
 	std::uint16_t port;
+
+	std::string db{"gc_client.db"};
 	//identity et al
 };
 
@@ -32,6 +35,8 @@ public:
 	/// Send a message to the chat
 	message_id send_message(std::string const& message);
 private:
+	event_system::event_loop loop_;
+
 	class impl;
 	std::unique_ptr<impl> impl_;
 };

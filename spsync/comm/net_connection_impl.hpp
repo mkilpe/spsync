@@ -30,19 +30,19 @@ struct network_connection_impl : network::encrypted_connection {
 	}
 
 	void close(error const& err = {}) {
-		LOG_TRACE("closing storage connection");
+		LOG_TRACE("closing storage network connection");
 		encrypted_connection::close();
 		on_disconnected(err);
 	}
 
 	void on_connected() override {
-		LOG_TRACE("storage connection connected, sending client_hello...");
+		LOG_TRACE("storage network connection connected, sending client_hello...");
 		deser.clear();
 		send(protocol::client_hello{});
 	}
 
 	void on_disconnected(securepath::error const& error) override {
-		LOG_INFO("storage connection disconnected: %", error);
+		LOG_INFO("storage network connection disconnected: %", error);
 		handler.emit<events::on_disconnect>(error);
 	}
 

@@ -7,6 +7,9 @@
 #include <spsync/util/object_id.hpp>
 #include <spsync/util/metadata.hpp>
 
+#include <securepath/event_system/event_handler.hpp>
+#include <securepath/event_system/event_loop.hpp>
+
 namespace securepath::sync {
 
 using util::object_id;
@@ -21,7 +24,7 @@ struct engine_input {
 
 	/// synchronise object change with given id, user metadata and data
 	virtual record_handle sync_object_change(object_id, metadata, record_data_handle = {}) = 0;
-	//q: what should the return type be there? somehow one needs to know when it was successful (ie. identify the record later on)
+	//q: what should the return type be here? somehow one needs to know when it was successful (ie. identify the record later on)
 
 	/// synchronise user change
 	virtual record_handle sync_user_change(users user_change, metadata = {}) = 0;
@@ -36,7 +39,10 @@ struct engine_input {
 /**
  * The interface which synchroniser notifies the higher level of object change, user change or a like
  */
-struct engine_output {
+struct engine_output : event_system::event_handler {
+
+	engine_output(event_system::event_loop_base&);
+
 	virtual ~engine_output() = default;
 
 	/**
@@ -52,7 +58,20 @@ struct engine_output {
 
 	//users changed
 	//conflicting user change ??
+
+	/// this converts events to above virtual calls
+	void handle_event(std::unique_ptr<event_system::event_base> ev) override;
 };
+
+/// Events that map to the engine_output virtual functions
+namespace engine_events {
+struct on_object_data_changed {
+	typedef void type(record_handle);
+};
+struct on_user_changed {
+	typedef void type(users const&);
+};
+}
 
 }
 

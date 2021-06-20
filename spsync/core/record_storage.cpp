@@ -116,18 +116,19 @@ public:
 			throw make_error(sync::errc::constraint_violation, "trying to set record data for in sync record");
 		}
 
-		database::transaction tact(*db_);
+		{
+			database::transaction tact(*db_);
 
-		update_record(rec);
-		remove_object_records();
+			update_record(rec);
+			remove_object_records();
 
-		rec.deserialise_record([&rec, this](auto const& r)
-			{
-				if constexpr(std::is_same_v<std::decay_t<decltype(r)>, data_change_record>) {
-					create_object_records(db_, rec.tag(), r);
-				}
-			});
-
+			rec.deserialise_record([&rec, this](auto const& r)
+				{
+					if constexpr(std::is_same_v<std::decay_t<decltype(r)>, data_change_record>) {
+						create_object_records(db_, rec.tag(), r);
+					}
+				});
+		}
 
 		tag_ = rec.tag();
 		parent_hash_ = rec.parent_hash();
@@ -154,6 +155,10 @@ public:
 		q.bind(":k", record_key_);
 
 		q.execute();
+
+		tag_ = rec.tag();
+		parent_hash_ = rec.parent_hash();
+		block_id_ = rec.id();
 	}
 
 	void remove_object_records() {

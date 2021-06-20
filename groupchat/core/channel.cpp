@@ -24,19 +24,13 @@ struct print_event {
 	typedef void type(std::string);
 };
 
-struct groupchat::impl
-: public network::encrypted_net_base
-, public sync::engine_output
-{
-	impl(event_system::event_loop& eloop, groupchat_config conf)
+channel::channel(network::context& context, event_system::event_loop& eloop, database::connection_ptr db)
 	: encrypted_net_base(network::client_tag, {conf.db, conf.db, conf.db, conf.db})
 	, engine_output(eloop)
-	, context(construct_context())
-	, conf(std::move(conf))
-	, net(context, *this)
-	, database(open_gc_client_database(conf))
-	, storage(database)
-	, enc_keys(database)
+	, context_(context)
+	, net_(context_, *this)
+	, storage_(db)
+	, enc_keys_(db)
 	{
 		if(!context.private_data().my_private_key()) {
 			create_crypto_materials();
