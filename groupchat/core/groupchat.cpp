@@ -24,7 +24,7 @@ struct groupchat::impl
 : public network::encrypted_net_base
 , public event_system::event_handler
 {
-	impl(event_system::event_loop& eloop, groupchat_config conf)
+	impl(event_system::single_thread_event_loop& eloop, groupchat_config conf)
 	: encrypted_net_base(network::client_tag, {conf.db, conf.db, conf.db, conf.db})
 	, event_handler(eloop)
 	, context(construct_context())
@@ -56,7 +56,7 @@ struct groupchat::impl
 		assert(!sid.empty());
 
 		//sync::storage_connection sconn{net.create_storage_connection(sid, storage, progress)};
-		//engine = std::make_unique<sync::sync_engine>(event_loop(), sconn.input(), enc_keys, engine_config);
+		//engine = std::make_unique<sync::sync_engine>(single_thread_event_loop(), sconn.input(), enc_keys, engine_config);
 
 		//after this the events will be received
 		//sconn.attach(*engine);

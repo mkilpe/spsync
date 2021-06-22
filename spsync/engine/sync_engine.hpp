@@ -27,7 +27,7 @@ class sync_engine
 	, public engine_input
 {
 public:
-	sync_engine(event_system::event_loop_base&, comm_input&, encryption_key_storage&, sync_engine_config);
+	sync_engine(event_system::event_loop&, comm_input&, encryption_key_storage&, sync_engine_config);
 	~sync_engine();
 
 	/// set the engine output interface that it uses to communicate with higher layer

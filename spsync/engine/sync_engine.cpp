@@ -241,7 +241,7 @@ public:
 #define LINFO(format, ...) LOG_INFO(format " (rsid=%)" __VA_OPT__(,) __VA_ARGS__, impl_->config.log_id)
 #define LWARN(format, ...) LOG_WARN(format " (rsid=%)" __VA_OPT__(,) __VA_ARGS__, impl_->config.log_id)
 
-sync_engine::sync_engine(event_system::event_loop_base& loop, comm_input& comm, encryption_key_storage& keys, sync_engine_config config)
+sync_engine::sync_engine(event_system::event_loop& loop, comm_input& comm, encryption_key_storage& keys, sync_engine_config config)
 : comm_output(loop)
 , impl_(std::make_unique<impl>(comm, keys, std::move(config)))
 {

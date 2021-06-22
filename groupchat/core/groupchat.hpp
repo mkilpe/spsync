@@ -35,7 +35,7 @@ public:
 	/// Send a message to the chat
 	message_id send_message(std::string const& message);
 private:
-	event_system::event_loop loop_;
+	event_system::single_thread_event_loop loop_;
 
 	class impl;
 	std::unique_ptr<impl> impl_;

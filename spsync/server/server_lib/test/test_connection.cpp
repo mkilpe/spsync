@@ -58,7 +58,7 @@ private:
 
 class test_client : public event_system::event_handler {
 public:
-	test_client(network::context& context, event_system::event_loop& eloop)
+	test_client(network::context& context, event_system::single_thread_event_loop& eloop)
 	: event_handler(eloop)
 	, context(context)
 	, net(context, *this)
@@ -77,7 +77,7 @@ public:
 		assert(!sid.empty());
 
 		storage_connection sconn{net.create_storage_connection(sid, storage, progress)};
-		engine = std::make_unique<sync_engine>(event_loop(), sconn.input(), enc_keys, engine_config);
+		engine = std::make_unique<sync_engine>(single_thread_event_loop(), sconn.input(), enc_keys, engine_config);
 
 		//after this the events will be received
 		sconn.attach(*engine);
@@ -148,7 +148,7 @@ private:
 }
 
 TEST_CASE("connection test", "[system]") {
-	event_system::event_loop event_loop;
+	event_system::single_thread_event_loop single_thread_event_loop;
 	network::test::testing_context net_context;
 	net_context.set_server_dh_parameters();
 	net_context.set_server_pk_parameters();
@@ -167,7 +167,7 @@ TEST_CASE("connection test", "[system]") {
 	key_client.wait_for_connection();
 	key_client.register_key(net_context.client_private_data.my_private_key()->public_key());
 
-	test_client client(net_context.client_context, event_loop);
+	test_client client(net_context.client_context, single_thread_event_loop);
 	client.connect();
 	client.wait_for_connection();
 	client.create_remote_storage();

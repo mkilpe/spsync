@@ -41,7 +41,7 @@ struct engine_input {
  */
 struct engine_output : event_system::event_handler {
 
-	engine_output(event_system::event_loop_base&);
+	engine_output(event_system::event_loop&);
 
 	virtual ~engine_output() = default;
 

@@ -5,7 +5,7 @@ namespace securepath::groupchat {
 // key for the message metadata
 std::string const groupchat_message_id{"message"};
 
-channel::channel(network::context& context, event_system::event_loop& eloop, database::connection_ptr db)
+channel::channel(network::context& context, event_system::single_thread_event_loop& eloop, database::connection_ptr db)
 : engine_output(eloop)
 , context_(context)
 , net_(context_, *this)

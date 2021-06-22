@@ -2,7 +2,7 @@
 
 namespace securepath::sync {
 
-engine_output::engine_output(event_system::event_loop_base& l)
+engine_output::engine_output(event_system::event_loop& l)
 : event_handler(l)
 {
 }

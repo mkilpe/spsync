@@ -70,12 +70,12 @@ public:
 	crypto::private_key user_key{crypto::generate_rsa_private_key(1024)};
 	util::user_id user{user_key.id()};
 
-	event_system::event_loop event_loop;
+	event_system::single_thread_event_loop single_thread_event_loop;
 	database::connection_ptr database;
 	test_sync_server_client io{database};
 	encryption_key_storage enc_keys{database};
 	sync_engine_config engine_config;
-	test_sync_engine engine{event_loop, io, enc_keys, engine_config};
+	test_sync_engine engine{single_thread_event_loop, io, enc_keys, engine_config};
 };
 
 

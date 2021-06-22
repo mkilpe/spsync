@@ -2,7 +2,7 @@
 
 namespace securepath::sync {
 
-comm_output::comm_output(event_system::event_loop_base& l)
+comm_output::comm_output(event_system::event_loop& l)
 : event_handler(l)
 {
 }
