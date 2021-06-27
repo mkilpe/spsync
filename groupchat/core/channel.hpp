@@ -16,15 +16,13 @@ struct dummy_progress : sync::progress {};
 class channel : public sync::engine_output
 {
 public:
-	channel(network::context& context, event_system::single_thread_event_loop& eloop, database::connection_ptr db);
+	channel(network::context& context, event_system::event_loop& eloop, sync::network_connection& conn, sync::storage_id const& sid);
 
 private:
 	void on_object_data_changed(sync::record_handle rec) override;
 
 private:
 	network::context context_;
-
-	sync::network_connection net_;
 
 	dummy_progress progress_;
 

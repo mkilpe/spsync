@@ -77,7 +77,7 @@ public:
 		assert(!sid.empty());
 
 		storage_connection sconn{net.create_storage_connection(sid, storage, progress)};
-		engine = std::make_unique<sync_engine>(single_thread_event_loop(), sconn.input(), enc_keys, engine_config);
+		engine = std::make_unique<sync_engine>(event_loop(), sconn.input(), enc_keys, engine_config);
 
 		//after this the events will be received
 		sconn.attach(*engine);

@@ -1,4 +1,5 @@
 #include "groupchat.hpp"
+#include "channel.hpp"
 
 #include <spsync/comm/net_connection.hpp>
 #include <spsync/core/encryption_key_storage.hpp>
@@ -54,12 +55,7 @@ struct groupchat::impl
 
 	void connect_to_storage(sync::storage_id const& sid) {
 		assert(!sid.empty());
-
-		//sync::storage_connection sconn{net.create_storage_connection(sid, storage, progress)};
-		//engine = std::make_unique<sync::sync_engine>(single_thread_event_loop(), sconn.input(), enc_keys, engine_config);
-
-		//after this the events will be received
-		//sconn.attach(*engine);
+		channels_.emplace(sid, std::make_unique<channel>(context, event_loop(), net, sid));
 	}
 
 	void on_connect() {
@@ -87,6 +83,8 @@ struct groupchat::impl
 
 	sync::network_connection net;
 	database::connection_ptr database;
+
+	std::map<sync::storage_id, std::unique_ptr<channel>> channels_;
 };
 
 groupchat::groupchat(groupchat_config conf)
