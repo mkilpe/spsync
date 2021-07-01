@@ -21,7 +21,7 @@ struct groupchat_config {
 	//identity et al
 };
 
-/// assosiate object id to a message
+/// associate object id to a message
 using message_id = sync::util::object_id;
 
 /**
