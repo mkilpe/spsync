@@ -1,5 +1,5 @@
 
-#include <spsync/server/server_lib/spsync_server.hpp>
+#include <spsync/test/test_server_runner.hpp>
 #include <spsync/comm/net_connection.hpp>
 #include <spsync/core/encryption_key_storage.hpp>
 #include <spsync/engine/sync_engine.hpp>
@@ -21,40 +21,6 @@
 
 namespace securepath::sync {
 namespace {
-class test_server
-{
-public:
-	test_server(network::context& context)
-	: server_(context, params_)
-	{
-	}
-
-	~test_server() {
-		stop();
-	}
-
-	void run() {
-		server_future_ = std::async(std::launch::async, [&]
-			{
-				server_.run_and_wait();
-			});
-	}
-
-	void stop() {
-		server_.close();
-		if(server_future_.valid()) {
-			try {
-				server_future_.wait();
-			} catch(...)
-			{} // ignore
-		}
-	}
-
-private:
-	spsync_server_params params_;
-	spsync_server server_;
-	std::future<void> server_future_;
-};
 
 class test_client : public event_system::event_handler {
 public:
@@ -158,7 +124,7 @@ TEST_CASE("connection test", "[system]") {
 	//add client key to the db
 //	net_context.keys.insert(my_private_key(net_context.client_private_data).public_key());
 
-	test_server server(net_context.server_context);
+	test::test_server server(net_context.server_context);
 	server.run();
 	std::this_thread::sleep_for(1s);
 

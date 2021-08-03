@@ -41,6 +41,12 @@ public:
 
 	/// insert encryption key to the storage
 	void insert(encryption_key const& key);
+
+	/// get the sequence number of the latest key
+	util::sequence_number last_seq() const;
+
+	/// create new key with next sequence numner
+	encryption_key create_key();
 private:
 	database::connection_ptr db_;
 };

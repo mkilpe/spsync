@@ -52,7 +52,7 @@ bool test_sync_server_client::handle_events() {
 request_handle test_sync_server_client::fetch_sequence_number() {
 	assert(output_ && server_);
 	request_handle ret = ++req_handle;
-	events_.push_back([=] {
+	events_.push_back([=, this] {
 		output_->on_sequence_number_response(ret, server_->sync.current_sequence_number());
 	});
 	return ret;
@@ -61,7 +61,7 @@ request_handle test_sync_server_client::fetch_sequence_number() {
 request_handle test_sync_server_client::fetch_records(sequence_number start, sequence_number end) {
 	assert(output_ && server_);
 	request_handle ret = ++req_handle;
-	events_.push_back([=] {
+	events_.push_back([=, this] {
 			output_->on_record_response(ret, record_response{end, server_->sync.current_sequence_number(), server_->sync.get_records(start, end)});
 	});
 	return ret;
@@ -70,7 +70,7 @@ request_handle test_sync_server_client::fetch_records(sequence_number start, seq
 request_handle test_sync_server_client::fetch_data(sequence_number record) {
 	assert(output_ && server_);
 	request_handle ret = ++req_handle;
-	events_.push_back([=] {
+	events_.push_back([=, this] {
 		//t: implement when data handling is done
 		//virtual void on_data_response(request_handle, result<record_data_handle> const&) = 0;
 	});
@@ -80,7 +80,7 @@ request_handle test_sync_server_client::fetch_data(sequence_number record) {
 request_handle test_sync_server_client::commit_record(record_handle h) {
 	assert(output_ && server_);
 	request_handle ret = ++req_handle;
-	events_.push_back([=, record = h->record()] {
+	events_.push_back([=, this, record = h->record()] {
 			auto commit_result = server_->sync.commit_block(record);
 			output_->on_commit_response(ret, commit_response{server_->sync.current_sequence_number(), commit_result});
 	});

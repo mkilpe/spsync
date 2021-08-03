@@ -41,27 +41,27 @@ public:
 	, state_(state)
 	{}
 
-	virtual chain_block_id block_id() const {
+	chain_block_id block_id() const override {
 		std::unique_lock lock{mutex_};
 		return block_id_;
 	}
 
-	virtual record_tag tag() const {
+	record_tag tag() const override {
 		std::unique_lock lock{mutex_};
 		return tag_;
 	}
 
-	virtual octet_vector parent_block_hash() const {
+	octet_vector parent_block_hash() const override {
 		std::unique_lock lock{mutex_};
 		return parent_hash_;
 	}
 
-	virtual record_state state() const {
+	record_state state() const override {
 		std::unique_lock lock{mutex_};
 		return state_;
 	}
 
-	virtual void set_state(record_state state, chain_block_id bid, octet_vector parent_block_hash) {
+	void set_state(record_state state, chain_block_id bid, octet_vector parent_block_hash) override {
 		std::unique_lock lock{mutex_};
 
 		if(bid.is_valid()) {
@@ -97,7 +97,7 @@ public:
 		state_ = state;
 	}
 
-	virtual chain_block record() const {
+	chain_block record() const override {
 		auto q = db_->prepare("SELECT record FROM record WHERE key = :k;");
 		q.bind(":k", record_key_);
 		auto res = q.execute();
@@ -109,7 +109,7 @@ public:
 		return database::extract_column_type<chain_block>(res, 0);
 	}
 
-	virtual void set_record(chain_block const& rec) {
+	void set_record(chain_block const& rec) override {
 		std::unique_lock lock{mutex_};
 
 		if(state_ == record_state::in_sync) {
@@ -133,6 +133,10 @@ public:
 		tag_ = rec.tag();
 		parent_hash_ = rec.parent_hash();
 		block_id_ = rec.id();
+	}
+
+	record_internal_id internal_id() const override {
+		return record_key_;
 	}
 
 	void update_record(chain_block const& rec) {

@@ -1,13 +1,18 @@
 
+
+
+
+
+= records
+* add locally unique id for records so that higher levels can track not yet committed records (might be re-encrypted etc)
+* get history for higher levels
+*
+
+= general
+* make root ca key and integrate to code
+
 = server
 * update and check user access rights for storage when handling records
-
-= engine
-* signatures for records (creating/verifying)
-* handle pending sync records
-* handle_decrypt_record functions
-* connect/disconnect handling?
- - add on_connected to comm_output interface?
 
 out of sync:
 
@@ -17,9 +22,5 @@ out of sync:
   3. recreate the records with correct previous tag/last seen seq for non-conflicting records
   4. try to commit again
 
-* how to fetch missing records, chunking?
- - add current max seq to the result and return only n records
-* more specific result types for comm_output?
- - add current max seq when commit denied because of out of sync
 
 

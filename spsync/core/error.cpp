@@ -9,6 +9,7 @@ namespace {
 		{ "no encryption key set"
 		, "invalid record chain state"
 		, "constraint violation"
+		, "invalid record state"
 		};
 
 	static_assert(sizeof(errors)/sizeof(*errors)

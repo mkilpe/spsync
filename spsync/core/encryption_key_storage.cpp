@@ -1,6 +1,7 @@
 #include "encryption_key_storage.hpp"
 #include <spsync/core/error.hpp>
 
+#include <securepath/crypto/random.hpp>
 #include <securepath/serialisation/util.hpp>
 
 namespace securepath::sync {
@@ -57,6 +58,24 @@ void encryption_key_storage::insert(encryption_key const& key) {
 	q.bind(":a", key.key_seq.value);
 	q.bind(":b", data);
 	q.execute();
+}
+
+util::sequence_number encryption_key_storage::last_seq() const {
+	auto q = db_->prepare("SELECT max(seq) FROM encryption_key_storage;");
+	auto res = q.execute();
+
+	return util::sequence_number{res ? res.value<std::uint64_t>(0).value_or(0ULL): 0ULL};
+}
+
+encryption_key encryption_key_storage::create_key() {
+	encryption_key res;
+
+	res.key_seq = last_seq()+1;
+	res.key = crypto::random_octet_vector(32);
+	insert(res);
+
+	return res;
+
 }
 
 bool operator==(encryption_key const& left, encryption_key const& right) {

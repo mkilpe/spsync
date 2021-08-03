@@ -17,16 +17,13 @@ static database::connection_ptr open_gc_client_database(groupchat_config config)
 	return database::sqlite::create_sqlite_connection(config.db);
 }
 
-struct print_event {
-	typedef void type(std::string);
-};
-
 struct groupchat::impl
 : public network::encrypted_net_base
 , public event_system::event_handler
 {
-	impl(event_system::single_thread_event_loop& eloop, groupchat_config conf)
-	: encrypted_net_base(network::client_tag, {conf.db, conf.db, conf.db, conf.db})
+	impl(groupchat& parent, event_system::event_loop& eloop, groupchat_config conf)
+	: parent(parent)
+	, encrypted_net_base(network::client_tag, {conf.db, conf.db, conf.db, conf.db})
 	, event_handler(eloop)
 	, context(construct_context())
 	, conf(std::move(conf))
@@ -42,53 +39,47 @@ struct groupchat::impl
 		context.private_data().set_my_private_key(crypto::generate_rsa_private_key(2048));
 	}
 
-	void main_loop() {
-
-	}
-
-	void print(std::string msg) {
-		emit<print_event>(std::move(msg));
-	}
-
-	void on_print(std::string msg) {
-	}
-
 	void connect_to_storage(sync::storage_id const& sid) {
 		assert(!sid.empty());
-		channels_.emplace(sid, std::make_unique<channel>(context, event_loop(), net, sid));
+		channels.emplace(sid, std::make_unique<channel>(parent, context, event_loop(), net, sid));
 	}
 
 	void on_connect() {
-
+		parent.on_connect(1);
 	}
 
 	void on_disconnect(error const& err) {
-
+		parent.on_disconnect(1, err);
 	}
 
 	void on_create_storage(sync::storage_id const& sid, error const& err) {
-
+		if(!err) {
+			assert(!sid.empty());
+			auto ret = channels.emplace(sid, std::make_unique<channel>(parent, context, event_loop(), net, sid));
+			ret.first->second->create_initial_record();
+		}
+		parent.on_create(1, sid, err);
 	}
 
 	void handle_event(std::unique_ptr<event_system::event_base> ev) override {
 		dispatch( *ev
-				, event_dest<print_event>(&impl::on_print)
 				, event_dest<sync::events::on_connect>(&impl::on_connect)
 				, event_dest<sync::events::on_disconnect>(&impl::on_disconnect)
 				, event_dest<sync::events::on_create_storage>(&impl::on_create_storage) );
 	}
 
+	groupchat& parent;
 	network::context context;
 	groupchat_config conf;
 
 	sync::network_connection net;
 	database::connection_ptr database;
 
-	std::map<sync::storage_id, std::unique_ptr<channel>> channels_;
+	std::map<sync::storage_id, std::unique_ptr<channel>> channels;
 };
 
-groupchat::groupchat(groupchat_config conf)
-: impl_(std::make_unique<impl>(loop_, std::move(conf)))
+groupchat::groupchat(groupchat_config conf, event_system::event_loop& loop)
+: impl_(std::make_unique<impl>(*this, loop, std::move(conf)))
 {
 }
 
@@ -96,12 +87,39 @@ groupchat::~groupchat()
 {
 }
 
-message_id groupchat::send_message(std::string const& message) {
-	//sync::metadata header;
-	//header.insert(groupchat_message_id, message);
-	auto msg_id = sync::util::create_object_id();
-	//impl_->engine->sync_object_change(msg_id, std::move(header));
-	return msg_id;
+
+server_id groupchat::connect(std::string_view server, std::uint16_t port) {
+	// t: support connections to multiple servers at the same time
+	impl_->net.connect(server, port);
+	return 1;
+}
+
+void groupchat::disconnect(server_id) {
+
+}
+
+sync::storage_id groupchat::create_chat(server_id) {
+	return impl_->net.create_storage();
+}
+
+void groupchat::change_user(server_id const&, chat_id const& storage, sync::users change) {
+	auto it = impl_->channels.find(storage);
+	if(it == impl_->channels.end()) {
+		throw std::runtime_error("no such storage");
+	}
+	return it->second->change_user(std::move(change));
+}
+
+void groupchat::join(server_id const& server, chat_id const& storage) {
+
+}
+
+message_id groupchat::send_message(server_id const&, chat_id const& storage, std::string const& message) {
+	auto it = impl_->channels.find(storage);
+	if(it == impl_->channels.end()) {
+		throw std::runtime_error("no such storage");
+	}
+	return it->second->send_message(message);
 }
 
 }

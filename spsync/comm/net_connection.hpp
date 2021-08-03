@@ -10,7 +10,6 @@
 namespace securepath::sync {
 
 using storage_id = octet_vector;
-
 class network_connection_impl;
 
 /**

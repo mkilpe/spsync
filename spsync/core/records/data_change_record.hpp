@@ -1,9 +1,9 @@
 #ifndef SPSYNC_CORE_DATA_CHANGE_RECORD_HEADER
 #define SPSYNC_CORE_DATA_CHANGE_RECORD_HEADER
 
-#include "record_base.hpp"
+#include "data_change_header.hpp"
 #include "encrypted_record_header.hpp"
-#include "../data_change_header.hpp"
+#include "record_base.hpp"
 
 #include <securepath/serialisation/deque.hpp>
 
@@ -57,6 +57,8 @@ public:
 	: record_base(std::move(base))
 	, changes_(std::move(changes))
 	{}
+
+	bool is_single_change_record() const { return changes_.size() == 1; }
 
 	const_iterator begin() const { return changes_.begin(); }
 	const_iterator end() const { return changes_.end(); }

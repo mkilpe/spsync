@@ -1,6 +1,8 @@
 #ifndef GROUPCHAT_CORE_CHANNEL_HEADER
 #define GROUPCHAT_CORE_CHANNEL_HEADER
 
+#include "types.hpp"
+
 #include <spsync/comm/net_connection.hpp>
 #include <spsync/core/encryption_key_storage.hpp>
 #include <spsync/core/progress.hpp>
@@ -11,18 +13,29 @@
 
 namespace securepath::groupchat {
 
+/// associate object id to a message
+using message_id = sync::util::object_id;
+
 struct dummy_progress : sync::progress {};
+
+class groupchat;
 
 class channel : public sync::engine_output
 {
 public:
-	channel(network::context& context, event_system::event_loop& eloop, sync::network_connection& conn, sync::storage_id const& sid);
+	channel(groupchat& parent, network::context& context, event_system::event_loop& eloop, sync::network_connection& conn, chat_id const&);
 
+	message_id send_message(std::string const& message);
+	void change_user(sync::users change);
+
+	void create_initial_record();
 private:
 	void on_object_data_changed(sync::record_handle rec) override;
 
 private:
-	network::context context_;
+	groupchat& parent_;
+	network::context& context_;
+	chat_id chat_id_;
 
 	dummy_progress progress_;
 

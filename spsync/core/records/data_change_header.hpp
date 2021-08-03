@@ -1,7 +1,7 @@
 #ifndef SPSYNC_CORE_DATA_CHANGE_HEADER_HEADER
 #define SPSYNC_CORE_DATA_CHANGE_HEADER_HEADER
 
-#include "types.hpp"
+#include "../types.hpp"
 #include <spsync/util/metadata.hpp>
 
 namespace securepath::sync {

@@ -9,6 +9,7 @@ enum class errc {
 	no_encryption_key_set = 0x1000,
 	invalid_record_chain_state,
 	constraint_violation,
+	invalid_record_state,
 	end_of_list
 };
 

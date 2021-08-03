@@ -11,6 +11,8 @@
 
 namespace securepath::sync {
 
+using record_internal_id = std::uint64_t;
+
 enum class record_state {
 	unknown = 0,
 
@@ -70,6 +72,9 @@ public:
 
 	/// Set the record data, this used in case the record is changed due to being out of sync
 	virtual void set_record(chain_block const&) = 0;
+
+	/// Locally unique id for this record. This id stays the same when updating records in case of conflicting state and so can be used to track non-committed records
+	virtual record_internal_id internal_id() const = 0;
 };
 
 using record_handle = std::shared_ptr<record_interface>;
