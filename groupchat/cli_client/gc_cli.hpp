@@ -1,6 +1,7 @@
 #pragma once
 
-#include <securepath/console/text_window.hpp>
+#include "cli_window.hpp"
+#include "gc.hpp"
 
 #include <securepath/console/context.hpp>
 #include <securepath/event_system/event_handler.hpp>
@@ -24,7 +25,8 @@ private:
 	void handle_command(std::wstring input);
 	void execute_command(std::wstring_view cmd, std::vector<std::wstring_view> const& args);
 private:
-	std::shared_ptr<console::text_window> text_area_;
+	std::unique_ptr<cli_window> win_;
+	std::unique_ptr<gc> gc_;
 };
 
 }

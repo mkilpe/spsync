@@ -21,15 +21,33 @@ struct groupchat::impl
 : public network::encrypted_net_base
 , public event_system::event_handler
 {
-	impl(groupchat& parent, event_system::event_loop& eloop, groupchat_config conf)
+	impl(groupchat& parent, network::context& context, event_system::event_loop& eloop, groupchat_config conf)
 	: parent(parent)
 	, encrypted_net_base(network::client_tag, {conf.db, conf.db, conf.db, conf.db})
 	, event_handler(eloop)
-	, context(construct_context())
+	, context(context)
 	, conf(std::move(conf))
 	, net(context, *this)
 	, database(open_gc_client_database(conf))
 	{
+		init_crypto();
+	}
+
+	impl(groupchat& parent, event_system::event_loop& eloop, groupchat_config conf)
+	: parent(parent)
+	, encrypted_net_base(network::client_tag, {conf.db, conf.db, conf.db, conf.db})
+	, event_handler(eloop)
+	, own_context(construct_context())
+	, context(*own_context)
+	, conf(std::move(conf))
+	, net(context, *this)
+	, database(open_gc_client_database(conf))
+	{
+		run();
+		init_crypto();
+	}
+
+	void init_crypto() {
 		if(!context.private_data().my_private_key()) {
 			create_crypto_materials();
 		}
@@ -69,7 +87,8 @@ struct groupchat::impl
 	}
 
 	groupchat& parent;
-	network::context context;
+	std::optional<network::context> own_context;
+	network::context& context;
 	groupchat_config conf;
 
 	sync::network_connection net;
@@ -80,6 +99,11 @@ struct groupchat::impl
 
 groupchat::groupchat(groupchat_config conf, event_system::event_loop& loop)
 : impl_(std::make_unique<impl>(*this, loop, std::move(conf)))
+{
+}
+
+groupchat::groupchat(network::context& context, groupchat_config conf, event_system::event_loop& loop)
+: impl_(std::make_unique<impl>(*this, context, loop, std::move(conf)))
 {
 }
 

@@ -29,15 +29,15 @@ gc_cli::gc_cli(gc_cli_config)
 {
 	set_mode(console::mode::nodelay | console::mode::cbreak | console::mode::noecho | console::mode::colours);
 
+	// modes need to be set before constructing the windows
+	win_ = std::make_unique<cli_window>(*this);
+	gc_  = std::make_unique<gc>(static_cast<event_system::event_loop&>(*this), *win_);
+
 	auto size = screen_size();
 	auto in = std::make_shared<input>(*this, console::point{0, size.y-1}, size.x);
-	text_area_ = std::make_shared<console::text_window>(console::rect{console::point{0,0}, {size.x, size.y-1}});
 
-	add_widget(text_area_);
 	add_widget(in);
 	set_focus(in);
-
-	text_area_->add_line(L"Welcome to group chat");
 }
 
 void gc_cli::run() {
@@ -69,7 +69,7 @@ void gc_cli::handle_command(std::wstring input) {
 				execute_command(res[0], {res.begin()+1, res.end()});
 			}
 		} else {
-			text_area_->add_line(std::move(input));
+			win_->add_message(0, std::move(input));
 		}
 		redraw();
 	}

@@ -18,9 +18,6 @@ namespace securepath::groupchat {
 
 /// Configuration for the group chat
 struct groupchat_config {
-	std::string server_address;
-	std::uint16_t port;
-
 	std::string db{"gc_client.db"};
 	//identity et al
 };
@@ -31,6 +28,7 @@ struct groupchat_config {
 class groupchat {
 public:
 	groupchat(groupchat_config, event_system::event_loop&);
+	groupchat(network::context& context, groupchat_config, event_system::event_loop&);
 	~groupchat();
 
 	/// connect to storage server
@@ -63,7 +61,7 @@ public:
 	/// called when chat joined or it failed
 	virtual void on_join(server_id, chat_id) = 0;
 	/// called when chat message received
-	virtual void on_message(server_id, chat_id, message);
+	virtual void on_message(server_id, chat_id, message) = 0;
 private:
 	class impl;
 	std::unique_ptr<impl> impl_;
