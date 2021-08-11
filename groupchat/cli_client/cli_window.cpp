@@ -8,6 +8,7 @@
 namespace securepath::groupchat {
 
 cli_window::cli_window(console::context& context)
+: context_(context)
 {
 	if(!console::make_colour_pair(console::colour_index{1}, console::colour::white, console::colour::black)) {
 		throw std::runtime_error("failed to initialise colours");
@@ -25,6 +26,8 @@ void cli_window::add_line_to_screen(cli_message const& msg) {
 	console::scoped_attr color{text_area_->native_handle(),
 		msg.type == cli_message::normal ? console::colour_index{1} : console::colour_index{2}};
 	text_area_->add_line(msg.msg);
+	// note the console system to draw everything next time control returns
+	context_.redraw();
 }
 
 void cli_window::add_line(int channel, cli_message msg) {

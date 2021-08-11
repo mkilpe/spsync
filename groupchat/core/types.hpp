@@ -16,7 +16,10 @@ using chat_id = octet_vector;
 using server_id = std::size_t;
 
 // key for the message metadata
-std::string const groupchat_message_id{"message_v1"};
+std::string const groupchat_message_id{"gc_message_v1"};
+
+// key for user change metadata
+std::string const groupchat_name_id{"gc_name_v1"};
 
 }
 

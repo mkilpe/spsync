@@ -10,6 +10,11 @@
 #include <securepath/database/sqlite/connection.hpp>
 #include <securepath/event_system/event_handler.hpp>
 #include <securepath/network/encrypted_net_base.hpp>
+#include <securepath/network/encryption/handshake/dh_handshake.hpp>
+#include <securepath/network/encryption/handshake/pk_handshake.hpp>
+
+#include <infrastructure/key_client_lib/unknown_user_key_client.hpp>
+#include <infrastructure/key_server/server_lib/defaults.hpp>
 
 namespace securepath::groupchat {
 
@@ -30,7 +35,8 @@ struct groupchat::impl
 	, net(context, *this)
 	, database(open_gc_client_database(conf))
 	{
-		init_crypto();
+		network::enable_client_dh_handshake(context);
+		network::enable_client_pk_handshake(context);
 	}
 
 	impl(groupchat& parent, event_system::event_loop& eloop, groupchat_config conf)
@@ -43,14 +49,17 @@ struct groupchat::impl
 	, net(context, *this)
 	, database(open_gc_client_database(conf))
 	{
+		network::enable_client_dh_handshake(context);
+		network::enable_client_pk_handshake(context);
 		run();
-		init_crypto();
 	}
 
-	void init_crypto() {
-		if(!context.private_data().my_private_key()) {
+	bool init_crypto() {
+		bool ret = !context.private_data().my_private_key();
+		if(ret) {
 			create_crypto_materials();
 		}
+		return ret;
 	}
 
 	void create_crypto_materials() {
@@ -59,7 +68,8 @@ struct groupchat::impl
 
 	void connect_to_storage(sync::storage_id const& sid) {
 		assert(!sid.empty());
-		channels.emplace(sid, std::make_unique<channel>(parent, context, event_loop(), net, sid));
+		auto ret = channels.emplace(sid, std::make_unique<channel>(parent, context, event_loop(), sid));
+		ret.first->second->init(net);
 	}
 
 	void on_connect() {
@@ -67,14 +77,20 @@ struct groupchat::impl
 	}
 
 	void on_disconnect(error const& err) {
+		LOG_TRACE("disconnected");
 		parent.on_disconnect(1, err);
 	}
 
-	void on_create_storage(sync::storage_id const& sid, error const& err) {
+	void on_create_storage(sync::storage_id const& sid, error err) {
 		if(!err) {
 			assert(!sid.empty());
-			auto ret = channels.emplace(sid, std::make_unique<channel>(parent, context, event_loop(), net, sid));
-			ret.first->second->create_initial_record();
+			auto it = channels.find(sid);
+			if(it != channels.end()) {
+				it->second->init(net);
+				it->second->create_initial_record();
+			} else {
+				err = make_error(securepath::errc::invalid_state, "chat room not set");
+			}
 		}
 		parent.on_create(1, sid, err);
 	}
@@ -84,6 +100,32 @@ struct groupchat::impl
 				, event_dest<sync::events::on_connect>(&impl::on_connect)
 				, event_dest<sync::events::on_disconnect>(&impl::on_disconnect)
 				, event_dest<sync::events::on_create_storage>(&impl::on_create_storage) );
+	}
+
+	sync::storage_id create_chat(server_id, std::wstring name) {
+		auto sid = net.create_storage();
+		auto ret = channels.emplace(sid, std::make_unique<channel>(parent, context, event_loop(), sid));
+		ret.first->second->set_name(std::move(name));
+		return sid;
+	}
+
+	void register_my_key(std::string_view server) {
+		//t: non-blocking
+		key_client::unknown_user_key_client client(context);
+		client.connect(server, key_server::default_unknown_user_key_server_port);
+		client.wait_for_connection();
+		auto my_key = context.private_data().my_private_key();
+		assert(my_key);
+		client.register_key(my_key->public_key());
+	}
+
+	server_id connect(std::string_view server, std::uint16_t port) {
+		if(init_crypto()) {
+			register_my_key(server);
+		}
+		// t: support connections to multiple servers at the same time
+		net.connect(server, port);
+		return 1;
 	}
 
 	groupchat& parent;
@@ -113,17 +155,15 @@ groupchat::~groupchat()
 
 
 server_id groupchat::connect(std::string_view server, std::uint16_t port) {
-	// t: support connections to multiple servers at the same time
-	impl_->net.connect(server, port);
-	return 1;
+	return impl_->connect(server, port);
 }
 
 void groupchat::disconnect(server_id) {
-
+	impl_->net.close();
 }
 
-sync::storage_id groupchat::create_chat(server_id) {
-	return impl_->net.create_storage();
+sync::storage_id groupchat::create_chat(server_id sid, std::wstring name) {
+	return impl_->create_chat(sid, std::move(name));
 }
 
 void groupchat::change_user(server_id const&, chat_id const& storage, sync::users change) {

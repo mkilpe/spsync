@@ -5,32 +5,45 @@
 #include <spsync/engine/record_verifier.hpp>
 
 #include <securepath/util/conversions.hpp>
+#include <securepath/util/string_util.hpp>
 
 namespace securepath::groupchat {
 
-channel::channel(groupchat& parent, network::context& context, event_system::event_loop& eloop, sync::network_connection& conn, chat_id const& cid)
+channel::channel(groupchat& parent, network::context& context, event_system::event_loop& eloop, chat_id const& cid)
 : engine_output(eloop)
 , parent_(parent)
 , context_(context)
 , chat_id_(cid)
-, database_(database::sqlite::create_sqlite_connection(to_hex(cid) + ".db"))
-, storage_(database_)
-, enc_keys_(database_)
+, database_()
 {
-	sync::storage_connection sconn{conn.create_storage_connection(cid, storage_, progress_)};
-	engine_ = std::make_unique<sync::sync_engine>(eloop, sconn.input(), enc_keys_, sync::sync_engine_config{""});
+}
+
+void channel::set_name(std::wstring name) {
+	name_ = std::move(name);
+	//t: update name in db
+}
+
+void channel::init(sync::network_connection& conn) {
+	database_ = database::sqlite::create_sqlite_connection(to_hex(chat_id_) + ".db");
+	storage_ = std::make_unique<sync::record_storage>(database_);
+	enc_keys_ = std::make_unique<sync::encryption_key_storage>(database_);
+
+	sync::storage_connection sconn{conn.create_storage_connection(chat_id_, *storage_, progress_)};
+	engine_ = std::make_unique<sync::sync_engine>(event_loop(), sconn.input(), *enc_keys_, sync::sync_engine_config{""});
 
 	//after this the events will be received
 	sconn.attach(*engine_);
 }
 
 void channel::on_object_data_changed(sync::record_handle rec) {
+	LOG_TRACE("on_object_data_changed");
+	assert(engine_);
 	//t: handle nick etc
 	auto record = rec->record();
 	auto obj_rec = record.deserialise_to<sync::data_change_record>();
 
 	//t: add some sane helpers to do all the decrypting et al
-	auto key = enc_keys_.find(obj_rec.encryption_key());
+	auto key = enc_keys_->find(obj_rec.encryption_key());
 	if(key) {
 		sync::data_change_record_verifier ver(*key, obj_rec, record.auth());
 		if(ver.is_authentic() && ver.headers().size() == 1) {
@@ -43,20 +56,28 @@ void channel::on_object_data_changed(sync::record_handle rec) {
 			} else {
 				LOG_WARN("invalid record, no groupchat message found");
 			}
+		} else {
+			LOG_WARN("message not authentic");
 		}
+	} else {
+		LOG_WARN("could not find key to decrypt message");
 	}
 }
 
 void channel::create_initial_record() {
-	enc_keys_.create_key();
+	assert(engine_);
+	enc_keys_->create_key();
 	auto own_key = context_.private_data().my_private_key();
 	assert(own_key);
+	sync::metadata header;
+	header.insert(groupchat_name_id, to_string(name_));
 	sync::users initial;
 	initial.add(sync::util::user_access{own_key->id(), sync::util::access_type::user_management_access});
-	engine_->sync_user_change(initial);
+	engine_->sync_user_change(initial, std::move(header));
 }
 
 message_id channel::send_message(std::string const& msg) {
+	assert(engine_);
 	message_data chat_msg{msg, clock_type::now()};
 	sync::metadata header;
 	header.insert(groupchat_message_id, chat_msg);
@@ -66,6 +87,7 @@ message_id channel::send_message(std::string const& msg) {
 }
 
 void channel::change_user(sync::users change) {
+	assert(engine_);
 	engine_->sync_user_change(std::move(change));
 }
 

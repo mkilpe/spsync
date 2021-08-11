@@ -21,12 +21,18 @@ public:
 
 	bool handle_input(console::input in);
 private:
+	void init_commands();
 	void handle_event(std::unique_ptr<event_base>) override;
 	void handle_command(std::wstring input);
-	void execute_command(std::wstring_view cmd, std::vector<std::wstring_view> const& args);
+	void execute_command(std::wstring cmd, std::vector<std::wstring_view> const& args);
+
+	void connect(std::vector<std::wstring_view> const& args);
+	void create_chat(std::vector<std::wstring_view> const& args);
 private:
 	std::unique_ptr<cli_window> win_;
 	std::unique_ptr<gc> gc_;
+	std::map<std::wstring, std::function<void (std::vector<std::wstring_view> const&)>> cmds_;
+	chat_id cid_;
 };
 
 }

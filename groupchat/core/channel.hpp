@@ -23,7 +23,10 @@ class groupchat;
 class channel : public sync::engine_output
 {
 public:
-	channel(groupchat& parent, network::context& context, event_system::event_loop& eloop, sync::network_connection& conn, chat_id const&);
+	channel(groupchat& parent, network::context& context, event_system::event_loop& eloop, chat_id const&);
+
+	void set_name(std::wstring name);
+	void init(sync::network_connection& conn);
 
 	message_id send_message(std::string const& message);
 	void change_user(sync::users change);
@@ -36,12 +39,13 @@ private:
 	groupchat& parent_;
 	network::context& context_;
 	chat_id chat_id_;
+	std::wstring name_;
 
 	dummy_progress progress_;
 
 	database::connection_ptr database_;
-	sync::record_storage storage_{database_};
-	sync::encryption_key_storage enc_keys_{database_};
+	std::unique_ptr<sync::record_storage> storage_;
+	std::unique_ptr<sync::encryption_key_storage> enc_keys_;
 
 	std::unique_ptr<sync::sync_engine> engine_;
 };

@@ -39,9 +39,12 @@ int main(int argc, char* args[]) {
 		} else {
 			ret = sync::spsync_server(p).run_and_wait();
 		}
+	} catch(securepath::error const& err) {
+		LOG_WARN("Error=%", err);
+		std::cerr << "Error=" << err << std::endl;
 	} catch(std::exception const& ex) {
-		LOG_WARN("Error: %", ex.what());
-		std::cerr << "Error: " << ex.what() << std::endl;
+		LOG_WARN("Error=", ex.what());
+		std::cerr << "Error=" << ex.what() << std::endl;
 	}
 	return ret;
 }

@@ -87,7 +87,7 @@ TEST_CASE("groupchat_test", "[system]") {
 		REQUIRE(!f.get());
 	}
 
-	auto cid = client.create_chat(server_id);
+	auto cid = client.create_chat(server_id, L"test");
 	{
 		auto f = client.created.get_future();
 		WAIT_CHECK(f.valid(), 2s);

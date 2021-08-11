@@ -38,7 +38,7 @@ public:
 	void disconnect(server_id);
 
 	/// Create chat on given server, will call on_create when fail or succeed
-	chat_id create_chat(server_id);
+	chat_id create_chat(server_id, std::wstring name);
 
 	/// change users for chat
 	void change_user(server_id const& server, chat_id const& storage, sync::users change);

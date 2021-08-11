@@ -25,6 +25,7 @@ private:
 	void add_line_to_screen(cli_message const& msg);
 	void add_line(int channel, cli_message msg);
 private:
+	console::context& context_;
 	int current_channel_{};
 	std::map<int, std::deque<cli_message>> history_;
 	std::shared_ptr<console::text_window> text_area_;
