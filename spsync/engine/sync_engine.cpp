@@ -33,12 +33,28 @@ public:
 		LINFO("trying to commit record to server [tag = %, request handle = %]", to_hex(h->tag()), req);
 	}
 
+	void notify_on_record(record_handle h) {
+		//q: should we always require output to be set?
+		if(output) {
+			auto tag = h->type();
+			if(tag == user_change_record_tag) {
+				output->emit<engine_events::on_user_changed>(h);
+			} else if(tag == data_change_record_tag) {
+				output->emit<engine_events::on_object_data_changed>(h);
+			}
+		}
+	}
+
 	void update_record_commit_state(record_handle h, chain_block const& record, chain_block_id const& id) {
 		auto state = check_chain_block(record, id);
 		if(record.check_matches_without_server_data(h->record()) && is_valid_state(state)) {
 			LINFO("setting state for record [block id = %, parent block = %, tag = %, state = %]",
 				id, to_hex(record.parent_hash()), to_hex(h->tag()), state);
 			h->set_state(state, id, record.parent_hash());
+
+			if(state == record_state::in_sync) {
+				notify_on_record(h);
+			}
 		} else {
 			h->set_state(record_state::invalid);
 
@@ -109,7 +125,10 @@ public:
 
 	bool handle_block_chain(chain_block const& record, chain_block_id const& id) {
 		auto state = check_chain_block(record, id);
-		records.create(record, state);
+		record_handle h = records.create(record, state);
+		if(state == record_state::in_sync) {
+			notify_on_record(h);
+		}
 		return state == record_state::in_sync;
 	}
 

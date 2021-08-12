@@ -67,6 +67,9 @@ public:
 	//virtual record_data_handle data() = 0;
 	//virtual const_record_data_handle data() const = 0;
 
+	/// Get the type of record
+	virtual record_type_tag type() const = 0;
+
 	/// Get the record in serialised formats
 	virtual chain_block record() const = 0;
 

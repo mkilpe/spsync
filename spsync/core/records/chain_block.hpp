@@ -2,6 +2,7 @@
 #define SPSYNC_CORE_CHAIN_BLOCK_HEADER
 
 #include "record_base.hpp"
+#include "record_types.hpp"
 #include <spsync/core/types.hpp>
 #include <spsync/util/content_auth.hpp>
 
@@ -30,16 +31,6 @@ public:
 
 	// signature/tag that protects the data in the record
 	util::content_auth auth;
-};
-
-
-/**
- * Types of the records for the serialised record
- */
-enum record_type_tag {
-	user_change_record_tag = 1,
-	data_change_record_tag,
-	segment_record_tag
 };
 
 class user_change_record;

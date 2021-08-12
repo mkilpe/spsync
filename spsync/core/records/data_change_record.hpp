@@ -4,6 +4,7 @@
 #include "data_change_header.hpp"
 #include "encrypted_record_header.hpp"
 #include "record_base.hpp"
+#include "record_types.hpp"
 
 #include <securepath/serialisation/deque.hpp>
 
@@ -50,6 +51,8 @@ struct single_change  {
 
 class data_change_record : public record_base {
 public:
+	static constexpr record_type_tag tag = data_change_record_tag;
+
 	using const_iterator = std::deque<single_change>::const_iterator;
 
 	data_change_record() = default;

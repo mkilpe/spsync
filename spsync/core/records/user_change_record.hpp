@@ -2,6 +2,7 @@
 #define SPSYNC_CORE_USER_CHANGE_RECORD_HEADER
 
 #include "record_base.hpp"
+#include "record_types.hpp"
 #include "encrypted_record_header.hpp"
 #include "../user_change_header.hpp"
 
@@ -31,6 +32,8 @@ private:
 
 class user_change_record : public record_base {
 public:
+	static constexpr record_type_tag tag = user_change_record_tag;
+
 	user_change_record() = default;
 	user_change_record(record_base base, plain_user_change_data data, encrypted_record_header<user_change_header> header)
 	: record_base(std::move(base))

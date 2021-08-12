@@ -46,6 +46,7 @@ TEST_CASE("record_storage", "[unit]") {
 	CHECK(!storage.find(record_tag{}));
 
 	{
+		CHECK(root_handle->type() == user_change_record_tag);
 		CHECK(root_handle->state() == record_state::pending_commit);
 		CHECK(root_handle->parent_block_hash().empty());
 		CHECK(root_handle->block_id().sequence == sequence_number{1});
@@ -93,6 +94,7 @@ TEST_CASE("record_storage", "[unit]") {
 		CHECK(h->tag() == creator.last_tag);
 		CHECK(h->parent_block_hash().empty());
 		CHECK(h->block_id().sequence == sequence_number{2});
+		CHECK(h->type() == user_change_record_tag);
 		CHECK(h->state() == record_state::pending_commit);
 		CHECK(!h->record().tag().empty());
 
@@ -231,6 +233,7 @@ TEST_CASE("record_storage data change", "[unit]") {
 		first_change_block = creator.test_multi_data_change(oids);
 		auto h = storage.create(first_change_block, record_state::in_sync);
 		REQUIRE(h);
+		CHECK(h->type() == data_change_record_tag);
 		for(auto&& r : first_change_block.deserialise_to<data_change_record>()) {
 			CHECK(check_tag(storage.find_first(r.data.id), h->tag()));
 			CHECK(check_tag(storage.find_last(r.data.id), h->tag()));

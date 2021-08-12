@@ -171,6 +171,18 @@ public:
 		q.execute();
 	}
 
+	record_type_tag type() const override {
+		auto q = db_->prepare("SELECT type FROM record WHERE key = :k;");
+		q.bind(":k", record_key_);
+		auto res = q.execute();
+
+		std::int64_t type = 0;
+		if(!res || !res.value(0, type)) {
+			throw make_error(securepath::errc::invalid_data, "failed to query record type from database");
+		}
+		return record_type_tag(type);
+	}
+
 private:
 	mutable std::mutex mutex_;
 	database::connection_ptr db_;
@@ -194,6 +206,7 @@ private:
 		parent_hash: hash of the parent chain block, this is only set after server returns the committed chain block
 		state: record state as integer, this is the record_state enum in record_interface.hpp
 		record: serialised chain_block as blob
+		type: type of the record
 		unique_seq_selector: used to make combination state == insync and seq unique
 
 	database table 'record_objects':
@@ -217,6 +230,7 @@ struct record_storage::impl {
 				"parent_hash BLOB,"
 				"state INTEGER,"
 				"record BLOB,"
+				"type INTEGER, "
 				"unique_seq_selector INTEGER DEFAULT NULL,"
 				"UNIQUE(seq, unique_seq_selector));").execute();
 		}
@@ -396,10 +410,10 @@ sequence_number record_storage::highest_sequence_number() const {
 	return ret;
 }
 
-record_handle record_storage::insert_to_db(chain_block const& rec, record_state state) {
+record_handle record_storage::insert_to_db(chain_block const& rec, record_state state, record_type_tag type) {
 	auto q = impl_->db->prepare(
-		"INSERT INTO record(tag, seq, hash, parent_hash, state, record, unique_seq_selector)"
-		" VALUES(:tag, :seq, :hash, :parent_hash, :state, :record, :useq);");
+		"INSERT INTO record(tag, seq, hash, parent_hash, state, record, type, unique_seq_selector)"
+		" VALUES(:tag, :seq, :hash, :parent_hash, :state, :record, :type, :useq);");
 
 	q.bind(":tag", rec.tag());
 	if(!rec.parent_hash().empty()) {
@@ -411,6 +425,7 @@ record_handle record_storage::insert_to_db(chain_block const& rec, record_state 
 	q.bind(":hash", rec.hash());
 	q.bind(":state", static_cast<std::int64_t>(state));
 	q.bind(":record", serialisation::asn_der_serialise(rec));
+	q.bind(":type", static_cast<std::int64_t>(type));
 	if(state == record_state::in_sync) {
 		q.bind(":useq", seq_selector_value);
 	} else {
@@ -422,26 +437,31 @@ record_handle record_storage::insert_to_db(chain_block const& rec, record_state 
 	return find_tag(rec.tag());
 }
 
-record_handle record_storage::create(chain_block const& rec, record_state state) {
-	LOG_TRACE("creating record to storage % (state %)", to_hex(rec.tag()), state);
+template<typename RecordType>
+record_handle record_storage::create_impl(RecordType const& r, chain_block const& rec, record_state state) {
 	database::transaction tact(*impl_->db);
-	auto handle = insert_to_db(rec, state);
+	auto handle = insert_to_db(rec, state, RecordType::tag);
 	if(handle) {
-		rec.deserialise_record([&rec, this](auto const& r)
-			{
-				if constexpr(std::is_same_v<std::decay_t<decltype(r)>, data_change_record>) {
-					create_object_records(impl_->db, rec.tag(), r);
-				}
-			});
+		if constexpr(std::is_same_v<std::decay_t<decltype(r)>, data_change_record>) {
+			create_object_records(impl_->db, rec.tag(), r);
+		}
 	}
 	return handle;
+}
+
+record_handle record_storage::create(chain_block const& rec, record_state state) {
+	LOG_TRACE("creating record to storage % (state %)", to_hex(rec.tag()), state);
+	return rec.deserialise_record<record_handle>([&, this](auto const& r)
+		{
+			return create_impl(r, rec, state);
+		});
 }
 
 record_handle record_storage::create(auth_record<data_change_record> const& rec) {
 	LOG_TRACE("creating record to storage %", to_hex(rec.auth.tag()));
 
 	database::transaction tact(*impl_->db);
-	auto handle = insert_to_db(chain_block(rec, rec.record.last_seen_block().sequence + 1), record_state::pending_commit);
+	auto handle = insert_to_db(chain_block(rec, rec.record.last_seen_block().sequence + 1), record_state::pending_commit, data_change_record_tag);
 	if(handle) {
 		create_object_records(impl_->db, rec.auth.tag(), rec.record);
 	}

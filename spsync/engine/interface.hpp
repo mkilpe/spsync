@@ -54,7 +54,7 @@ struct engine_output : event_system::event_handler {
 	//conflicting object change ??
 
 	/// Called when user change happened
-	virtual void on_user_changed(users const&) {}
+	virtual void on_user_changed(record_handle) {}
 
 	//users changed
 	//conflicting user change ??
@@ -69,7 +69,7 @@ struct on_object_data_changed {
 	typedef void type(record_handle);
 };
 struct on_user_changed {
-	typedef void type(users const&);
+	typedef void type(record_handle);
 };
 }
 

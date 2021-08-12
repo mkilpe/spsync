@@ -75,8 +75,9 @@ public:
 	record_handle create(chain_block const&, record_state state);
 
 private:
-	record_handle insert_to_db(chain_block const&, record_state);
-
+	template<typename RecordType>
+	record_handle create_impl(RecordType const& r, chain_block const& rec, record_state state);
+	record_handle insert_to_db(chain_block const&, record_state, record_type_tag type);
 private:
 	class impl;
 	std::unique_ptr<impl> impl_;

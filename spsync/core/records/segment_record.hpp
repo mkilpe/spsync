@@ -2,6 +2,7 @@
 #define SPSYNC_CORE_SEGMENT_RECORD_HEADER
 
 #include "record_base.hpp"
+#include "record_types.hpp"
 #include "encrypted_record_header.hpp"
 #include "../segment_header.hpp"
 
@@ -33,6 +34,8 @@ private:
 /// Segment record with encrypted header
 class segment_record : public record_base {
 public:
+	static constexpr record_type_tag tag = segment_record_tag;
+
 	segment_record() = default;
 	segment_record(record_base base, plain_segment_data data, encrypted_record_header<segment_header> header)
 	: record_base(std::move(base))
