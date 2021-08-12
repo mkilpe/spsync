@@ -30,6 +30,7 @@ void channel::init(sync::network_connection& conn) {
 
 	sync::storage_connection sconn{conn.create_storage_connection(chat_id_, *storage_, progress_)};
 	engine_ = std::make_unique<sync::sync_engine>(event_loop(), sconn.input(), *enc_keys_, sync::sync_engine_config{""});
+	engine_->set_output(this);
 
 	//after this the events will be received
 	sconn.attach(*engine_);
