@@ -1,4 +1,5 @@
 
+add_subdirectory(client)
 add_subdirectory(comm)
 add_subdirectory(core)
 add_subdirectory(engine)
