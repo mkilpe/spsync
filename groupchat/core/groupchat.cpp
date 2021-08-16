@@ -153,7 +153,6 @@ groupchat::~groupchat()
 {
 }
 
-
 server_id groupchat::connect(std::string_view server, std::uint16_t port) {
 	return impl_->connect(server, port);
 }
@@ -175,7 +174,7 @@ void groupchat::change_user(server_id const&, chat_id const& storage, sync::user
 }
 
 void groupchat::join(server_id const& server, chat_id const& storage) {
-
+	impl_->connect_to_storage(storage);
 }
 
 message_id groupchat::send_message(server_id const&, chat_id const& storage, std::string const& message) {

@@ -66,6 +66,11 @@ void channel::on_object_data_changed(sync::record_handle rec) {
 	}
 }
 
+void channel::on_user_changed(sync::record_handle rec) {
+	//t: implement
+	parent_.on_change_user(1, chat_id_, sync::users{}, error{});
+}
+
 void channel::create_initial_record() {
 	assert(engine_);
 	//enc_keys_->create_key();

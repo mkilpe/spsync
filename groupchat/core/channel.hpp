@@ -36,7 +36,8 @@ public:
 
 	void create_initial_record();
 private:
-	void on_object_data_changed(sync::record_handle rec) override;
+	void on_object_data_changed(sync::record_handle) override;
+	void on_user_changed(sync::record_handle) override;
 
 private:
 	groupchat& parent_;
