@@ -16,7 +16,10 @@ namespace securepath::groupchat {
 /// associate object id to a message
 using message_id = sync::util::object_id;
 
-struct dummy_progress : sync::progress {};
+struct dummy_progress : sync::progress {
+	dummy_progress(event_system::event_loop& eloop) : progress(eloop) {}
+    void handle_event(std::unique_ptr<event_system::event_base>) override {}
+};
 
 class groupchat;
 

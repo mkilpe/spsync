@@ -49,6 +49,8 @@ public:
 	/// Send a message to the chat
 	message_id send_message(server_id const& server, chat_id const& chat, std::string const& message);
 
+	/// Attached network context
+	network::context& context();
 public:
 	/// called when server connected
 	virtual void on_connect(server_id) = 0;

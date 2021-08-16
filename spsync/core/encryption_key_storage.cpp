@@ -75,7 +75,6 @@ encryption_key encryption_key_storage::create_key() {
 	insert(res);
 
 	return res;
-
 }
 
 bool operator==(encryption_key const& left, encryption_key const& right) {

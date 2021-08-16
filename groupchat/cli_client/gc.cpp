@@ -41,7 +41,8 @@ void gc::on_change_user(server_id sid, chat_id cid, sync::users change, error er
 }
 
 void gc::on_join(server_id sid, chat_id cid) {
-
+	auto s = print("joined '%'", to_hex(cid));
+	win_.add_message(0, to_wstring(s));
 }
 
 void gc::on_message(server_id, chat_id, message m) {

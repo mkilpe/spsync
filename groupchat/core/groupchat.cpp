@@ -186,4 +186,8 @@ message_id groupchat::send_message(server_id const&, chat_id const& storage, std
 	return it->second->send_message(message);
 }
 
+network::context& groupchat::context() {
+	return impl_->context;
+}
+
 }

@@ -10,7 +10,7 @@ namespace securepath::sync {
  *
  */
 struct progress : event_system::event_handler {
-    progress(event_system::event_loop&);
+	progress(event_system::event_loop& loop) : event_handler(loop) {}
 
 	virtual ~progress() = default;
 };

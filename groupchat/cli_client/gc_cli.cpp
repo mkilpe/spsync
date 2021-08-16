@@ -4,6 +4,7 @@
 #include <securepath/console/text_window.hpp>
 #include <securepath/log/log.hpp>
 #include <securepath/util/string_util.hpp>
+#include <securepath/util/print_util.hpp>
 
 namespace securepath::groupchat {
 
@@ -59,6 +60,10 @@ void gc_cli::init_commands() {
 	cmds_[L"connect"] = [this](auto v){ connect(v); };
 	cmds_[L"disconnect"] = [this](auto){ gc_->disconnect(1); };
 	cmds_[L"create-chat"] = [this](auto v){ create_chat(v); };
+	cmds_[L"add-user"] = [this](auto v){ add_user(v); };
+	cmds_[L"add-member"] = [this](auto v){ add_member(v); };
+	cmds_[L"join"] = [this](auto v){ join(v); };
+	cmds_[L"my-info"] = [this](auto v){ my_info(v); };
 }
 
 void gc_cli::connect(std::vector<std::wstring_view> const& args) {
@@ -80,6 +85,50 @@ void gc_cli::create_chat(std::vector<std::wstring_view> const& args) {
 		win_->add_info(0, L"creating chat '" + name + L"' with id=" + to_wstring(to_hex(cid_)));
 	} else {
 		win_->add_info(0, L"missing argument(s) for /create-chat");
+	}
+}
+
+void gc_cli::add_user(std::vector<std::wstring_view> const& args) {
+
+}
+
+// add member to chat
+void gc_cli::add_member(std::vector<std::wstring_view> const& args) {
+	if(args.size() == 2) {
+		auto& context = gc_->context();
+		auto key = context.private_data().my_private_key();
+		assert(key);
+
+		using namespace sync::util;
+
+		sync::users users;
+		users.add(user_access{user_id{key->id()}, access_type::all_access});
+
+		crypto::public_key_id key_id{from_hex(to_string(args[1]))};
+		users.add(user_access{user_id{key_id}, access_type::all_access});
+
+		gc_->change_user(1, from_hex(to_string(args[0])), users);
+	} else {
+		win_->add_info(0, L"missing argument(s) for /add-member");
+	}
+}
+
+void gc_cli::join(std::vector<std::wstring_view> const& args) {
+	if(args.size() == 1) {
+		gc_->join(1, from_hex(to_string(args[0])));
+	} else {
+		win_->add_info(0, L"missing argument(s) for /join");
+	}
+}
+
+void gc_cli::my_info(std::vector<std::wstring_view> const& args) {
+	auto& context = gc_->context();
+	auto key = context.private_data().my_private_key();
+	if(key) {
+		auto s = print("my key is '%'", key->id());
+		win_->add_info(0, to_wstring(s));
+	} else {
+		win_->add_info(0, L"no key set yet");
 	}
 }
 

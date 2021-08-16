@@ -28,6 +28,10 @@ private:
 
 	void connect(std::vector<std::wstring_view> const& args);
 	void create_chat(std::vector<std::wstring_view> const& args);
+	void add_user(std::vector<std::wstring_view> const& args);
+	void add_member(std::vector<std::wstring_view> const& args);
+	void join(std::vector<std::wstring_view> const& args);
+	void my_info(std::vector<std::wstring_view> const& args);
 private:
 	std::unique_ptr<cli_window> win_;
 	std::unique_ptr<gc> gc_;
