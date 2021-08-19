@@ -10,7 +10,7 @@ namespace securepath::sync {
 
 //t: change the direct mutex locking scheme used in storage.cpp to event queue based mechanism to synchronise calls
 
-class connection {
+class connection : public std::enable_shared_from_this<connection> {
 public:
 	connection(storage_server_context&);
 	virtual ~connection() = default;
@@ -26,9 +26,13 @@ public:
 	void handle(protocol::request_data const&);
 	void handle(protocol::request_commit const&);
 
+	void notify(protocol::storage_id const& sid, chain_block const&);
+
 private:
 	virtual void send(octet_span s) = 0;
 	template<typename T> void send_packet(T const& p);
+
+	storage* find_storage(protocol::storage_id const&);
 private:
 	storage_server_context& context_;
 	crypto::public_key_id id_;

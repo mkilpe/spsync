@@ -21,7 +21,11 @@ public:
 	void run() {
 		server_future_ = std::async(std::launch::async, [&]
 			{
-				server_.run_and_wait();
+				try {
+					server_.run_and_wait();
+				} catch(...) {
+					std::terminate();
+				}
 			});
 	}
 

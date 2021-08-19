@@ -35,18 +35,62 @@ struct storage_tool : command_parser {
 	}
 
 	void list_records(record_storage const& records) {
-		sequence_number last_sequence = records.last_block().sequence;
+		sequence_number last_sequence = records.last_block(show_pending).sequence;
 		if(last_sequence.is_valid()) {
 			std::cout << "Storage has records [1, " << last_sequence.value << "]\n\n";
-			for(sequence_number seq{1}; seq != last_sequence+1; ++seq) {
-				auto h = records.find(seq);
-				if(h) {
-					std::cout << "\t" << seq.value << ": " << to_hex(h->tag()) << "\n";
-				} else {
-					std::cout << "\t" << seq.value << ": <no such record>\n";
-				}
+			list_in_sync_records(records);
+			if(show_pending) {
+				list_pending_records(records);
 			}
 			std::cout << std::endl;
+		}
+	}
+
+	std::string record_header(sequence_number seq, record_handle h) {
+		std::ostringstream out;
+		out << std::right << std::setfill('0') << std::setw(4) << seq.value;
+		out << " (" << std::setfill(' ') << std::setw(14) << h->state() << ")";
+		if(verbose) {
+			out << " t=" << h->type();
+		}
+		return out.str();
+	}
+
+	std::string record_hashes(record_handle h) {
+		return "[" + to_hex(h->block_id().hash).substr(0, 12) + " <- " + to_hex(h->parent_block_hash()).substr(0, 12) + "]";
+	}
+
+	void list_in_sync_records(record_storage const& records) {
+		sequence_number last_sequence = records.last_block().sequence;
+		if(last_sequence.is_valid()) {
+			for(sequence_number seq{1}; seq != last_sequence+1; ++seq) {
+				auto h = records.find(seq);
+				std::cout << "\t" << record_header(seq, h) << ": ";
+				if(h) {
+					std::cout << to_hex(h->tag());
+					if(verbose) {
+						std::cout << " " << record_hashes(h);
+					}
+				} else {
+					std::cout << "<no such record>";
+				}
+				std::cout << "\n";
+			}
+		}
+	}
+
+	void list_pending_records(record_storage const& records) {
+		auto h = records.find_first_pending_commit();
+		while(h) {
+			if(h->state() == record_state::pending_commit) {
+				std::cout << "\t" << record_header(h->block_id().sequence, h) << ": ";
+				std::cout << to_hex(h->tag());
+				if(verbose) {
+					std::cout << " " << record_hashes(h);
+				}
+				std::cout << "\n";
+			}
+			h = records.find_internal(h->internal_id()+1);
 		}
 	}
 };

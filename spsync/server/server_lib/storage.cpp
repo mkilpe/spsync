@@ -1,4 +1,5 @@
 #include "storage.hpp"
+#include "connection.hpp"
 
 #include <securepath/database/sqlite/connection.hpp>
 #include <securepath/log/log.hpp>
@@ -38,7 +39,28 @@ std::deque<chain_block> storage::get_records(sequence_number start, sequence_num
 
 util::result<chain_block> storage::commit_block(chain_block const& cb) {
 	std::unique_lock l{mutex_};
-	return sync_->commit_block(cb);
+	auto res = sync_->commit_block(cb);
+	if(res) {
+		notify_listeners(res.value());
+	}
+	return res;
+}
+
+void storage::add_listener(std::shared_ptr<connection> const& p) {
+	std::unique_lock l{mutex_};
+	listeners_[&*p] = p;
+}
+
+void storage::notify_listeners(chain_block const& c) {
+	for(auto it = listeners_.begin(); it != listeners_.end(); ) {
+		auto p = it->second.lock();
+		if(p) {
+			p->notify(id_, c);
+			++it;
+		} else {
+			it = listeners_.erase(it);
+		}
+	}
 }
 
 }

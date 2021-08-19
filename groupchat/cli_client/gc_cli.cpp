@@ -115,7 +115,8 @@ void gc_cli::add_member(std::vector<std::wstring_view> const& args) {
 
 void gc_cli::join(std::vector<std::wstring_view> const& args) {
 	if(args.size() == 1) {
-		gc_->join(1, from_hex(to_string(args[0])));
+		cid_ = from_hex(to_string(args[0]));
+		gc_->join(1, cid_);
 	} else {
 		win_->add_info(0, L"missing argument(s) for /join");
 	}

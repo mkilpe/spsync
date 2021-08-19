@@ -129,10 +129,6 @@ public:
 					}
 				});
 		}
-
-		tag_ = rec.tag();
-		parent_hash_ = rec.parent_hash();
-		block_id_ = rec.id();
 	}
 
 	record_internal_id internal_id() const override {
@@ -140,7 +136,7 @@ public:
 	}
 
 	void update_record(chain_block const& rec) {
-		LOG_TRACE("updating record to storage %", to_hex(rec.tag()));
+		LOG_TRACE("updating record to storage % [bid=%, parent_h=%]", to_hex(rec.tag()), rec.id(), to_hex(rec.parent_hash()));
 
 		auto q = db_->prepare(
 			"UPDATE record SET tag = :tag, seq = :seq, hash = :hash, parent_hash = :parent_hash,"
@@ -310,6 +306,7 @@ record_storage::~record_storage()
 chain_block_id record_storage::last_block(bool allow_local) const {
 	auto q = impl_->db->prepare("SELECT hash, seq FROM record WHERE"
 		" seq = (SELECT max(seq) FROM record WHERE state = :state1 OR state = :state2)"
+		" AND (state = :state1 OR state = :state2)"
 		" ORDER BY key DESC LIMIT 1;");
 	q.bind(":state1", static_cast<std::int64_t>(record_state::in_sync));
 	q.bind(":state2", static_cast<std::int64_t>(allow_local ? record_state::pending_commit : record_state::in_sync));
@@ -328,6 +325,7 @@ record_handle record_storage::find_last(bool allow_local) const {
 	auto q = impl_->db->prepare(
 		"SELECT key, tag, seq, hash, parent_hash, state FROM record WHERE"
 		" seq = (SELECT max(seq) FROM record WHERE state = :state1 OR state = :state2)"
+		" AND (state = :state1 OR state = :state2)"
 		" ORDER BY key DESC LIMIT 1;");
 	q.bind(":state1", static_cast<std::int64_t>(record_state::in_sync));
 	q.bind(":state2", static_cast<std::int64_t>(allow_local ? record_state::pending_commit : record_state::in_sync));
@@ -408,6 +406,14 @@ sequence_number record_storage::highest_sequence_number() const {
 		ret = sequence_number{res.value<std::uint64_t>(0).value_or(0)};
 	}
 	return ret;
+}
+
+record_handle record_storage::find_internal(record_internal_id iid) const {
+	auto q = impl_->db->prepare(
+		"SELECT key, tag, seq, hash, parent_hash, state FROM record"
+		" WHERE key = :k;");
+	q.bind(":k", iid);
+	return impl_->load_record(q.execute());
 }
 
 record_handle record_storage::insert_to_db(chain_block const& rec, record_state state, record_type_tag type) {

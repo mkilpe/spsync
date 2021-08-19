@@ -25,7 +25,7 @@ comm_input& storage_connection::input() const {
 
 void storage_connection::attach(comm_output& out) {
 	static_cast<comm&>(input_).set_output(out);
-	nconn_.attach(id_, out);
+	nconn_.attach(id_);
 }
 
 network_connection::network_connection(network::context& context, event_system::event_handler& handler)

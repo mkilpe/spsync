@@ -113,6 +113,11 @@ public:
 		return chain_block_id{sequence_, hash()};
 	}
 
+	/// check if there is any data in the block chain
+	bool is_valid() const {
+		return !record_.empty();
+	}
+
 	template<typename Ar>
 	void serialise(Ar& ar) {
 		serialisation::sequence<Ar> seq(ar);

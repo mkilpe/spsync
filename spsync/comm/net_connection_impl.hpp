@@ -43,7 +43,11 @@ struct network_connection_impl : network::encrypted_connection {
 
 	void on_disconnected(securepath::error const& error) override {
 		LOG_INFO("storage network connection disconnected: %", error);
+		hello_done = false;
 		handler.emit<events::on_disconnect>(error);
+		for(auto&& v : attached_comms) {
+			v.second->on_disconnected(error);
+		}
 	}
 
 	void on_sent(std::size_t bytes) override {
@@ -62,8 +66,12 @@ struct network_connection_impl : network::encrypted_connection {
 			LOG_WARN("server responded with error: %", p.error);
 			close(protocol::to_error(p.error));
 		} else {
+			hello_done = true;
 			// notify higher level that we are connected now
 			handler.emit<events::on_connect>();
+			for(auto&& v : attached_comms) {
+				v.second->on_connected();
+			}
 		}
 	}
 
@@ -93,11 +101,14 @@ struct network_connection_impl : network::encrypted_connection {
 		}
 	}
 
-	void attach(storage_id const& id, comm_output& out) {
+	void attach(storage_id const& id) {
 		std::unique_lock lock{mutex};
 		auto node = comms.extract(id);
 		if(node) {
-			attached_comms.insert(std::move(node));
+			auto res = attached_comms.insert(std::move(node));
+			if(hello_done && res.inserted) {
+				res.position->second->on_connected();
+			}
 		}
 	}
 
@@ -132,6 +143,7 @@ public:
 	serialisation::packet_deserialiser<protocol::s2c_types> deser;
 	std::map<storage_id, std::unique_ptr<comm>> comms;
 	std::map<storage_id, std::unique_ptr<comm>> attached_comms;
+	bool hello_done{};
 };
 
 }

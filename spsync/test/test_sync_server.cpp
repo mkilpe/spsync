@@ -165,27 +165,6 @@ void test_sync_context::create_initial_record() {
 	}
 }
 
-static bool check_record_matches(sequence_number seq, int client_n, record_handle sh, record_handle ch) {
-	bool ret = false;
-	if(sh) {
-		if(ch) {
-			if(sh->tag() == ch->tag()) {
-				ret = sh->parent_block_hash() == ch->parent_block_hash();
-				if(!ret) {
-					LOG_WARN("parent block hash for sequence % does not match: server(%) - client %(%)", seq, to_hex(sh->parent_block_hash()), client_n, to_hex(ch->parent_block_hash()));
-				}
-			} else {
-				LOG_WARN("tag for sequence % does not match: server(%) - client %(%)", seq, to_hex(sh->tag()), client_n, to_hex(ch->tag()));
-			}
-		} else {
-			LOG_WARN("client % sequence number % missing", client_n, seq);
-		}
-	} else {
-		LOG_WARN("server sequence number % missing", seq);
-	}
-	return ret;
-}
-
 bool test_sync_context::compare_record_storages(sequence_number required_seq) const {
 	record_storage const& server_records = server.sync.records();
 	sequence_number last_seq = server_records.last_block().sequence;

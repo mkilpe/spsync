@@ -17,9 +17,8 @@ asio::ip::tcp::endpoint storage_server_params::create_endpoint() const {
 
 
 class storage_server_client
-: public std::enable_shared_from_this<storage_server_client>
-, public network::encrypted_connection
-, public connection
+	: public connection
+	, public network::encrypted_connection
 {
 public:
 	storage_server_client(
@@ -27,8 +26,8 @@ public:
 		std::shared_ptr<network::encrypted_server> server,
 		network::handshake_data hdata,
 		storage_server_context& context)
-	: encrypted_connection(c, std::move(hdata), server)
-	, connection(context)
+	: connection(context)
+	, encrypted_connection(c, std::move(hdata), server)
 	{
 		LOG_TRACE("constructing storage_server_client %", this);
 	}

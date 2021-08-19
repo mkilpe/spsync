@@ -1,14 +1,15 @@
 #ifndef SPSYNC_TEST_UTIL_HEADER
 #define SPSYNC_TEST_UTIL_HEADER
 
+#include <spsync/core/record_storage.hpp>
+
 #include <securepath/database/sqlite/connection.hpp>
 
 namespace securepath::sync::test {
 
-inline database::connection_ptr create_test_database(std::string const& db_name = "test.db") {
-	std::remove(db_name.c_str());
-	return database::sqlite::create_sqlite_connection(db_name);
-}
+database::connection_ptr create_test_database(std::string const& db_name = "test.db");
+bool check_record_matches(sequence_number seq, int client_n, record_handle sh, record_handle ch);
+bool check_commit_records_equal(sequence_number seq, record_storage const&, record_storage const&);
 
 }
 

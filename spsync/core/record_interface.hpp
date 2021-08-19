@@ -77,6 +77,7 @@ public:
 	virtual void set_record(chain_block const&) = 0;
 
 	/// Locally unique id for this record. This id stays the same when updating records in case of conflicting state and so can be used to track non-committed records
+	/// This is strictly increasing as function of created records
 	virtual record_internal_id internal_id() const = 0;
 };
 

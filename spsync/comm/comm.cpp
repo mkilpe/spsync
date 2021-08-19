@@ -47,6 +47,7 @@ void comm::handle(protocol::response_sequence_number const& p) {
 }
 
 void comm::handle(protocol::response_records const& p) {
+	LOG_TRACE("comm::handle(response_records)");
 	assert(output_);
 	record_response arg;
 	if(p.error) {

@@ -5,38 +5,47 @@
 #include <spsync/engine/sync_engine.hpp>
 #include <spsync/test/util.hpp>
 #include <spsync/test/test_progress.hpp>
+#include <spsync/test/test_context.hpp>
 
 #include <securepath/test_frame/test_suite.hpp>
 #include <securepath/test_frame/test_serialisation.hpp>
 #include <securepath/test_frame/test_utils.hpp>
 #include <securepath/database/sqlite/connection.hpp>
 #include <securepath/event_system/event_handler.hpp>
-#include <securepath/network/test/support/testing_context.hpp>
 #include <infrastructure/key_client_lib/unknown_user_key_client.hpp>
 #include <infrastructure/key_server/server_lib/defaults.hpp>
 
 #include <future>
 
-// + (1)
+// + (1) connect single client by registering key first
+// + (2) connect two clients, first creates storage, second one joins it
+// - (3) connect two clients sharing storage, reconnect test
+// - (4) connect many clients to share storage
 
 namespace securepath::sync {
 namespace {
 
 class test_client : public event_system::event_handler {
 public:
-	test_client(network::context& context, event_system::single_thread_event_loop& eloop)
+	test_client(network::context& context, event_system::single_thread_event_loop& eloop, int n = 0)
 	: event_handler(eloop)
 	, context(context)
 	, net(context, *this)
+	, database(test::create_test_database("test_connection_client_" + std::to_string(n) + ".db"))
 	{
+		add_test_key();
 	}
 
 	void connect() {
 		net.connect("127.0.0.1", default_storage_server_port);
 	}
 
-	void create_remote_storage() {
-		net.create_storage();
+	void disconnect() {
+		net.close();
+	}
+
+	storage_id create_remote_storage() {
+		return net.create_storage();
 	}
 
 	void connect_to_storage(storage_id const& sid) {
@@ -87,7 +96,6 @@ public:
 
 	void create_initial_record() {
 		// set initial key, use hard coded one for testing
-		enc_keys.insert(encryption_key{sequence_number{1}, to_octet_vector("12345678901234567890123456789012")});
 		auto own_key = context.private_data().my_private_key();
 		assert(own_key);
 		users initial;
@@ -95,10 +103,15 @@ public:
 		engine->sync_user_change(initial);
 	}
 
+	//t: remove when we have real key handling implemented
+	void add_test_key() {
+		enc_keys.insert(encryption_key{sequence_number{1}, to_octet_vector("12345678901234567890123456789012")});
+	}
+
 	network::context& context;
 	network_connection net;
 
-	database::connection_ptr database{test::create_test_database()};
+	database::connection_ptr database;
 	test::test_progress progress;
 	record_storage storage{database};
 	encryption_key_storage enc_keys{database};
@@ -113,35 +126,168 @@ private:
 
 }
 
+// (1) connect single client by registering key first
 TEST_CASE("connection test", "[system]") {
 	event_system::single_thread_event_loop single_thread_event_loop;
-	network::test::testing_context net_context;
-	net_context.set_server_dh_parameters();
-	net_context.set_server_pk_parameters();
-	net_context.set_client_dh_parameters();
-	net_context.set_client_pk_parameters();
+	test::test_context net_context;
 
-	//add client key to the db
-//	net_context.keys.insert(my_private_key(net_context.client_private_data).public_key());
+	net_context.add_client();
 
-	test::test_server server(net_context.server_context);
+	test::test_server server(net_context.server_context());
 	server.run();
 	std::this_thread::sleep_for(1s);
 
-	key_client::unknown_user_key_client key_client(net_context.client_context);
+	key_client::unknown_user_key_client key_client(net_context.client_context(0));
 	key_client.connect("127.0.0.1", key_server::default_unknown_user_key_server_port);
 	key_client.wait_for_connection();
-	key_client.register_key(net_context.client_private_data.my_private_key()->public_key());
+	key_client.register_key(net_context.client_context(0).private_data().my_private_key()->public_key());
 
-	test_client client(net_context.client_context, single_thread_event_loop);
+	test_client client(net_context.client_context(0), single_thread_event_loop);
 	client.connect();
 	client.wait_for_connection();
 	client.create_remote_storage();
 	client.wait_for_storage_created();
 	client.create_initial_record();
 
-	std::this_thread::sleep_for(4s);
+	for(int i = 0; i != 5; ++i) {
+		client.engine->sync_object_change(util::create_object_id(), metadata{});
+	}
 
+	WAIT_CHECK(client.storage.last_block().sequence == sequence_number{6}, 2s);
+}
+
+// (2) connect two clients, first creates storage, second one joins it
+TEST_CASE("two clients test", "[system]") {
+	event_system::single_thread_event_loop single_thread_event_loop;
+	test::test_context net_context;
+
+	net_context.add_client(2);
+	net_context.add_client_keys_for_server();
+
+	test::test_server server(net_context.server_context());
+	server.run();
+	std::this_thread::sleep_for(1s);
+
+	test_client client1(net_context.client_context(0), single_thread_event_loop, 0);
+	client1.connect();
+	client1.wait_for_connection();
+	auto sid = client1.create_remote_storage();
+	client1.wait_for_storage_created();
+	client1.create_initial_record();
+
+	test_client client2(net_context.client_context(0), single_thread_event_loop, 1);
+	client2.connect();
+	client2.wait_for_connection();
+	client2.connect_to_storage(sid);
+
+	WAIT_CHECK(test::check_commit_records_equal(sequence_number{1}, client1.storage, client2.storage), 2s);
+
+	client2.engine->sync_object_change(util::create_object_id(), metadata{});
+
+	WAIT_CHECK(test::check_commit_records_equal(sequence_number{2}, client1.storage, client2.storage), 2s);
+}
+
+// (3) connect two clients sharing storage, reconnect test
+TEST_CASE("reconnect test", "[system]") {
+	event_system::single_thread_event_loop single_thread_event_loop;
+	test::test_context net_context;
+
+	net_context.add_client(2);
+	net_context.add_client_keys_for_server();
+
+	test::test_server server(net_context.server_context());
+	server.run();
+	std::this_thread::sleep_for(1s);
+
+	test_client client1(net_context.client_context(0), single_thread_event_loop, 0);
+	client1.connect();
+	client1.wait_for_connection();
+	auto sid = client1.create_remote_storage();
+	client1.wait_for_storage_created();
+	client1.create_initial_record();
+
+	test_client client2(net_context.client_context(0), single_thread_event_loop, 1);
+	client2.connect();
+	client2.wait_for_connection();
+	client2.connect_to_storage(sid);
+
+	WAIT_CHECK(test::check_commit_records_equal(sequence_number{1}, client1.storage, client2.storage), 2s);
+
+	client2.disconnect();
+	for(int i = 0; i != 5; ++i) {
+		client1.engine->sync_object_change(util::create_object_id(), metadata{});
+	}
+	WAIT_CHECK(client1.storage.last_block().sequence == sequence_number{6}, 2s);
+
+	client2.connect();
+	WAIT_CHECK(test::check_commit_records_equal(sequence_number{6}, client1.storage, client2.storage), 2s);
+
+	client2.disconnect();
+	for(int i = 0; i != 5; ++i) {
+		client1.engine->sync_object_change(util::create_object_id(), metadata{});
+	}
+	client2.engine->sync_object_change(util::create_object_id(), metadata{});
+
+	WAIT_CHECK(client1.storage.last_block().sequence == sequence_number{11}, 2s);
+
+	client2.connect();
+	WAIT_CHECK(test::check_commit_records_equal(sequence_number{12}, client1.storage, client2.storage), 2s);
+}
+
+bool check_commit_records_equal(sequence_number s, std::vector<std::unique_ptr<test_client>> const& c) {
+	assert(c.size() > 1);
+	bool ret = true;
+	for(int i = 0; i != c.size()-1; ++i) {
+		ret = ret && test::check_commit_records_equal(s, c[i]->storage, c[i+1]->storage);
+	}
+	return ret;
+}
+
+// (4) connect many clients to share storage
+TEST_CASE("multi client test", "[system]") {
+	int const client_count = 20;
+
+	event_system::single_thread_event_loop single_thread_event_loop;
+	test::test_context net_context;
+
+	net_context.add_client(client_count);
+	net_context.add_client_keys_for_server();
+
+	test::test_server server(net_context.server_context());
+	server.run();
+	std::this_thread::sleep_for(1s);
+
+	std::vector<std::unique_ptr<test_client>> clients;
+	for(int i = 0; i != client_count; ++i) {
+		clients.push_back(std::make_unique<test_client>(net_context.client_context(i), single_thread_event_loop, i));
+		clients.back()->connect();
+	}
+	for(auto&& v : clients) {
+		v->wait_for_connection();
+	}
+
+	auto sid = clients[0]->create_remote_storage();
+	clients[0]->wait_for_storage_created();
+	clients[0]->create_initial_record();
+
+	for(int i = 1; i != client_count; ++i) {
+		clients[i]->connect_to_storage(sid);
+	}
+	WAIT_CHECK(check_commit_records_equal(sequence_number{1}, clients), 5s);
+
+	for(int i = 0; i != 5; ++i) {
+		clients[0]->engine->sync_object_change(util::create_object_id(), metadata{});
+	}
+
+	WAIT_CHECK(check_commit_records_equal(sequence_number{6}, clients), 5s);
+
+	for(int i = 1; i != client_count; ++i) {
+		for(int c = 0; c != 5; ++c) {
+			clients[i]->engine->sync_object_change(util::create_object_id(), metadata{});
+		}
+	}
+
+	WAIT_CHECK(check_commit_records_equal(sequence_number{101}, clients), 60s);
 }
 
 }

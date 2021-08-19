@@ -67,6 +67,9 @@ public:
 	/// find the first record for given object id
 	record_handle find_first(object_id const&) const;
 
+	/// find by internal id
+	record_handle find_internal(record_internal_id) const;
+
 
 	/// create new record, the first function sets the state to be unknown and the object id is not set
 	template<typename RecordType>

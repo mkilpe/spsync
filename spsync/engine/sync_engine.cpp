@@ -207,6 +207,12 @@ public:
 
 	chain_block update_pending_commit(chain_block const& record) {
 		return record.deserialise_record<chain_block>([&](auto const& rec) {
+				//check if we are already trying to commit pending record, so that we don't overwrite it while in progress
+				if(rec.last_seen_block() == records.last_block()) {
+					// already up-to-date it seems
+					return chain_block{};
+				}
+
 				auto enc_key = keys.find(rec.encryption_key());
 				if(!enc_key) {
 					LWARN("could not find encryption key for pending commit (key=%)", rec.encryption_key());
@@ -218,7 +224,7 @@ public:
 					throw make_error(errc::constraint_violation, "failed to authenticate record");
 				}
 
-				return update_record(*enc_key, ver);
+				return chain_block{update_record(*enc_key, ver)};
 			});
 	}
 
@@ -229,10 +235,11 @@ public:
 		auto handle = records.find_first_pending_commit();
 		if(handle) {
 			auto record = update_pending_commit(handle->record());
-			handle->set_record(record);
-			commit_record(handle);
+			if(record.is_valid()) {
+				handle->set_record(record);
+				commit_record(handle);
+			}
 		}
-
 	}
 
 	void update_server_seq(sequence_number s) {
@@ -349,6 +356,7 @@ void sync_engine::on_commit_response(request_handle req_handle, commit_response 
 			auto handle = impl_->records.find_tag(block.tag());
 			if(handle) {
 				impl_->update_record_commit_state(handle, block, id);
+				impl_->try_commit_pending();
 			} else {
 				LWARN("commit reply with unknown tag [block id = %, tag = %]", id, to_hex(block.tag()));
 			}
@@ -371,6 +379,9 @@ void sync_engine::on_commit_response(request_handle req_handle, commit_response 
 				// try to fetch all records we don't have
 				auto req_h = impl_->comm.fetch_records(highest_seq, sequence_number{});
 				LTRACE("out of sync, requested records [%,-] (request handle %)", highest_seq, req_h);
+			} else {
+				//already up-to-date with server but perhaps we have some local pending commits
+				impl_->try_commit_pending();
 			}
 		}
 	}
@@ -395,7 +406,7 @@ record_handle sync_engine::sync_object_change(object_id oid, metadata mdata, rec
 	LTRACE("sync object change: oid=%", oid.to_hex());
 
 	auto last_oid_record = impl_->records.find_last(oid);
-	auto last_block = impl_->records.last_block();
+	auto last_block = impl_->records.last_block(true); //q: no 'true' for non-require all modes?
 
 	if(!last_block.is_valid()) {
 		throw error(errc::invalid_record_chain_state, "Can't find last record, data change cannot be first record");
@@ -418,7 +429,7 @@ record_handle sync_engine::sync_user_change(users user_change, metadata mdata) {
 	std::unique_lock lock{impl_->mutex};
 	LTRACE("sync user change: users=%", user_change);
 
-	auto last_block = impl_->records.last_block();
+	auto last_block = impl_->records.last_block(true); //q: no 'true' for non-require all modes?
 
 	user_change_record_creator creator(impl_->keys.current_key(), last_block);
 
@@ -435,7 +446,7 @@ record_handle sync_engine::sync_segment_end(metadata mdata) {
 	std::unique_lock lock{impl_->mutex};
 	LTRACE("sync segment end");
 
-	auto last_block = impl_->records.last_block();
+	auto last_block = impl_->records.last_block(true); //q: no 'true' for non-require all modes?
 
 	if(!last_block.is_valid()) {
 		throw error(errc::invalid_record_chain_state, "Can't find last record, segment cannot be first record");

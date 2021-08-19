@@ -26,7 +26,9 @@ TEST_CASE("record_storage", "[unit]") {
 	record_storage storage(db_conn);
 
 	CHECK(storage.last_block().sequence == sequence_number{});
+	CHECK(storage.last_block(true).sequence == sequence_number{});
 	CHECK(!storage.find_last());
+	CHECK(!storage.find_last(true));
 	CHECK(!storage.find_last(object_id{}));
 	CHECK(!storage.find_first(object_id{}));
 	CHECK(!storage.find(record_tag{}));
@@ -40,7 +42,9 @@ TEST_CASE("record_storage", "[unit]") {
 
 	// state needs to be in_sync for these to be found
 	CHECK(storage.last_block().sequence == sequence_number{});
+	CHECK(storage.last_block(true).sequence == creator.last_server_seq);
 	CHECK(!storage.find_last());
+	CHECK(storage.find_last(true) == root_handle);
 	CHECK(!storage.find_last(object_id{}));
 	CHECK(!storage.find_first(object_id{}));
 	CHECK(!storage.find(record_tag{}));
@@ -56,6 +60,7 @@ TEST_CASE("record_storage", "[unit]") {
 	{ //set state and server sequence
 		root_handle->set_state(record_state::in_sync, chain_block_id{creator.last_server_seq, creator.last_chain_hash}, octet_vector{});
 		CHECK(storage.last_block().sequence == creator.last_server_seq);
+		CHECK(storage.last_block(true).sequence == creator.last_server_seq);
 		CHECK(root_handle->block_id().sequence == creator.last_server_seq);
 		CHECK(root_handle->state() == record_state::in_sync);
 	}
@@ -63,6 +68,7 @@ TEST_CASE("record_storage", "[unit]") {
 	{ // check find_last returns correct data
 		auto h = storage.find_last();
 		REQUIRE(h);
+		CHECK(storage.find_last(true) == h);
 		CHECK(h->tag() == creator.last_tag);
 		CHECK(h->parent_block_hash().empty());
 		CHECK(h->block_id().sequence == sequence_number{1});
@@ -319,7 +325,11 @@ TEST_CASE("record_storage pending commits", "[unit]") {
 	storage.create(creator.test_user_change(), record_state::in_sync);
 	auto const initial_hash = creator.last_chain_hash;
 
+	auto const initial_seq = creator.last_server_seq;
+
 	CHECK(!storage.find_first_pending_commit());
+	CHECK(storage.last_block().sequence == initial_seq);
+	CHECK(storage.last_block(true).sequence == initial_seq);
 
 	auto first_pending = storage.create(creator.test_data_change(), record_state::pending_commit);
 	auto const tag_of_first_pending = first_pending->tag();
@@ -327,6 +337,8 @@ TEST_CASE("record_storage pending commits", "[unit]") {
 	//see we find the pending commit
 	CHECK(storage.find_first_pending_commit());
 	CHECK(storage.find_first_pending_commit()->tag() == tag_of_first_pending);
+	CHECK(storage.last_block().sequence == initial_seq);
+	CHECK(storage.last_block(true).sequence == creator.last_server_seq);
 
 	storage.create(creator.test_data_change(), record_state::pending_commit);
 	auto const tag_of_second_pending = creator.last_tag;
@@ -334,6 +346,8 @@ TEST_CASE("record_storage pending commits", "[unit]") {
 	//still get the first pending
 	CHECK(storage.find_first_pending_commit());
 	CHECK(storage.find_first_pending_commit()->tag() == tag_of_first_pending);
+	CHECK(storage.last_block().sequence == initial_seq);
+	CHECK(storage.last_block(true).sequence == creator.last_server_seq);
 
 	auto record = creator.test_data_change();
 	record.set_sequence_and_parent_hash(sequence_number{2}, initial_hash);
@@ -352,7 +366,6 @@ TEST_CASE("record_storage pending commits", "[unit]") {
 
 
 TEST_CASE("record_storage set record", "[unit]") {
-	//find_first_pending_commit
 	remove_database_test_db();
 	auto db_conn = database::sqlite::create_sqlite_connection(db_name);
 
@@ -373,6 +386,54 @@ TEST_CASE("record_storage set record", "[unit]") {
 
 	// in_sync state record cannot be changed
 	CHECK_THROWS(last_seen->set_record(block));
+}
+
+
+TEST_CASE("record_storage pending commits with same seq", "[unit]") {
+	//find_first_pending_commit
+	remove_database_test_db();
+	auto db_conn = database::sqlite::create_sqlite_connection(db_name);
+
+	record_storage storage(db_conn);
+	test_block_creator creator;
+
+	// first record needs to be user_change
+	storage.create(creator.test_user_change(), record_state::in_sync);
+
+	auto tmp_c = creator;
+	storage.create(tmp_c.test_data_change(), record_state::in_sync);
+	auto const initial_hash = tmp_c.last_chain_hash;
+	auto const initial_seq = tmp_c.last_server_seq;
+
+	chain_block_id first_p;
+	chain_block_id last_p;
+	// create three records with same sequence and parent
+
+	{
+		auto tmp_c = creator;
+		auto h = storage.create(tmp_c.test_data_change(), record_state::pending_commit);
+		first_p = h->block_id();
+	}
+	{
+		auto tmp_c = creator;
+		storage.create(tmp_c.test_data_change(), record_state::pending_commit);
+	}
+	{
+		auto tmp_c = creator;
+		auto h = storage.create(tmp_c.test_data_change(), record_state::pending_commit);
+		last_p = h->block_id();
+	}
+
+	//see we find the pending commit
+	CHECK(storage.last_block().sequence == initial_seq);
+	auto l = storage.find_last();
+	REQUIRE(l);
+	CHECK(l->block_id() == storage.last_block());
+	CHECK(l->block_id().hash == initial_hash);
+
+	CHECK(storage.find_first_pending_commit()->block_id() == first_p);
+	CHECK(storage.last_block(true) == last_p);
+	CHECK(storage.find_last(true)->block_id() == last_p);
 }
 
 }

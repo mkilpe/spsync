@@ -98,7 +98,7 @@ error chain_sync::check_rules_existing(data_change_record const& rec, single_cha
 error chain_sync::check_rules(data_change_record const& rec) const {
 	error err;
 	for(auto it = rec.begin(); it != rec.end() && !err; ++it) {
-		//LOG_TRACE("GGG: % -- %", it->data.id, to_hex(it->data.previous_oid_record_tag));
+		LOG_TRACE("GGG: % -- %", it->data.id, to_hex(it->data.previous_oid_record_tag));
 		if(!it->data.id.is_valid()) {
 			LOG_TRACE("data id is invalid [id=%] (rsid=%)", it->data.id, config_.log_id);
 			err = make_error(protocol::errc::invalid_record);
