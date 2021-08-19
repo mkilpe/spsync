@@ -19,8 +19,8 @@
 
 // + (1) connect single client by registering key first
 // + (2) connect two clients, first creates storage, second one joins it
-// - (3) connect two clients sharing storage, reconnect test
-// - (4) connect many clients to share storage
+// + (3) connect two clients sharing storage, reconnect test
+// + (4) connect many clients to share storage
 
 namespace securepath::sync {
 namespace {

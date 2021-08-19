@@ -35,6 +35,12 @@ void channel::init(sync::network_connection& conn) {
 
 	//after this the events will be received
 	sconn.attach(*engine_);
+
+	// key for testing
+	sync::encryption_key res;
+	res.key_seq = sync::sequence_number{1};
+	res.key = to_octet_vector("test key plah plkah plah");
+	enc_keys_->insert(res);
 }
 
 void channel::on_object_data_changed(sync::record_handle rec) {
@@ -74,11 +80,6 @@ void channel::on_user_changed(sync::record_handle rec) {
 void channel::create_initial_record() {
 	assert(engine_);
 	//enc_keys_->create_key();
-	sync::encryption_key res;
-
-	res.key_seq = sync::sequence_number{1};
-	res.key = to_octet_vector("test key plah plkah plah");
-	enc_keys_->insert(res);
 
 	auto own_key = context_.private_data().my_private_key();
 	assert(own_key);
