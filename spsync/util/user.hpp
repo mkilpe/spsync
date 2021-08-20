@@ -80,14 +80,6 @@ bool operator!=(user_access const& l, user_access const& r);
 
 std::ostream& operator<<(std::ostream&, user_access const&);
 
-/*
-// is this needed?
-class user {
-
-};
-
-*/
-
 }
 
 #endif

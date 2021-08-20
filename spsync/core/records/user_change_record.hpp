@@ -4,7 +4,7 @@
 #include "record_base.hpp"
 #include "record_types.hpp"
 #include "encrypted_record_header.hpp"
-#include "../user_change_header.hpp"
+#include "user_change_header.hpp"
 
 #include <spsync/core/users.hpp>
 

@@ -3,6 +3,7 @@
 
 #include <spsync/core/records/util.hpp>
 #include <spsync/engine/record_verifier.hpp>
+#include <spsync/client/record_util.hpp>
 
 #include <securepath/util/conversions.hpp>
 #include <securepath/util/string_util.hpp>
@@ -47,28 +48,18 @@ void channel::on_object_data_changed(sync::record_handle rec) {
 	LOG_TRACE("on_object_data_changed");
 	assert(engine_);
 	//t: handle nick etc
-	auto record = rec->record();
-	auto obj_rec = record.deserialise_to<sync::data_change_record>();
 
-	//t: add some sane helpers to do all the decrypting et al
-	auto key = enc_keys_->find(obj_rec.encryption_key());
-	if(key) {
-		sync::data_change_record_verifier ver(*key, obj_rec, record.auth());
-		if(ver.is_authentic() && ver.headers().size() == 1) {
-			auto header = ver.headers().front().header;
-			auto meta = header.metadata();
-			auto opt = meta.find<message_data>(groupchat_message_id);
-			if(opt) {
-				message m{opt->message, "test", opt->sender_time, rec->block_id().sequence};
-				parent_.on_message(1, chat_id_, m);
-			} else {
-				LOG_WARN("invalid record, no groupchat message found");
-			}
+	auto opt_meta = extract_single_object_meta(*enc_keys_, rec);
+	if(opt_meta) {
+		auto opt = opt_meta->find<message_data>(groupchat_message_id);
+		if(opt) {
+			message m{opt->message, "test", opt->sender_time, rec->block_id().sequence};
+			parent_.on_message(1, chat_id_, m);
 		} else {
-			LOG_WARN("message not authentic");
+			LOG_WARN("invalid record, no groupchat message found");
 		}
 	} else {
-		LOG_WARN("could not find key to decrypt message");
+		LOG_WARN("invalid record");
 	}
 }
 
