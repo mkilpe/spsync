@@ -7,6 +7,8 @@
 #include "user_change_header.hpp"
 
 #include <spsync/core/users.hpp>
+#include <securepath/crypto/encrypted_content.hpp>
+#include <securepath/crypto/enveloped_content.hpp>
 
 namespace securepath::sync {
 
@@ -22,11 +24,13 @@ public:
 	template<typename Ar>
 	void serialise(Ar& ar) {
 		serialisation::sequence<Ar> seq(ar);
-		seq & access_ & trailing_data_;
+		seq & access_ & encrypted_change_data_ & enveloped_change_data_ & trailing_data_;
 	}
 private:
 	// the change in users access
 	users access_;
+	crypto::encrypted_content encrypted_change_data_;
+	crypto::enveloped_content enveloped_change_data_;
 	serialisation::trailing_data trailing_data_;
 };
 

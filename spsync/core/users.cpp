@@ -4,6 +4,27 @@
 
 namespace securepath::sync {
 
+
+serialisation::serialiser& serialise(serialisation::serialiser& s, users_change_mode const& v) {
+	return securepath::serialisation::serialise(s, v);
+}
+
+serialisation::deserialiser& serialise(serialisation::deserialiser& s, users_change_mode& v) {
+	return securepath::serialisation::serialise(s, v);
+}
+
+std::ostream& operator<<(std::ostream& out, users_change_mode const& mode) {
+	char const* const strings[] = {"full", "delta"};
+	if(mode == users_change_mode::full) {
+		out << "full";
+	} else if(mode == users_change_mode::delta) {
+		out << "delta";
+	} else {
+		out << "unknown";
+	}
+	return out;
+}
+
 users& users::add(util::user_access access) {
 	// first see if we have the same user already and replace that if we do
 	auto it = users_.begin();

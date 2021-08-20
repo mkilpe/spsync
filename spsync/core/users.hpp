@@ -10,6 +10,16 @@
 
 namespace securepath::sync {
 
+/// mode in which the users class operates
+enum class users_change_mode {
+	full  = 1, /// the users class contains all users
+	delta = 2  /// the users class contains only changed users
+};
+
+serialisation::serialiser& serialise(serialisation::serialiser& s, users_change_mode const& v);
+serialisation::deserialiser& serialise(serialisation::deserialiser& s, users_change_mode& v);
+
+std::ostream& operator<<(std::ostream&, users_change_mode const&);
 
 /**
  * Contains the users access rights (or delta thereof) for a storage chain
@@ -17,6 +27,7 @@ namespace securepath::sync {
  */
 class users {
 public:
+	users(users_change_mode mode = users_change_mode::full);
 
 	/// Adds user to this object and returns itself
 	users& add(util::user_access);
@@ -30,13 +41,14 @@ public:
 	template<typename Ar>
 	void serialise(Ar& ar) {
 		serialisation::sequence<Ar> seq(ar);
-		seq & users_ & trailing_data_;
+		seq & mode_ & users_ & trailing_data_;
 	}
 
 	bool operator==(users const&) const;
 	bool operator!=(users const&) const;
 private:
 	// the access for users
+	users_change_mode mode_;
 	std::deque<util::user_access> users_;
 	serialisation::trailing_data trailing_data_;
 };

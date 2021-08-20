@@ -17,8 +17,8 @@ struct user_change_info {
 	// time when this change was created
 	time_point creation_time;
 
-	//todo: old encryption keys?
-	//todo: new encryption key if user was removed?
+	// what here?
+	//  * old encryption keys?
 
 	serialisation::trailing_data trailing_data;
 

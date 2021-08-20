@@ -1,0 +1,25 @@
+
+user change records
+-------------------
+
+Use cases:
+	* user added
+	* user removed
+	* user access changed
+	* encryption key changed
+	* other use cases with the metadata
+
+changing data:
+	* user access changes (all or delta?)
+	* new encryption key
+		- public key enc for all?
+		- enc with old key?
+		- old enc keys?
+
+
+needed data:
+	* user list with access
+		- allow delta and full list?
+	* enveloped content for public key encrypt the new key
+		- do only for added person
+	* symmetric encryption of the new key
