@@ -24,6 +24,8 @@ struct encryption_key {
 };
 
 
+//t: add some kind of pending key concept, for example, the key sequence might change there is conflicting change while synchronising the user change record
+
 /**
  * Storage to keep encryption keys and query those by the key id
  *
@@ -45,7 +47,7 @@ public:
 	/// get the sequence number of the latest key
 	util::sequence_number last_seq() const;
 
-	/// create new key with next sequence numner
+	/// create new key with next sequence number
 	encryption_key create_key();
 private:
 	database::connection_ptr db_;

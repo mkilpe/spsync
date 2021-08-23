@@ -33,7 +33,9 @@ test_context::~test_context() {
 void test_context::add_client(int amount) {
 	for(int i = 0; i != amount; ++i) {
 		clients.push_back(std::make_unique<instance>(io, client_ssl, pki_context.root.public_key()));
-		clients.back()->private_data.set_my_private_key(crypto::generate_rsa_private_key(1024));
+		auto priv_key = crypto::generate_rsa_private_key(1024);
+		clients.back()->private_data.set_my_private_key(priv_key);
+		clients.back()->keys.insert(priv_key.public_key());
 		enable_client_dh_handshake(clients.back()->context);
 		enable_client_pk_handshake(clients.back()->context);
 	}

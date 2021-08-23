@@ -3,7 +3,9 @@
 
 #include "interface.hpp"
 #include <spsync/comm/interface.hpp>
+#include <spsync/core/crypto_context.hpp>
 #include <spsync/core/progress.hpp>
+#include <spsync/core/sync_mode.hpp>
 
 #include <memory>
 
@@ -15,6 +17,8 @@ class encryption_key_storage;
  * The configuration for the sync engine
  */
 struct sync_engine_config {
+	/// sync mode, this has to match the mode set on the server
+	sync_mode mode{sync_mode::require_all_seen};
 	/// this is id for the repository, it is only used for logging to help trace/debug things if set
 	std::string log_id;
 };
@@ -27,7 +31,7 @@ class sync_engine
 	, public engine_input
 {
 public:
-	sync_engine(event_system::event_loop&, comm_input&, encryption_key_storage&, sync_engine_config);
+	sync_engine(event_system::event_loop&, comm_input&, crypto_context&, sync_engine_config);
 	~sync_engine();
 
 	/// set the engine output interface that it uses to communicate with higher layer

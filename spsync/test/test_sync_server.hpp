@@ -9,6 +9,8 @@
 #include <spsync/core/encryption_key_storage.hpp>
 #include <spsync/server/server_lib/chain_sync.hpp>
 
+#include <securepath/crypto/public_key_cache.hpp>
+#include <securepath/crypto/private_data_cache.hpp>
 #include <securepath/crypto/private_key.hpp>
 #include <securepath/crypto/rsa.hpp>
 #include <securepath/database/sqlite/connection.hpp>
@@ -65,7 +67,7 @@ private:
  */
 class test_sync_server_client_context {
 public:
-	test_sync_server_client_context(int n);
+	test_sync_server_client_context(int n, sync_mode mode);
 
 	crypto::private_key user_key{crypto::generate_rsa_private_key(1024)};
 	util::user_id user{user_key.id()};
@@ -74,8 +76,11 @@ public:
 	database::connection_ptr database;
 	test_sync_server_client io{database};
 	encryption_key_storage enc_keys{database};
+	crypto::public_key_cache pkeys;
+	crypto::private_data_cache pdata;
+	crypto_context cc{pkeys, pdata, enc_keys};
 	sync_engine_config engine_config;
-	test_sync_engine engine{single_thread_event_loop, io, enc_keys, engine_config};
+	test_sync_engine engine{single_thread_event_loop, io, cc, engine_config};
 };
 
 
@@ -119,6 +124,7 @@ struct test_sync_context {
 	bool compare_record_storages(sequence_number = {}) const;
 
 public:
+	sync_mode mode;
 	test_sync_server server;
 	std::deque<std::unique_ptr<test_sync_server_client_context>> clients;
 };

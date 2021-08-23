@@ -95,10 +95,13 @@ record_storage& test_sync_server_client::records() const {
 	return storage_;
 }
 
-test_sync_server_client_context::test_sync_server_client_context(int n)
+test_sync_server_client_context::test_sync_server_client_context(int n, sync_mode mode)
 : database{create_test_database("test_sync_server_client_" + std::to_string(n) + ".db")}
-, engine_config{std::to_string(n)}
+, engine_config{mode, std::to_string(n)}
 {
+	// own public key needs to be in the public key access that is given to the sync engine
+	pkeys.insert(user_key.public_key());
+	pdata.set_my_private_key(user_key);
 	io.set_output(engine);
 }
 
@@ -108,13 +111,14 @@ test_sync_server::test_sync_server(chain_sync_config config)
 }
 
 test_sync_context::test_sync_context(chain_sync_config config)
-: server(config)
+: mode(config.mode)
+, server(config)
 {
 }
 
 void test_sync_context::add_client(bool connect, int num) {
 	for(int i = 0; i != num; ++i) {
-		clients.push_back(std::make_unique<test_sync_server_client_context>(clients.size()+1));
+		clients.push_back(std::make_unique<test_sync_server_client_context>(clients.size()+1, mode));
 		if(connect) {
 			clients.back()->io.connect(server);
 		}
@@ -160,6 +164,8 @@ void test_sync_context::create_initial_record() {
 			}
 			// insert the key for everyone
 			c->enc_keys.insert(initial_key);
+			// the first user does the initial change and so needs everyone's key
+			clients.front()->pkeys.insert(c->user_key.public_key());
 		}
 		clients.front()->engine.sync_user_change(initial);
 	}

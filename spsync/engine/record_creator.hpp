@@ -2,6 +2,7 @@
 #define SPSYNC_ENGINE_RECORD_CREATOR_HEADER
 
 #include <spsync/core/encryption_key_storage.hpp>
+#include <spsync/core/crypto_context.hpp>
 #include <spsync/core/records/data_change_record.hpp>
 #include <spsync/core/records/user_change_record.hpp>
 #include <spsync/core/records/segment_record.hpp>
@@ -57,7 +58,8 @@ public:
 	/// set the user access data with the metadata
 	void set_change(users access, metadata);
 
-	//todo: add the data to user_change_info, like possible old encryption keys, new encryption key
+	/// enveloped the last enc key for all users, needs to be called after set_change
+	void encrypt_last_key_for_users(crypto_context&);
 
 	/// Returns the ready user_change_record, it can be called only once as it will move content
 	auth_record<user_change_record> result();

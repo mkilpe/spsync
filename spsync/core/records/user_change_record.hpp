@@ -6,11 +6,23 @@
 #include "encrypted_record_header.hpp"
 #include "user_change_header.hpp"
 
+#include <spsync/core/encryption_key_storage.hpp>
 #include <spsync/core/users.hpp>
 #include <securepath/crypto/encrypted_content.hpp>
 #include <securepath/crypto/enveloped_content.hpp>
 
 namespace securepath::sync {
+
+struct env_structure {
+	std::vector<encryption_key> enc_keys;
+	serialisation::trailing_data trailing_data;
+
+	template<typename Ar>
+	void serialise(Ar& ar) {
+		serialisation::sequence<Ar> seq(ar);
+		seq & enc_keys & trailing_data;
+	}
+};
 
 class plain_user_change_data {
 public:
@@ -20,6 +32,9 @@ public:
 
 	/// get the user access changes
 	users access() const { return access_; }
+	crypto::enveloped_content const& enveloped_content() const { return enveloped_change_data_; }
+
+	void set_enveloped_content(crypto::enveloped_content c) { enveloped_change_data_ = std::move(c); }
 
 	template<typename Ar>
 	void serialise(Ar& ar) {

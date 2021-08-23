@@ -2,13 +2,20 @@
 #include <securepath/test_frame/test_serialisation.hpp>
 #include <securepath/test_frame/test_utils.hpp>
 
+#include <spsync/test/util.hpp>
+
+#include <spsync/core/encryption_key_storage.hpp>
 #include <spsync/engine/record_creator.hpp>
 #include <spsync/engine/record_verifier.hpp>
 #include <securepath/crypto/aes_gcm.hpp>
 #include <securepath/crypto/private_key.hpp>
 #include <securepath/crypto/rsa.hpp>
+#include <securepath/crypto/public_key_cache.hpp>
+#include <securepath/crypto/private_data_cache.hpp>
 
 namespace securepath::sync::util {
+
+using namespace securepath::test;
 
 // + (1) create data change record with single change
 // + (2) create user change record
@@ -19,7 +26,7 @@ namespace securepath::sync::util {
 
 // (1)
 TEST_CASE("data_change_record_creator single", "[unit]") {
-	encryption_key key{1, test::random_octet_vector(crypto::aes_gcm_key_size())};
+	encryption_key key{1, random_octet_vector(crypto::aes_gcm_key_size())};
 	octet_vector prevhash = to_octet_vector("test tag");
 	data_change_record_creator creator(key, chain_block_id{sequence_number{1}, prevhash});
 
@@ -47,29 +54,46 @@ TEST_CASE("data_change_record_creator single", "[unit]") {
 
 // (2)
 TEST_CASE("user_change_record_creator", "[unit]") {
-	encryption_key key{1, test::random_octet_vector(crypto::aes_gcm_key_size())};
+
+	crypto::public_key_cache keycache;
+	crypto::private_data_cache datacache;
+	encryption_key_storage kstorage(test::create_test_database());
+	crypto_context crypto{keycache, datacache, kstorage};
+
+	encryption_key key{1, random_octet_vector(crypto::aes_gcm_key_size())};
+	kstorage.insert(key);
+
 	octet_vector prevhash = to_octet_vector("test tag");
 	user_change_record_creator creator(key, chain_block_id{sequence_number{1}, prevhash});
 
 	metadata mdata{{"test", to_octet_vector("data")}};
 
 	crypto::private_key root_user_key{crypto::generate_rsa_private_key(1024)};
+	keycache.insert(root_user_key.public_key());
+
 	util::user_id root_user{root_user_key.id()};
 	users initial;
 	initial.add(util::user_access{root_user, util::access_type::user_management_access});
 
 	//set the user change for this record
 	creator.set_change(initial, mdata);
+	creator.encrypt_last_key_for_users(crypto);
 
 	auth_record<user_change_record> rec = creator.result();
 	CHECK(rec.record.last_seen_block().sequence == sequence_number{1});
 	CHECK(rec.record.last_seen_block().hash == prevhash);
+	CHECK(!rec.record.data().enveloped_content().empty());
 
 	// verify authenticity and decrypt
 	user_change_record_verifier ver(key, rec.record, rec.auth);
 	REQUIRE(ver.is_authentic());
 	CHECK(ver.header().metadata() == mdata);
 	CHECK(rec.record.data().access() == initial);
+
+	auto env = rec.record.data().enveloped_content();
+	auto data = serialisation::asn_der_deserialise<env_structure>(env.decrypt(root_user_key));
+	REQUIRE(data.enc_keys.size() == 1);
+	CHECK(data.enc_keys.front() == key);
 }
 
 // (3)
@@ -84,7 +108,7 @@ TEST_CASE("segment_record_creator", "[unit]") {
 
 // (5)
 TEST_CASE("record manipulation", "[unit]") {
-	encryption_key key{1, test::random_octet_vector(crypto::aes_gcm_key_size())};
+	encryption_key key{1, random_octet_vector(crypto::aes_gcm_key_size())};
 	octet_vector prevhash = to_octet_vector("test tag");
 	data_change_record_creator creator(key, chain_block_id{sequence_number{1}, prevhash});
 
@@ -102,7 +126,7 @@ TEST_CASE("record manipulation", "[unit]") {
 
 		auto manipulated = ser_rec;
 		// manipulate the record, flip a random bit
-		manipulated[test::random_uint32(0, manipulated.size()-1)] ^= 0x01;
+		manipulated[random_uint32(0, manipulated.size()-1)] ^= 0x01;
 		CHECK(manipulated != ser_rec);
 
 		// reconstruct the auth record structure from the serialised and manipulated record

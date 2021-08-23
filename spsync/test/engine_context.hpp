@@ -7,6 +7,8 @@
 #include "util.hpp"
 
 #include <spsync/core/encryption_key_storage.hpp>
+#include <securepath/crypto/public_key_cache.hpp>
+#include <securepath/crypto/private_data_cache.hpp>
 #include <securepath/crypto/private_key.hpp>
 #include <securepath/crypto/rsa.hpp>
 #include <securepath/database/sqlite/connection.hpp>
@@ -17,6 +19,9 @@ class engine_context {
 public:
 
 	engine_context() {
+		// own public key must be in the public key access for sync engine
+		pkeys.insert(root_user_key.public_key());
+		pdata.set_my_private_key(root_user_key);
 		io.set_output(engine);
 	}
 
@@ -46,8 +51,11 @@ public:
 	record_storage storage{database};
 	comm_test_interface io{progress, storage};
 	encryption_key_storage enc_keys{database};
+	crypto::public_key_cache pkeys;
+	crypto::private_data_cache pdata;
+	crypto_context cc{pkeys, pdata, enc_keys};
 	sync_engine_config engine_config;
-	test_sync_engine engine{single_thread_event_loop, io, enc_keys, engine_config};
+	test_sync_engine engine{single_thread_event_loop, io, cc, engine_config};
 };
 
 }

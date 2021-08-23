@@ -29,9 +29,10 @@ void channel::init(sync::network_connection& conn) {
 	database_ = database::sqlite::create_sqlite_connection(to_hex(chat_id_) + ".db");
 	storage_ = std::make_unique<sync::record_storage>(database_);
 	enc_keys_ = std::make_unique<sync::encryption_key_storage>(database_);
+	crypto_ = std::make_unique<sync::crypto_context>(context_.public_keys(), context_.private_data(), *enc_keys_);
 
 	sync::storage_connection sconn{conn.create_storage_connection(chat_id_, *storage_, progress_)};
-	engine_ = std::make_unique<sync::sync_engine>(event_loop(), sconn.input(), *enc_keys_, sync::sync_engine_config{""});
+	engine_ = std::make_unique<sync::sync_engine>(event_loop(), sconn.input(), *crypto_, sync::sync_engine_config{});
 	engine_->set_output(this);
 
 	//after this the events will be received

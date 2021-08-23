@@ -1,6 +1,7 @@
 #ifndef SPSYNC_SERVER_CHAIN_SYNC_HEADER
 #define SPSYNC_SERVER_CHAIN_SYNC_HEADER
 
+#include <spsync/core/sync_mode.hpp>
 #include <spsync/core/record_storage.hpp>
 #include <spsync/core/records/data_change_record.hpp>
 #include <spsync/util/result.hpp>
@@ -12,20 +13,6 @@
 namespace securepath::sync {
 
 // t: check and update user access when handling records
-
-/**
- * modes for synchronisation (server rules):
- *	- allow all at any time
- *	- require user change seen and segment has seen everything before it
- *	- require all data change added seen when adding
- *	- require all up-to-date always
- */
-enum class sync_mode {
-	allow_all,
-	require_special_seen,
-	require_data_add_remove_seen,
-	require_all_seen
-};
 
 /**
  * Configuration for server side block chain

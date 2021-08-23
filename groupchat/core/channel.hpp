@@ -50,6 +50,7 @@ private:
 	database::connection_ptr database_;
 	std::unique_ptr<sync::record_storage> storage_;
 	std::unique_ptr<sync::encryption_key_storage> enc_keys_;
+	std::unique_ptr<sync::crypto_context> crypto_;
 
 	std::unique_ptr<sync::sync_engine> engine_;
 };

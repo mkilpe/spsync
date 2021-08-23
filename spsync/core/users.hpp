@@ -32,9 +32,6 @@ public:
 	/// Adds user to this object and returns itself
 	users& add(util::user_access);
 
-	/// Merge another users object to this one
-	void merge(users const&);
-
 	/// Get the users
 	std::deque<util::user_access> const& access() const;
 
@@ -46,6 +43,10 @@ public:
 
 	bool operator==(users const&) const;
 	bool operator!=(users const&) const;
+
+	using const_iterator = std::deque<util::user_access>::const_iterator;
+	const_iterator begin() const;
+	const_iterator end() const;
 private:
 	// the access for users
 	users_change_mode mode_;

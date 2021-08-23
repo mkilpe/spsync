@@ -1,5 +1,7 @@
 #include "users.hpp"
 
+#include <securepath/serialisation/enum.hpp>
+
 #include <cassert>
 
 namespace securepath::sync {
@@ -25,6 +27,11 @@ std::ostream& operator<<(std::ostream& out, users_change_mode const& mode) {
 	return out;
 }
 
+users::users(users_change_mode mode)
+: mode_(mode)
+{
+}
+
 users& users::add(util::user_access access) {
 	// first see if we have the same user already and replace that if we do
 	auto it = users_.begin();
@@ -38,13 +45,16 @@ users& users::add(util::user_access access) {
 	return *this;
 }
 
-void users::merge(users const&) {
-	//implement
-	assert(false);
-}
-
 std::deque<util::user_access> const& users::access() const {
 	return users_;
+}
+
+users::const_iterator users::begin() const {
+	return users_.begin();
+}
+
+users::const_iterator users::end() const {
+	return users_.end();
 }
 
 bool users::operator==(users const& u) const {

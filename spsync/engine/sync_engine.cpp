@@ -21,9 +21,9 @@ namespace securepath::sync {
 
 class sync_engine::impl {
 public:
-	impl(comm_input& comm, encryption_key_storage& keys, sync_engine_config config)
+	impl(comm_input& comm, crypto_context& cc, sync_engine_config config)
 	: comm(comm)
-	, keys(keys)
+	, crypto(cc)
 	, records(comm.records())
 	, config(std::move(config))
 	{}
@@ -34,13 +34,34 @@ public:
 	}
 
 	void notify_on_record(record_handle h) {
-		//q: should we always require output to be set?
 		if(output) {
 			auto tag = h->type();
 			if(tag == user_change_record_tag) {
+				extract_encryption_key(h);
 				output->emit<engine_events::on_user_changed>(h);
 			} else if(tag == data_change_record_tag) {
 				output->emit<engine_events::on_object_data_changed>(h);
+			}
+		}
+	}
+
+	void extract_encryption_key(record_handle h) {
+		auto user_change = h->record().deserialise_to<user_change_record>();
+		auto env_c = user_change.data().enveloped_content();
+		if(!env_c.empty()) {
+			try {
+				//t: handle overwriting pending keys etc
+				auto plain_env = serialisation::asn_der_deserialise<env_structure>(env_c.decrypt(my_private_key(crypto.private_data())));
+				for(auto&& v : plain_env.enc_keys) {
+					if(!crypto.enc_keys().find(v.key_seq)) {
+						LINFO("saving not seen encryption key (seq=%)", v.key_seq);
+						crypto.enc_keys().insert(v);
+					} else {
+						LTRACE("already known encryption key (seq=%)");
+					}
+				}
+			} catch(std::exception const& exp) {
+				LWARN("exception while handling encryption key from user change record (tag=%, exp=%)", to_hex(h->tag()), exp);
 			}
 		}
 	}
@@ -72,6 +93,7 @@ public:
 			id = next->block_id();
 			LTRACE("setting pending sync to in sync state [id = %]", id);
 			next->set_state(record_state::in_sync);
+			notify_on_record(next);
 		}
 		if(next && next->parent_block_hash() != id.hash) {
 			LWARN("next block has invalid parent hash [id = %, next parent hash = %]", id, to_hex(next->parent_block_hash()));
@@ -134,7 +156,7 @@ public:
 
 	template<typename Record>
 	void handle_block(chain_block const& record, chain_block_id const& id, Record const& rec) {
-		auto enc_key = keys.find(rec.encryption_key());
+		auto enc_key = crypto.enc_keys().find(rec.encryption_key());
 		if(enc_key) {
 			record_verifier<Record> ver(*enc_key, rec, record.auth());
 			if(ver.is_authentic()) {
@@ -213,7 +235,7 @@ public:
 					return chain_block{};
 				}
 
-				auto enc_key = keys.find(rec.encryption_key());
+				auto enc_key = crypto.enc_keys().find(rec.encryption_key());
 				if(!enc_key) {
 					LWARN("could not find encryption key for pending commit (key=%)", rec.encryption_key());
 					throw error(errc::constraint_violation, "could not find encryption key for pending commit");
@@ -234,9 +256,16 @@ public:
 		LTRACE("trying to commit pending records");
 		auto handle = records.find_first_pending_commit();
 		if(handle) {
-			auto record = update_pending_commit(handle->record());
-			if(record.is_valid()) {
-				handle->set_record(record);
+			// we only want to rewrite/update the records in case of require all mode
+			//f: handle require_special_seen and require_data_add_remove_seen modes
+			if(config.mode == sync_mode::require_all_seen) {
+				auto record = update_pending_commit(handle->record());
+				if(record.is_valid()) {
+					handle->set_record(record);
+					commit_record(handle);
+				}
+			} else {
+				//t: handle allow_all correctly, not trying to recommit always
 				commit_record(handle);
 			}
 		}
@@ -252,7 +281,7 @@ public:
 public:
 	mutable engine_mutex_type mutex;
 	comm_input& comm;
-	encryption_key_storage& keys;
+	crypto_context& crypto;
 	record_storage& records;
 	sync_engine_config config;
 	engine_output* output{};
@@ -267,9 +296,9 @@ public:
 #define LINFO(format, ...) LOG_INFO(format " (rsid=%)" __VA_OPT__(,) __VA_ARGS__, impl_->config.log_id)
 #define LWARN(format, ...) LOG_WARN(format " (rsid=%)" __VA_OPT__(,) __VA_ARGS__, impl_->config.log_id)
 
-sync_engine::sync_engine(event_system::event_loop& loop, comm_input& comm, encryption_key_storage& keys, sync_engine_config config)
+sync_engine::sync_engine(event_system::event_loop& loop, comm_input& comm, crypto_context& cc, sync_engine_config config)
 : comm_output(loop)
-, impl_(std::make_unique<impl>(comm, keys, std::move(config)))
+, impl_(std::make_unique<impl>(comm, cc, std::move(config)))
 {
 }
 
@@ -368,10 +397,10 @@ void sync_engine::on_commit_response(request_handle req_handle, commit_response 
 	} else {
 		LINFO("committing failed: error=%", res.data.get_error());
 		//t: handle correctly:
-		//  1. bring us up-to-date with server state
-		//  2. see if there are conflicts and notify higher level if there are
-		//  3. recreate the records with correct previous tag/last seen seq for non-conflicting records
-		//  4. try to commit again
+		//  + 1. bring us up-to-date with server state
+		//  - 2. see if there are conflicts and notify higher level if there are
+		//  + 3. recreate the records with correct previous tag/last seen seq for non-conflicting records
+		//  + 4. try to commit again
 
 		if(check_result_error(res.data, protocol::errc::record_out_of_sync)) {
 			auto highest_seq = impl_->records.highest_sequence_number();
@@ -414,7 +443,7 @@ record_handle sync_engine::sync_object_change(object_id oid, metadata mdata, rec
 
 	record_tag last_oid_tag = last_oid_record ? last_oid_record->tag() : record_tag{};
 
-	data_change_record_creator creator(impl_->keys.current_key(), last_block);
+	data_change_record_creator creator(impl_->crypto.enc_keys().current_key(), last_block);
 	creator.add_change(std::move(oid), last_oid_tag, std::move(mdata));
 
 	record_handle h = impl_->records.create(creator.result());
@@ -431,10 +460,11 @@ record_handle sync_engine::sync_user_change(users user_change, metadata mdata) {
 
 	auto last_block = impl_->records.last_block(true); //q: no 'true' for non-require all modes?
 
-	user_change_record_creator creator(impl_->keys.current_key(), last_block);
+	user_change_record_creator creator(impl_->crypto.enc_keys().current_key(), last_block);
 
 	creator.set_change(std::move(user_change), std::move(mdata));
-	//todo: new encryption key here and such with the change
+	// for now just always envelope the newest key for all, later on consider other strategies too
+	creator.encrypt_last_key_for_users(impl_->crypto);
 
 	record_handle h = impl_->records.create(creator.result());
 	impl_->commit_record(h);
@@ -452,7 +482,7 @@ record_handle sync_engine::sync_segment_end(metadata mdata) {
 		throw error(errc::invalid_record_chain_state, "Can't find last record, segment cannot be first record");
 	}
 
-	segment_record_creator creator(impl_->keys.current_key(), last_block);
+	segment_record_creator creator(impl_->crypto.enc_keys().current_key(), last_block);
 
 	//needs the start, end sequences and the record tags
 	//creator.add_change(std::move(mdata));

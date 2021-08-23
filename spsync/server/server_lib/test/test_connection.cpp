@@ -52,7 +52,7 @@ public:
 		assert(!sid.empty());
 
 		storage_connection sconn{net.create_storage_connection(sid, storage, progress)};
-		engine = std::make_unique<sync_engine>(event_loop(), sconn.input(), enc_keys, engine_config);
+		engine = std::make_unique<sync_engine>(event_loop(), sconn.input(), cc, engine_config);
 
 		//after this the events will be received
 		sconn.attach(*engine);
@@ -98,6 +98,7 @@ public:
 		// set initial key, use hard coded one for testing
 		auto own_key = context.private_data().my_private_key();
 		assert(own_key);
+//		add_test_key();
 		users initial;
 		initial.add(util::user_access{own_key->id(), util::access_type::user_management_access});
 		engine->sync_user_change(initial);
@@ -115,6 +116,7 @@ public:
 	test::test_progress progress;
 	record_storage storage{database};
 	encryption_key_storage enc_keys{database};
+	crypto_context cc{context.public_keys(), context.private_data(), enc_keys};
 	sync_engine_config engine_config;
 
 	std::unique_ptr<sync_engine> engine;
