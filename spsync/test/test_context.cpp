@@ -56,4 +56,17 @@ void test_context::add_client_keys_for_server() {
 	}
 }
 
+void test_context::share_client_keys() {
+	for(auto&& v1 : clients) {
+		for(auto&& v2 : clients) {
+			v1->keys.insert(v2->private_data.my_private_key()->public_key());
+		}
+	}
+}
+
+crypto::public_key_id test_context::key_id(int n) const {
+	assert(n < clients.size());
+	return my_private_key(clients[n]->private_data).public_key();
+}
+
 }

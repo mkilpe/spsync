@@ -37,7 +37,7 @@ public:
 		if(output) {
 			auto tag = h->type();
 			if(tag == user_change_record_tag) {
-				extract_encryption_key(h);
+				extract_encryption_key(h->record());
 				output->emit<engine_events::on_user_changed>(h);
 			} else if(tag == data_change_record_tag) {
 				output->emit<engine_events::on_object_data_changed>(h);
@@ -45,8 +45,8 @@ public:
 		}
 	}
 
-	void extract_encryption_key(record_handle h) {
-		auto user_change = h->record().deserialise_to<user_change_record>();
+	void extract_encryption_key(chain_block const& rec) {
+		auto user_change = rec.deserialise_to<user_change_record>();
 		auto env_c = user_change.data().enveloped_content();
 		if(!env_c.empty()) {
 			try {
@@ -61,7 +61,7 @@ public:
 					}
 				}
 			} catch(std::exception const& exp) {
-				LWARN("exception while handling encryption key from user change record (tag=%, exp=%)", to_hex(h->tag()), exp);
+				LWARN("exception while handling encryption key from user change record (tag=%, exp=%)", to_hex(rec.tag()), exp);
 			}
 		}
 	}
@@ -155,25 +155,45 @@ public:
 	}
 
 	template<typename Record>
+	void verify_block(encryption_key const& enc_key, chain_block const& record, chain_block_id const& id, Record const& rec) {
+		record_verifier<Record> ver(enc_key, rec, record.auth());
+		if(ver.is_authentic()) {
+			update_server_seq(record.sequence());
+			if(handle_block_chain(record, id)) {
+				check_pending_records(id);
+				if(records.last_block().sequence == server_seq) {
+					try_commit_pending();
+				}
+			}
+		} else {
+			LWARN("Record is not authentic [block id = %, tag = %]", id, to_hex(record.tag()));
+		}
+	}
+
+	template<typename Record>
 	void handle_block(chain_block const& record, chain_block_id const& id, Record const& rec) {
 		auto enc_key = crypto.enc_keys().find(rec.encryption_key());
 		if(enc_key) {
-			record_verifier<Record> ver(*enc_key, rec, record.auth());
-			if(ver.is_authentic()) {
-				update_server_seq(record.sequence());
-				if(handle_block_chain(record, id)) {
-					check_pending_records(id);
-					if(records.last_block().sequence == server_seq) {
-						try_commit_pending();
-					}
+			verify_block(*enc_key, record, id, rec);
+		} else {
+			auto last_block = records.last_block();
+			if(last_block.sequence == sequence_number{} && record.sequence() == sequence_number(1)) {
+				LTRACE("first record, attempting to extract encryption key");
+				//t: optional check of the tag of the first record (i.e. if given from above)
+				//this is first record, try to extract enc key
+				extract_encryption_key(record);
+				auto enc_key = crypto.enc_keys().find(rec.encryption_key());
+				if(enc_key) {
+					verify_block(*enc_key, record, id, rec);
+				} else {
+					LINFO("Failed to extract encryption key from first record");
+					//t: how to handle?
 				}
 			} else {
-				LWARN("Record is not authentic [block id = %, tag = %]", id, to_hex(record.tag()));
+				LINFO("No valid key for record [block id = %, tag = %, key id = %]", id, to_hex(record.tag()), rec.encryption_key());
+				// store for later, when we hopefully have the key
+				records.create(record, record_state::pending_sync);
 			}
-		} else {
-			LINFO("No valid key for record [block id = %, tag = %, key id = %]", id, to_hex(record.tag()), rec.encryption_key());
-			// store for later, when we hopefully have the key
-			records.create(record, record_state::pending_sync);
 		}
 	}
 

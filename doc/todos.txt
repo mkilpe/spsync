@@ -1,15 +1,15 @@
 
 
 
-
-
 = records
-* add locally unique id for records so that higher levels can track not yet committed records (might be re-encrypted etc)
 * get history for higher levels
-*
+* allow to give tag of the first record (or some other record?) to engine when joining a storage to check the authenticity
+* allow to start local chain from given record, so that when someone joins, he needs to only anchor the user change that contains the key for him and everything after that
+
+= client
+* provide client level interface that does decrypting on the fly
 
 = general
-* make root ca key and integrate to code
 
 = server
 * update and check user access rights for storage when handling records

@@ -26,6 +26,9 @@ public:
 	network::context& server_context();
 
 	void add_client_keys_for_server();
+	void share_client_keys();
+
+	crypto::public_key_id key_id(int n) const;
 private:
   std::vector<std::thread> threads;
 	asio::io_context io;

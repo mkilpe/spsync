@@ -33,7 +33,7 @@ public:
 	, net(context, *this)
 	, database(test::create_test_database("test_connection_client_" + std::to_string(n) + ".db"))
 	{
-		add_test_key();
+		//add_test_key();
 	}
 
 	void connect() {
@@ -94,13 +94,16 @@ public:
 				, event_dest<events::on_create_storage>(&test_client::on_create_storage) );
 	}
 
-	void create_initial_record() {
+	void create_initial_record(std::vector<crypto::public_key_id> members = {}) {
 		// set initial key, use hard coded one for testing
 		auto own_key = context.private_data().my_private_key();
 		assert(own_key);
-//		add_test_key();
+		add_test_key();
 		users initial;
 		initial.add(util::user_access{own_key->id(), util::access_type::user_management_access});
+		for(auto v : members) {
+			initial.add(util::user_access{v, util::access_type::user_management_access});
+		}
 		engine->sync_user_change(initial);
 	}
 
@@ -165,6 +168,7 @@ TEST_CASE("two clients test", "[system]") {
 
 	net_context.add_client(2);
 	net_context.add_client_keys_for_server();
+	net_context.share_client_keys();
 
 	test::test_server server(net_context.server_context());
 	server.run();
@@ -175,9 +179,9 @@ TEST_CASE("two clients test", "[system]") {
 	client1.wait_for_connection();
 	auto sid = client1.create_remote_storage();
 	client1.wait_for_storage_created();
-	client1.create_initial_record();
+	client1.create_initial_record({net_context.key_id(1)});
 
-	test_client client2(net_context.client_context(0), single_thread_event_loop, 1);
+	test_client client2(net_context.client_context(1), single_thread_event_loop, 1);
 	client2.connect();
 	client2.wait_for_connection();
 	client2.connect_to_storage(sid);
@@ -196,6 +200,7 @@ TEST_CASE("reconnect test", "[system]") {
 
 	net_context.add_client(2);
 	net_context.add_client_keys_for_server();
+	net_context.share_client_keys();
 
 	test::test_server server(net_context.server_context());
 	server.run();
@@ -206,9 +211,9 @@ TEST_CASE("reconnect test", "[system]") {
 	client1.wait_for_connection();
 	auto sid = client1.create_remote_storage();
 	client1.wait_for_storage_created();
-	client1.create_initial_record();
+	client1.create_initial_record({net_context.key_id(1)});
 
-	test_client client2(net_context.client_context(0), single_thread_event_loop, 1);
+	test_client client2(net_context.client_context(1), single_thread_event_loop, 1);
 	client2.connect();
 	client2.wait_for_connection();
 	client2.connect_to_storage(sid);
@@ -254,6 +259,7 @@ TEST_CASE("multi client test", "[system]") {
 
 	net_context.add_client(client_count);
 	net_context.add_client_keys_for_server();
+	net_context.share_client_keys();
 
 	test::test_server server(net_context.server_context());
 	server.run();
@@ -270,7 +276,13 @@ TEST_CASE("multi client test", "[system]") {
 
 	auto sid = clients[0]->create_remote_storage();
 	clients[0]->wait_for_storage_created();
-	clients[0]->create_initial_record();
+
+	// add initial members, create_initial_record always adds oneself
+	std::vector<crypto::public_key_id> members;
+	for(int i = 1; i != client_count; ++i) {
+		members.push_back(net_context.key_id(i));
+	}
+	clients[0]->create_initial_record(members);
 
 	for(int i = 1; i != client_count; ++i) {
 		clients[i]->connect_to_storage(sid);
