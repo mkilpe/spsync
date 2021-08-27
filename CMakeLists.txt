@@ -10,6 +10,12 @@ endif()
 
 include("${sp_main_repository_path}/cmake.main")
 
+#find_package(Boost 1.75.0 REQUIRED)
+#get_filename_component(my_directory ${CMAKE_CURRENT_LIST_FILE} DIRECTORY)
+#include_directories(${my_directory}/external/boost)
+
+#add_definitions(-DBOOST_JSON_STANDALONE)
+
 # actual projects
 add_subdirectory(spsync)
 add_subdirectory(groupchat)

@@ -13,7 +13,7 @@ as member of a chat. This currently idicates if querying the public key for the 
 .Arguments
 [cols="1,1"]
 |===
-| return-data | 0 or 1 to determinate if the result should contain data assiciated per contact.
+| return-data | 0 or 1 to determinate if the result should contain data associated per contact.
 |===
 
 [caption=""]
