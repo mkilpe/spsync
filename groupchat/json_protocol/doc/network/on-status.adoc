@@ -1,0 +1,14 @@
+[source]
+.Notification
+--
+chat.on-status
+--
+
+Network status changed.
+
+[caption=""]
+.Data
+[cols="1, 1"]
+|===
+| status | Status of the connection, one of "disconnected", "connected", "connecting".
+|===

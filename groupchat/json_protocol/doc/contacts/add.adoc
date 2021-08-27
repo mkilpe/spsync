@@ -1,0 +1,22 @@
+[source]
+.Command
+--
+contacts.add
+--
+
+Add a contact.
+
+[caption=""]
+.Arguments
+[cols="1,1"]
+|===
+| key_id | Public key id of the contact, this is how the users are identified in the system
+| data   | Arbitrary data one wants to save for the contact, e.g. nickname
+|===
+
+[caption=""]
+.Response
+[cols="1,1"]
+|===
+| id | unique integer that can be used to refer to this user for other command calls
+|===

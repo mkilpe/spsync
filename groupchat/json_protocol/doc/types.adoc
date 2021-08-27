@@ -1,0 +1,18 @@
+
+
+
+=== Key ID
+
+[source]
+.Type
+--
+string
+--
+
+Public key identifier that uniquely identifies a user. 32 bytes encoded as hexadecimal string.
+
+[source]
+.Example
+--
+66383F21D96FEBFF398408A9A9B36B82B14E7574EAD7FA7F7DEF87F039D76552
+--

@@ -1,0 +1,16 @@
+[source]
+.Notification
+--
+chat.on-create
+--
+
+Chat was either successfully created on the server or failed to be created.
+
+[caption=""]
+.Data
+[cols="1, 1"]
+|===
+| id            | Chat id
+| error         | Integer value indicating error or 0 if the call was successful.
+| error-string  | Human readable error string or empty in case of success.
+|===

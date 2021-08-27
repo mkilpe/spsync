@@ -1,0 +1,48 @@
+
+==== Init
+
+[source]
+.Command
+--
+init
+--
+
+One has to initialise the backend system by calling this command before any other command can be used.
+
+[caption=""]
+.Arguments
+[cols="1,1"]
+|===
+| requested-version | must be currently always number 1
+|===
+
+[caption=""]
+.Response
+[cols="1"]
+|===
+| None
+|===
+
+==== Shutdown
+
+[source]
+.Command
+--
+shutdown
+--
+
+This should be called when the system is shutting down.
+
+[caption=""]
+.Arguments
+[cols="1"]
+|===
+| None
+|===
+
+[caption=""]
+.Response
+[cols="1"]
+|===
+| None
+|===

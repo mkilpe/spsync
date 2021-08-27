@@ -1,0 +1,76 @@
+
+This API is not REST API, but rather application internal protocol to handle communication between backend and frontend (so there are no GET, POST but only plain json).
+
+Every command and response have similar structure which is described here.
+
+=== Commands
+
+[caption=""]
+.command
+[frame=none]
+|===
+a|
+----
+  {
+    "command": string,
+    "args": {
+        "<args-name-1>": <value>
+        ...
+        "<args-name-n>": <value>
+    },
+    "callback-data": <value>
+  }
+----
+|===
+
+[cols="1,1"]
+|===
+| command       | Command as string, the commands are prefixed by the module, e.g. "chat.send" calls send in module chat.
+| args          | Arguments for the command, these are all command specific.
+| callback-data | (Optional) Arbitrary data that is passed back in the result, can be used to track calls and pass data as the calls are asynchronous.
+|===
+
+[caption=""]
+.result
+[frame=none]
+|===
+a|
+----
+  {
+    "error" : integer,
+    "error-string": string,
+    "result": <value>,
+    "callback-data": <value>
+  }
+----
+|===
+
+
+[cols="1,1"]
+|===
+| error         | Integer value indicating error or 0 if the call was successful.
+| error-string  | Human readable error string or empty in case of success.
+| result        | (Optional) Command specific result of the call in case the call was successful.
+| callback-data | (Optional) Data passed to the command.
+|===
+
+=== Notifications
+
+Notifications are triggered by some state change in the backend, e.g. receiving a message
+
+[caption=""]
+.notification
+[frame=none]
+|===
+a|
+----
+  {
+    "notification": string,
+    "args": {
+        "<args-name-1>": <value>
+        ...
+        "<args-name-n>": <value>
+    }
+  }
+----
+|===

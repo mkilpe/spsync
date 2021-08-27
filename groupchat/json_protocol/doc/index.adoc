@@ -1,0 +1,35 @@
+// asciidoctor-pdf -r asciidoctor-diagram doc.adoc
+
+= Secure Path GroupChat JSON protocol
+Version 0.1, 27.08.2021
+:toc: right
+
+== Command Structure
+
+include::struct.adoc[]
+
+== Common Types
+
+include::types.adoc[]
+
+== API
+
+=== Initialising the System
+
+include::init.adoc[]
+
+=== General Commands
+
+include::general.adoc[]
+
+=== Network
+
+include::network/index.adoc[]
+
+=== Contact Management
+
+include::contacts/index.adoc[]
+
+=== Chat
+
+include::chat/index.adoc[]

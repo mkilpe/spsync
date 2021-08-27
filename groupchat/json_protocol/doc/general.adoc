@@ -1,0 +1,26 @@
+
+==== Version
+
+[source]
+.Command
+--
+version
+--
+
+Returns the version numbers.
+
+[caption=""]
+.Arguments
+[cols="1"]
+|===
+| None
+|===
+
+[caption=""]
+.Response
+[cols="1,1"]
+|===
+| gc     | GroupChat backend version as string
+| spsync | SPSync version as string
+| sp     | Secure Path Library version as string
+|===

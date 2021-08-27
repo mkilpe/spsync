@@ -1,0 +1,16 @@
+
+==== Connect
+
+include::connect.adoc[]
+
+==== Disconnect
+
+include::disconnect.adoc[]
+
+==== Query Connection Status
+
+include::status.adoc[]
+
+==== Connection Status Changed
+
+include::on-status.adoc[]

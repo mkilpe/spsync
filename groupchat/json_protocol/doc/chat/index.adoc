@@ -1,0 +1,24 @@
+
+==== Create Chat
+
+include::create.adoc[]
+
+==== List Chats
+
+include::list.adoc[]
+
+==== List Members
+
+include::members.adoc[]
+
+==== Send Message
+
+include::send.adoc[]
+
+==== Chat Created (notification)
+
+include::on-create.adoc[]
+
+==== Message Received (notification)
+
+include::on-send.adoc[]

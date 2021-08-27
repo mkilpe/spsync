@@ -1,0 +1,8 @@
+
+==== Add Contact
+
+include::add.adoc[]
+
+==== List Contacts
+
+include::list.adoc[]
