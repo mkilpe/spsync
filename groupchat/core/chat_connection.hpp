@@ -1,0 +1,55 @@
+#pragma once
+
+#include "message.hpp"
+#include "channel.hpp"
+#include "types.hpp"
+
+#include <spsync/core/users.hpp>
+#include <spsync/util/object_id.hpp>
+#include <securepath/event_system/event_loop.hpp>
+#include <securepath/util/error.hpp>
+
+#include <cstdint>
+#include <memory>
+#include <string>
+
+namespace securepath::groupchat {
+
+/**
+ * Group chat connection to a single server
+ */
+class chat_connection {
+public:
+	chat_connection(server_id, host_port, event_system::event_handler& callback, network::context& context);
+	~chat_connection();
+
+	/// connect to storage server
+	void connect();
+
+	/// disconnect from server
+	void disconnect();
+
+	/// Create chat on given server, will call on_create when fail or succeed
+	chat_id create_chat(std::string name);
+
+	/// change users for chat
+	void change_user(chat_id const& storage, sync::users change);
+
+	/// join existing chat
+	void join(chat_id const& storage);
+
+	/// Send a message to the chat
+	message_id send_message(chat_id const& chat, std::string const& message);
+
+	/// Attached network context
+	network::context& context();
+
+	/// Host and port for this connection
+	host_port end_point() const;
+
+private:
+	class impl;
+	std::unique_ptr<impl> impl_;
+};
+
+}

@@ -1,12 +1,15 @@
 #include "gc.hpp"
 
+#include <groupchat/core/events.hpp>
+
 #include <securepath/util/string_util.hpp>
 #include <securepath/util/print_util.hpp>
 
 namespace securepath::groupchat {
 
 gc::gc(event_system::event_loop& loop, cli_window& win)
-: groupchat(groupchat_config{}, loop)
+: event_handler(loop)
+, groupchat(*this, groupchat_config{})
 , win_(win)
 {
 }
@@ -40,7 +43,7 @@ void gc::on_change_user(server_id sid, chat_id cid, sync::users change, error er
 	win_.add_info(0, to_wstring(msg));
 }
 
-void gc::on_join(server_id sid, chat_id cid) {
+void gc::on_join(server_id sid, chat_id cid, error) {
 	auto s = print("joined '%'", to_hex(cid));
 	win_.add_message(0, to_wstring(s));
 }
@@ -48,6 +51,16 @@ void gc::on_join(server_id sid, chat_id cid) {
 void gc::on_message(server_id, chat_id, message m) {
 	auto s = print("%> %", m.sender_nick, m.data);
 	win_.add_message(0, to_wstring(s));
+}
+
+void gc::handle_event(std::unique_ptr<event_system::event_base> ev) {
+	dispatch( *ev
+			, event_dest<events::on_connect>(&gc::on_connect)
+			, event_dest<events::on_disconnect>(&gc::on_disconnect)
+			, event_dest<events::on_create>(&gc::on_create)
+			, event_dest<events::on_change_user>(&gc::on_change_user)
+			, event_dest<events::on_join>(&gc::on_join)
+			, event_dest<events::on_message>(&gc::on_message) );
 }
 
 }

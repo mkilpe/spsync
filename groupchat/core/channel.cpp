@@ -1,5 +1,6 @@
 #include "channel.hpp"
 #include "groupchat.hpp"
+#include "events.hpp"
 
 #include <spsync/core/records/util.hpp>
 #include <spsync/engine/record_verifier.hpp>
@@ -10,17 +11,18 @@
 
 namespace securepath::groupchat {
 
-channel::channel(groupchat& parent, network::context& context, event_system::event_loop& eloop, chat_id const& cid)
-: engine_output(eloop)
-, parent_(parent)
+channel::channel(server_id sid, event_system::event_handler& callback, network::context& context, chat_id const& cid)
+: engine_output(callback.event_loop())
+, callback_(callback)
 , context_(context)
+, sid_(sid)
 , chat_id_(cid)
-, progress_(eloop)
+, progress_(callback.event_loop())
 , database_()
 {
 }
 
-void channel::set_name(std::wstring name) {
+void channel::set_name(std::string name) {
 	name_ = std::move(name);
 	//t: update name in db
 }
@@ -55,7 +57,7 @@ void channel::on_object_data_changed(sync::record_handle rec) {
 		auto opt = opt_meta->find<message_data>(groupchat_message_id);
 		if(opt) {
 			message m{opt->message, "test", opt->sender_time, rec->block_id().sequence};
-			parent_.on_message(1, chat_id_, m);
+			callback_.emit<events::on_message>(sid_, chat_id_, m);
 		} else {
 			LOG_WARN("invalid record, no groupchat message found");
 		}
@@ -66,7 +68,7 @@ void channel::on_object_data_changed(sync::record_handle rec) {
 
 void channel::on_user_changed(sync::record_handle rec) {
 	//t: implement
-	parent_.on_change_user(1, chat_id_, sync::users{}, error{});
+	callback_.emit<events::on_change_user>(sid_, chat_id_, sync::users{}, error{});
 }
 
 void channel::create_initial_record() {
@@ -76,7 +78,7 @@ void channel::create_initial_record() {
 	auto own_key = context_.private_data().my_private_key();
 	assert(own_key);
 	sync::metadata header;
-	header.insert(groupchat_name_id, to_string(name_));
+	header.insert(groupchat_name_id, name_);
 	sync::users initial;
 	initial.add(sync::util::user_access{own_key->id(), sync::util::access_type::user_management_access});
 	engine_->sync_user_change(initial, std::move(header));

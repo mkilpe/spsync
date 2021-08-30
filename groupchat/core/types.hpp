@@ -21,6 +21,13 @@ std::string const groupchat_message_id{"gc_message_v1"};
 // key for user change metadata
 std::string const groupchat_name_id{"gc_name_v1"};
 
+struct host_port {
+	std::string host;
+	std::uint16_t port;
+
+	auto operator<=>(host_port const&) const = default;
+};
+
 }
 
 #endif

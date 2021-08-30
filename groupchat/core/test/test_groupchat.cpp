@@ -1,4 +1,5 @@
 #include <groupchat/core/groupchat.hpp>
+#include <groupchat/core/events.hpp>
 
 #include <securepath/test_frame/test_suite.hpp>
 #include <securepath/test_frame/test_utils.hpp>
@@ -9,54 +10,54 @@
 
 namespace securepath::groupchat::test {
 
-/*
-/// connect to storage server
-	server_id connect(std::string_view server, std::uint16_t port);
-
-	/// disconnect from server
-	void disconnect(server_id);
-
-	/// Create chat on given server, will call on_create when fail or succeed
-	chat_id create_chat(server_id);
-
-	/// change users for chat
-	void change_user(server_id const& server, chat_id const& storage, sync::users change);
-
-	/// join existing chat
-	void join(server_id const& server, chat_id const& storage);
-
-	/// Send a message to the chat
-	message_id send_message(server_id const& server, chat_id const& chat, std::string const& message);
-*/
 using namespace securepath::sync;
 
-class test_groupchat : public groupchat {
+class test_groupchat : public event_system::event_handler, public groupchat {
 public:
 	test_groupchat(network::context& context, event_system::event_loop& loop)
-	: groupchat(context, groupchat_config{}, loop)
+	: event_handler(loop)
+	, groupchat(*this, context, groupchat_config{})
 	{}
 
 	/// called when server connected
-	void on_connect(server_id) override {
+	void on_connect(server_id) {
 		connected.set_value(error{});
 	}
 	/// called when server disconnected
-	void on_disconnect(server_id, error err) override {
+	void on_disconnect(server_id, error err) {
 		connected.set_value(err);
 	}
 	/// called when chat created or creating failed
-	void on_create(server_id, chat_id id, error err) override {
-		created.set_value(err ? chat_id{} : id);
+	void on_create(server_id, chat_id id, error err) {
+		if(err) {
+			created.set_exception(std::make_exception_ptr(err));
+		} else {
+			created.set_value(id);
+		}
+
 	}
 	/// called when user changed or failed
-	void on_change_user(server_id, chat_id, sync::users change, error) override {
+	void on_change_user(server_id, chat_id, sync::users change, error) {
 	}
 	/// called when chat joined or it failed
-	void on_join(server_id, chat_id) override {
+	void on_join(server_id, chat_id, error) {
 	}
 	/// called when chat message received
-	void on_message(server_id, chat_id id, message m) override {
+	void on_message(server_id, chat_id id, message m) {
 	}
+
+
+	void handle_event(std::unique_ptr<event_system::event_base> ev) override {
+		namespace gc_ev = securepath::groupchat::events;
+		dispatch( *ev
+			, event_dest<gc_ev::on_connect>(&test_groupchat::on_connect)
+			, event_dest<gc_ev::on_disconnect>(&test_groupchat::on_disconnect)
+			, event_dest<gc_ev::on_create>(&test_groupchat::on_create)
+			, event_dest<gc_ev::on_change_user>(&test_groupchat::on_change_user)
+			, event_dest<gc_ev::on_join>(&test_groupchat::on_join)
+			, event_dest<gc_ev::on_message>(&test_groupchat::on_message) );
+	}
+
 
 	std::promise<error> connected;
 	std::promise<chat_id> created;
@@ -78,8 +79,9 @@ TEST_CASE("groupchat_test", "[system]") {
 
 	event_system::single_thread_event_loop loop;
 	test_groupchat client(net_context.client_context, loop);
+	auto conn = client.load("127.0.0.1", sync::default_storage_server_port);
 
-	auto server_id = client.connect("127.0.0.1", sync::default_storage_server_port);
+	conn->connect();
 	{
 		auto f = client.connected.get_future();
 		WAIT_CHECK(f.valid(), 2s);
@@ -87,7 +89,7 @@ TEST_CASE("groupchat_test", "[system]") {
 		REQUIRE(!f.get());
 	}
 
-	auto cid = client.create_chat(server_id, L"test");
+	auto cid = conn->create_chat("test");
 	{
 		auto f = client.created.get_future();
 		WAIT_CHECK(f.valid(), 2s);

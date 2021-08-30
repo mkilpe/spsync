@@ -40,6 +40,9 @@ gc_cli::gc_cli(gc_cli_config)
 
 	add_widget(in);
 	set_focus(in);
+
+	std::uint16_t const default_storage_server_port{18200};
+	chat_conn_ = gc_->load("127.0.0.1", default_storage_server_port);
 }
 
 void gc_cli::run() {
@@ -58,7 +61,7 @@ bool gc_cli::handle_input(console::input in) {
 void gc_cli::init_commands() {
 	cmds_[L"exit"] = [this](auto){ quit(); };
 	cmds_[L"connect"] = [this](auto v){ connect(v); };
-	cmds_[L"disconnect"] = [this](auto){ gc_->disconnect(1); };
+	cmds_[L"disconnect"] = [this](auto){ chat_conn_->disconnect(); };
 	cmds_[L"create-chat"] = [this](auto v){ create_chat(v); };
 	cmds_[L"add-user"] = [this](auto v){ add_user(v); };
 	cmds_[L"add-member"] = [this](auto v){ add_member(v); };
@@ -67,21 +70,15 @@ void gc_cli::init_commands() {
 }
 
 void gc_cli::connect(std::vector<std::wstring_view> const& args) {
-	std::uint16_t const default_storage_server_port{18200};
-
-	if(!args.empty()) {
-		std::wstring host{args.front()};
-		win_->add_info(0, L"connecting to " + host + L"...");
-		gc_->connect(to_string(host), default_storage_server_port);
-	} else {
-		win_->add_info(0, L"missing argument(s) for /connect");
-	}
+	host_port hp = chat_conn_->end_point();
+	win_->add_info(0, to_wstring(print("connecting to %:%...", hp.host, hp.port)));
+	chat_conn_->connect();
 }
 
 void gc_cli::create_chat(std::vector<std::wstring_view> const& args) {
 	if(!args.empty()) {
 		std::wstring name{args.front()};
-		cid_ = gc_->create_chat(1, name);
+		cid_ = chat_conn_->create_chat(to_string(name));
 		win_->add_info(0, L"creating chat '" + name + L"' with id=" + to_wstring(to_hex(cid_)));
 	} else {
 		win_->add_info(0, L"missing argument(s) for /create-chat");
@@ -107,7 +104,7 @@ void gc_cli::add_member(std::vector<std::wstring_view> const& args) {
 		crypto::public_key_id key_id{from_hex(to_string(args[1]))};
 		users.add(user_access{user_id{key_id}, access_type::all_access});
 
-		gc_->change_user(1, from_hex(to_string(args[0])), users);
+		chat_conn_->change_user(from_hex(to_string(args[0])), users);
 	} else {
 		win_->add_info(0, L"missing argument(s) for /add-member");
 	}
@@ -116,7 +113,7 @@ void gc_cli::add_member(std::vector<std::wstring_view> const& args) {
 void gc_cli::join(std::vector<std::wstring_view> const& args) {
 	if(args.size() == 1) {
 		cid_ = from_hex(to_string(args[0]));
-		gc_->join(1, cid_);
+		chat_conn_->join(cid_);
 	} else {
 		win_->add_info(0, L"missing argument(s) for /join");
 	}
@@ -151,7 +148,7 @@ void gc_cli::handle_command(std::wstring input) {
 				execute_command(std::wstring{res[0]}, {res.begin()+1, res.end()});
 			}
 		} else {
-			gc_->send_message(1, cid_, to_string(input));
+			chat_conn_->send_message(cid_, to_string(input));
 			win_->add_message(0, std::move(input));
 		}
 		redraw();

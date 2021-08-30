@@ -1,8 +1,8 @@
-#ifndef GROUPCHAT_CORE_GROUPCHAT_HEADER
-#define GROUPCHAT_CORE_GROUPCHAT_HEADER
+#pragma once
 
 #include "message.hpp"
 #include "channel.hpp"
+#include "chat_connection.hpp"
 #include "types.hpp"
 
 #include <spsync/core/users.hpp>
@@ -27,48 +27,19 @@ struct groupchat_config {
  */
 class groupchat {
 public:
-	groupchat(groupchat_config, event_system::event_loop&);
-	groupchat(network::context& context, groupchat_config, event_system::event_loop&);
+	groupchat(event_system::event_handler& callback, groupchat_config);
+	groupchat(event_system::event_handler& callback, network::context& context, groupchat_config);
 	~groupchat();
 
-	/// connect to storage server
-	server_id connect(std::string_view server, std::uint16_t port);
-
-	/// disconnect from server
-	void disconnect(server_id);
-
-	/// Create chat on given server, will call on_create when fail or succeed
-	chat_id create_chat(server_id, std::wstring name);
-
-	/// change users for chat
-	void change_user(server_id const& server, chat_id const& storage, sync::users change);
-
-	/// join existing chat
-	void join(server_id const& server, chat_id const& storage);
-
-	/// Send a message to the chat
-	message_id send_message(server_id const& server, chat_id const& chat, std::string const& message);
+	std::shared_ptr<chat_connection> load(std::string const& host, std::uint16_t port);
+	std::shared_ptr<chat_connection> find(server_id) const;
 
 	/// Attached network context
 	network::context& context();
-public:
-	/// called when server connected
-	virtual void on_connect(server_id) = 0;
-	/// called when server disconnected
-	virtual void on_disconnect(server_id, error) = 0;
-	/// called when chat created or creating failed
-	virtual void on_create(server_id, chat_id, error) = 0;
-	/// called when user changed or failed
-	virtual void on_change_user(server_id, chat_id, sync::users change, error) = 0;
-	/// called when chat joined or it failed
-	virtual void on_join(server_id, chat_id) = 0;
-	/// called when chat message received
-	virtual void on_message(server_id, chat_id, message) = 0;
+
 private:
 	class impl;
 	std::unique_ptr<impl> impl_;
 };
 
 }
-
-#endif

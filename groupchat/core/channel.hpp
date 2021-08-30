@@ -26,9 +26,9 @@ class groupchat;
 class channel : public sync::engine_output
 {
 public:
-	channel(groupchat& parent, network::context& context, event_system::event_loop& eloop, chat_id const&);
+	channel(server_id sid, event_system::event_handler& callback, network::context& context, chat_id const&);
 
-	void set_name(std::wstring name);
+	void set_name(std::string name);
 	void init(sync::network_connection& conn);
 
 	message_id send_message(std::string const& message);
@@ -40,10 +40,11 @@ private:
 	void on_user_changed(sync::record_handle) override;
 
 private:
-	groupchat& parent_;
+	event_system::event_handler& callback_;
 	network::context& context_;
-	chat_id chat_id_;
-	std::wstring name_;
+	server_id const sid_;
+	chat_id const chat_id_;
+	std::string name_;
 
 	dummy_progress progress_;
 

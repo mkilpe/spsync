@@ -26,28 +26,26 @@ struct groupchat::impl
 : public network::encrypted_net_base
 , public event_system::event_handler
 {
-	impl(groupchat& parent, network::context& context, event_system::event_loop& eloop, groupchat_config conf)
-	: parent(parent)
-	, encrypted_net_base(network::client_tag, {conf.db, conf.db, conf.db, conf.db})
-	, event_handler(eloop)
+	impl(event_system::event_handler& callback, network::context& context, groupchat_config conf)
+	: encrypted_net_base(network::client_tag, {conf.db, conf.db, conf.db, conf.db})
+	, event_handler(callback.event_loop())
 	, context(context)
 	, conf(std::move(conf))
-	, net(context, *this)
 	, database(open_gc_client_database(conf))
+	, callback(callback)
 	{
 		network::enable_client_dh_handshake(context);
 		network::enable_client_pk_handshake(context);
 	}
 
-	impl(groupchat& parent, event_system::event_loop& eloop, groupchat_config conf)
-	: parent(parent)
-	, encrypted_net_base(network::client_tag, {conf.db, conf.db, conf.db, conf.db})
-	, event_handler(eloop)
+	impl(event_system::event_handler& callback, groupchat_config conf)
+	: encrypted_net_base(network::client_tag, {conf.db, conf.db, conf.db, conf.db})
+	, event_handler(callback.event_loop())
 	, own_context(construct_context())
 	, context(*own_context)
 	, conf(std::move(conf))
-	, net(context, *this)
 	, database(open_gc_client_database(conf))
+	, callback(callback)
 	{
 		network::enable_client_dh_handshake(context);
 		network::enable_client_pk_handshake(context);
@@ -66,47 +64,11 @@ struct groupchat::impl
 		context.private_data().set_my_private_key(crypto::generate_rsa_private_key(2048));
 	}
 
-	void connect_to_storage(sync::storage_id const& sid) {
-		assert(!sid.empty());
-		auto ret = channels.emplace(sid, std::make_unique<channel>(parent, context, event_loop(), sid));
-		ret.first->second->init(net);
-	}
-
-	void on_connect() {
-		parent.on_connect(1);
-	}
-
-	void on_disconnect(error const& err) {
-		LOG_TRACE("disconnected");
-		parent.on_disconnect(1, err);
-	}
-
-	void on_create_storage(sync::storage_id const& sid, error err) {
-		if(!err) {
-			assert(!sid.empty());
-			auto it = channels.find(sid);
-			if(it != channels.end()) {
-				it->second->init(net);
-				it->second->create_initial_record();
-			} else {
-				err = make_error(securepath::errc::invalid_state, "chat room not set");
-			}
-		}
-		parent.on_create(1, sid, err);
-	}
-
 	void handle_event(std::unique_ptr<event_system::event_base> ev) override {
+		/*
+		this is going to be needed later on when developing communication means between contacts
 		dispatch( *ev
-				, event_dest<sync::events::on_connect>(&impl::on_connect)
-				, event_dest<sync::events::on_disconnect>(&impl::on_disconnect)
-				, event_dest<sync::events::on_create_storage>(&impl::on_create_storage) );
-	}
-
-	sync::storage_id create_chat(server_id, std::wstring name) {
-		auto sid = net.create_storage();
-		auto ret = channels.emplace(sid, std::make_unique<channel>(parent, context, event_loop(), sid));
-		ret.first->second->set_name(std::move(name));
-		return sid;
+				, event_dest<sync::events::on_connect>(&impl::on_connect) );*/
 	}
 
 	void register_my_key(std::string_view server) {
@@ -119,33 +81,33 @@ struct groupchat::impl
 		client.register_key(my_key->public_key());
 	}
 
-	server_id connect(std::string_view server, std::uint16_t port) {
-		if(init_crypto()) {
-			register_my_key(server);
-		}
-		// t: support connections to multiple servers at the same time
-		net.connect(server, port);
-		return 1;
+	std::shared_ptr<chat_connection> create_connection(host_port const& hp) {
+		auto id = ++last_id;
+		auto p = std::make_shared<chat_connection>(id, hp, callback, context);
+		hp_map[hp] = id;
+		connections[id] = p;
+		return p;
 	}
 
-	groupchat& parent;
 	std::optional<network::context> own_context;
 	network::context& context;
 	groupchat_config conf;
 
-	sync::network_connection net;
 	database::connection_ptr database;
+	event_system::event_handler& callback;
 
-	std::map<sync::storage_id, std::unique_ptr<channel>> channels;
+	server_id last_id{};
+	std::map<host_port, server_id> hp_map;
+	std::map<server_id, std::shared_ptr<chat_connection>> connections;
 };
 
-groupchat::groupchat(groupchat_config conf, event_system::event_loop& loop)
-: impl_(std::make_unique<impl>(*this, loop, std::move(conf)))
+groupchat::groupchat(event_system::event_handler& callback, groupchat_config conf)
+: impl_(std::make_unique<impl>(callback, std::move(conf)))
 {
 }
 
-groupchat::groupchat(network::context& context, groupchat_config conf, event_system::event_loop& loop)
-: impl_(std::make_unique<impl>(*this, context, loop, std::move(conf)))
+groupchat::groupchat(event_system::event_handler& callback, network::context& context, groupchat_config conf)
+: impl_(std::make_unique<impl>(callback, context, std::move(conf)))
 {
 }
 
@@ -153,36 +115,25 @@ groupchat::~groupchat()
 {
 }
 
-server_id groupchat::connect(std::string_view server, std::uint16_t port) {
-	return impl_->connect(server, port);
-}
-
-void groupchat::disconnect(server_id) {
-	impl_->net.close();
-}
-
-sync::storage_id groupchat::create_chat(server_id sid, std::wstring name) {
-	return impl_->create_chat(sid, std::move(name));
-}
-
-void groupchat::change_user(server_id const&, chat_id const& storage, sync::users change) {
-	auto it = impl_->channels.find(storage);
-	if(it == impl_->channels.end()) {
-		throw std::runtime_error("no such storage");
+std::shared_ptr<chat_connection> groupchat::load(std::string const& host, std::uint16_t port) {
+	std::shared_ptr<chat_connection> ret;
+	host_port hp{host, port};
+	auto it = impl_->hp_map.find(hp);
+	if(it != impl_->hp_map.end()) {
+		auto c_it = impl_->connections.find(it->second);
+		if(c_it != impl_->connections.end()) {
+			ret = c_it->second;
+		}
 	}
-	return it->second->change_user(std::move(change));
-}
-
-void groupchat::join(server_id const& server, chat_id const& storage) {
-	impl_->connect_to_storage(storage);
-}
-
-message_id groupchat::send_message(server_id const&, chat_id const& storage, std::string const& message) {
-	auto it = impl_->channels.find(storage);
-	if(it == impl_->channels.end()) {
-		throw std::runtime_error("no such storage");
+	if(!ret) {
+		ret = impl_->create_connection(hp);
 	}
-	return it->second->send_message(message);
+	return ret;
+}
+
+std::shared_ptr<chat_connection> groupchat::find(server_id sid) const {
+	auto c_it = impl_->connections.find(sid);
+	return c_it != impl_->connections.end() ? c_it->second : nullptr;
 }
 
 network::context& groupchat::context() {

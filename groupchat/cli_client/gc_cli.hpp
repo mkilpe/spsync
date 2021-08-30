@@ -36,6 +36,7 @@ private:
 	std::unique_ptr<cli_window> win_;
 	std::unique_ptr<gc> gc_;
 	std::map<std::wstring, std::function<void (std::vector<std::wstring_view> const&)>> cmds_;
+	std::shared_ptr<chat_connection> chat_conn_;
 	chat_id cid_;
 };
 
