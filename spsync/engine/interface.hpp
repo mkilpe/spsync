@@ -4,6 +4,7 @@
 #include <spsync/core/record_data.hpp>
 #include <spsync/core/record_storage.hpp>
 #include <spsync/core/users.hpp>
+#include <spsync/core/records/user_change_record.hpp>
 #include <spsync/util/object_id.hpp>
 #include <spsync/util/metadata.hpp>
 
@@ -24,10 +25,9 @@ struct engine_input {
 
 	/// synchronise object change with given id, user metadata and data
 	virtual record_handle sync_object_change(object_id, metadata, record_data_handle = {}) = 0;
-	//q: what should the return type be here? somehow one needs to know when it was successful (ie. identify the record later on)
 
 	/// synchronise user change
-	virtual record_handle sync_user_change(users user_change, metadata = {}) = 0;
+	virtual record_handle sync_user_change(plain_user_change_data, metadata = {}) = 0;
 
 	/// synchronise segment end structure
 	virtual record_handle sync_segment_end(metadata = {}) = 0;

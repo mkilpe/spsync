@@ -1,4 +1,5 @@
 #include "test_sync_server.hpp"
+#include <spsync/client/record_util.hpp>
 
 namespace securepath::sync::test {
 
@@ -78,12 +79,14 @@ request_handle test_sync_server_client::fetch_data(sequence_number record) {
 }
 
 request_handle test_sync_server_client::commit_record(record_handle h) {
-	assert(output_ && server_);
+	assert(output_);
 	request_handle ret = ++req_handle;
-	events_.push_back([=, this, record = h->record()] {
-			auto commit_result = server_->sync.commit_block(record);
-			output_->on_commit_response(ret, commit_response{server_->sync.current_sequence_number(), commit_result});
-	});
+	if(server_) {
+		events_.push_back([=, this, record = h->record()] {
+				auto commit_result = server_->sync.commit_block(record);
+				output_->on_commit_response(ret, commit_response{server_->sync.current_sequence_number(), commit_result});
+		});
+	}
 	return ret;
 }
 
@@ -167,7 +170,7 @@ void test_sync_context::create_initial_record() {
 			// the first user does the initial change and so needs everyone's key
 			clients.front()->pkeys.insert(c->user_key.public_key());
 		}
-		clients.front()->engine.sync_user_change(initial);
+		clients.front()->engine.sync_user_change(encrypt_last_key_for_users(initial, clients.front()->cc));
 	}
 }
 

@@ -1,0 +1,31 @@
+#pragma once
+
+#include <spsync/core/users.hpp>
+
+#include <securepath/common/key_value_cache.hpp>
+
+namespace securepath::sync {
+
+/// Status of the member
+enum class member_status {
+	member = 0,     /// member of the group, has committed user change
+	pending_add,    /// locally added member that is waiting to be committed
+	pending_remove  /// locally removed member that is waiting to be committed
+};
+
+/// Client side member of storage
+class member : public key_value_cache {
+public:
+	member(util::user_id id, member_status);
+
+	/// user id of the member
+	util::user_id id() const;
+
+	/// status of this member, if locally remove member, it is marked as pending and removed when record committed.
+	member_status status() const;
+private:
+	util::user_id id_;
+	member_status status_;
+};
+
+}

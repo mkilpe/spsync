@@ -17,6 +17,10 @@ public:
 	, notify(std::move(func))
 	{}
 
+	~impl() {
+		stop_handler();
+	}
+
 	void on_connect(server_id) {
 
 	}

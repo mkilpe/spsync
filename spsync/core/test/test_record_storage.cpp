@@ -9,7 +9,7 @@
 
 #include <spsync/test/test_block_creator.hpp>
 
-namespace securepath::sync::util {
+namespace securepath::sync::test {
 
 std::string const db_name = "record_storage_test.db";
 
@@ -17,7 +17,7 @@ static void remove_database_test_db() {
 	std::remove(db_name.c_str());
 }
 
-using test::test_block_creator;
+using util::content_auth;
 
 TEST_CASE("record_storage", "[unit]") {
 	remove_database_test_db();

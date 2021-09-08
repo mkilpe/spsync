@@ -16,6 +16,7 @@ struct gc_cli_config {
 class gc_cli : public console::context, public event_system::event_handler {
 public:
 	gc_cli(gc_cli_config);
+	~gc_cli();
 
 	void run();
 

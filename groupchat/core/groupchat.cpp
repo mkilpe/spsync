@@ -52,6 +52,10 @@ struct groupchat::impl
 		run();
 	}
 
+	~impl() {
+		stop_handler();
+	}
+
 	bool init_crypto() {
 		bool ret = !context.private_data().my_private_key();
 		if(ret) {

@@ -29,8 +29,11 @@ class users {
 public:
 	users(users_change_mode mode = users_change_mode::full);
 
-	/// Adds user to this object and returns itself
+	/// Adds user and returns itself
 	users& add(util::user_access);
+
+	/// Removes user and returns itself
+	users& remove(util::user_id);
 
 	/// Get the users
 	std::deque<util::user_access> const& access() const;
@@ -47,6 +50,8 @@ public:
 	using const_iterator = std::deque<util::user_access>::const_iterator;
 	const_iterator begin() const;
 	const_iterator end() const;
+
+	users_change_mode mode() const;
 private:
 	// the access for users
 	users_change_mode mode_;

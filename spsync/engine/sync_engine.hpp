@@ -52,7 +52,7 @@ public:
 
 	// --- engine_input interface, see interface.hpp ---
 	virtual record_handle sync_object_change(object_id, metadata, record_data_handle = {});
-	virtual record_handle sync_user_change(users user_change, metadata = {});
+	virtual record_handle sync_user_change(plain_user_change_data change_data, metadata = {});
 	virtual record_handle sync_segment_end(metadata = {});
 private:
 	class impl;

@@ -45,6 +45,25 @@ users& users::add(util::user_access access) {
 	return *this;
 }
 
+users& users::remove(util::user_id uid) {
+	// first see if we have the same user already and replace that if we do
+	auto it = users_.begin();
+	for(;it != users_.end() && uid != it->user; ++it) {}
+	if(it != users_.end()) {
+		if(mode_ == users_change_mode::delta) {
+			*it = util::user_access{uid, util::access_type::no_access};
+		} else {
+			users_.erase(it);
+		}
+	}
+	else {
+		if(mode_ == users_change_mode::delta) {
+			users_.push_back(util::user_access{uid, util::access_type::no_access});
+		}
+	}
+	return *this;
+}
+
 std::deque<util::user_access> const& users::access() const {
 	return users_;
 }
@@ -57,8 +76,12 @@ users::const_iterator users::end() const {
 	return users_.end();
 }
 
+users_change_mode users::mode() const {
+	return mode_;
+}
+
 bool users::operator==(users const& u) const {
-	return users_ == u.users_ && trailing_data_ == u.trailing_data_;
+	return mode_ == u.mode_ && users_ == u.users_ && trailing_data_ == u.trailing_data_;
 }
 
 bool users::operator!=(users const& u) const {
@@ -67,7 +90,7 @@ bool users::operator!=(users const& u) const {
 
 std::ostream& operator<<(std::ostream& out, users const& u) {
 	bool first = true;
-	out << "{users: ";
+	out << "{mode=" << u.mode() << " users: ";
 	for(auto&& v : u.access()) {
 		if(first) {
 			first = false;

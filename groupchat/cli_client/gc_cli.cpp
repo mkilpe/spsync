@@ -45,6 +45,10 @@ gc_cli::gc_cli(gc_cli_config)
 	chat_conn_ = gc_->load("127.0.0.1", default_storage_server_port);
 }
 
+gc_cli::~gc_cli() {
+	stop_handler();
+}
+
 void gc_cli::run() {
 	thread_entry();
 }

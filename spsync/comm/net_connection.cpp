@@ -82,4 +82,8 @@ void network_connection::detach(storage_id const& id) {
 	}
 }
 
+network::context& network_connection::context() const {
+	return impl_->context();
+}
+
 }

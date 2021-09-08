@@ -8,14 +8,11 @@ namespace securepath::sync {
 /**
  * Contains the information about the access change for users
  */
+//q: is this needed at all?
 struct user_change_info {
 
 	user_change_info()
-	: creation_time(clock_type::now())
 	{}
-
-	// time when this change was created
-	time_point creation_time;
 
 	// what here?
 	//  * old encryption keys?
@@ -25,7 +22,7 @@ struct user_change_info {
 	template<typename Ar>
 	void serialise(Ar& ar) {
 		serialisation::sequence<Ar> seq(ar);
-		seq & creation_time & trailing_data;
+		seq &  trailing_data;
 	}
 };
 

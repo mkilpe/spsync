@@ -4,6 +4,7 @@
 
 #include <spsync/test/util.hpp>
 
+#include <spsync/client/record_util.hpp>
 #include <spsync/core/encryption_key_storage.hpp>
 #include <spsync/engine/record_creator.hpp>
 #include <spsync/engine/record_verifier.hpp>
@@ -76,8 +77,7 @@ TEST_CASE("user_change_record_creator", "[unit]") {
 	initial.add(util::user_access{root_user, util::access_type::user_management_access});
 
 	//set the user change for this record
-	creator.set_change(initial, mdata);
-	creator.encrypt_last_key_for_users(crypto);
+	creator.set_change(encrypt_last_key_for_users(initial, crypto), mdata);
 
 	auth_record<user_change_record> rec = creator.result();
 	CHECK(rec.record.last_seen_block().sequence == sequence_number{1});

@@ -26,6 +26,10 @@ struct chat_connection::impl
 	{
 	}
 
+	~impl() {
+		stop_handler();
+	}
+
 	void connect_to_storage(sync::storage_id const& cid) {
 		assert(!cid.empty());
 		auto ret = channels.emplace(cid, std::make_unique<channel>(sid, callback, context, cid));

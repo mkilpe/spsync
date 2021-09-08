@@ -46,22 +46,8 @@ void data_change_record_creator::add_change(data_change_header header, plain_sin
 	changes_.push_back(single_change{std::move(data), std::move(enc_header)});
 }
 
-void user_change_record_creator::set_change(users access, metadata meta) {
-	set_data(user_change_header{{}, std::move(meta)}, plain_user_change_data{std::move(access)});
-}
-
-void user_change_record_creator::encrypt_last_key_for_users(crypto_context& cc) {
-	crypto::enveloper e(serialisation::asn_der_serialise(env_structure{{cc.enc_keys().current_key()}}));
-	for(auto v : plain_record_.access()) {
-		auto key = cc.public_keys().find(v.user.public_key_id());
-		if(!key) {
-			LOG_WARN("could not make user change record because missing a public key for one of the users (kid=%)", v.user);
-			throw make_error(crypto::errc::no_such_key, print("missing key for user '%'", v.user));
-		}
-		LOG_TRACE("enveloping current key for user %", v.user);
-		e.add(*key);
-	}
-	plain_record_.set_enveloped_content(e.result());
+void user_change_record_creator::set_change(plain_user_change_data access, metadata meta) {
+	set_data(user_change_header{{}, std::move(meta)}, std::move(access));
 }
 
 void user_change_record_creator::set_data(user_change_header header, plain_user_change_data data) {

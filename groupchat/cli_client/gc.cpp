@@ -14,6 +14,10 @@ gc::gc(event_system::event_loop& loop, cli_window& win)
 {
 }
 
+gc::~gc() {
+	stop_handler();
+}
+
 void gc::on_connect(server_id sid) {
 	win_.add_info(0, L"connected to server");
 }

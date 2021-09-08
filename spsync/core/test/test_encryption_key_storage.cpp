@@ -6,13 +6,15 @@
 #include <securepath/database/sqlite/connection.hpp>
 #include <securepath/util/octet_vector.hpp>
 
-namespace securepath::sync::util {
+namespace securepath::sync::test {
 
 std::string const db_name = "encryption_key_storage_test.db";
 
 static void remove_database_test_db() {
 	std::remove(db_name.c_str());
 }
+
+using util::sequence_number;
 
 TEST_CASE("encryption_key_storage", "[unit]") {
 	remove_database_test_db();

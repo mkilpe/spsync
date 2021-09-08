@@ -9,6 +9,7 @@ namespace securepath::groupchat {
 class gc : public event_system::event_handler, public groupchat {
 public:
 	gc(event_system::event_loop&, cli_window& win);
+	~gc();
 
 	/// called when server connected
 	void on_connect(server_id);

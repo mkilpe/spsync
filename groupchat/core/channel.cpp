@@ -81,7 +81,7 @@ void channel::create_initial_record() {
 	header.insert(groupchat_name_id, name_);
 	sync::users initial;
 	initial.add(sync::util::user_access{own_key->id(), sync::util::access_type::user_management_access});
-	engine_->sync_user_change(initial, std::move(header));
+	engine_->sync_user_change(encrypt_last_key_for_users(initial, *crypto_), std::move(header));
 }
 
 message_id channel::send_message(std::string const& msg) {

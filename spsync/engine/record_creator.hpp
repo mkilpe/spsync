@@ -56,10 +56,7 @@ public:
 	using record_creator_base::record_creator_base;
 
 	/// set the user access data with the metadata
-	void set_change(users access, metadata);
-
-	/// enveloped the last enc key for all users, needs to be called after set_change
-	void encrypt_last_key_for_users(crypto_context&);
+	void set_change(plain_user_change_data access, metadata);
 
 	/// Returns the ready user_change_record, it can be called only once as it will move content
 	auth_record<user_change_record> result();

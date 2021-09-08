@@ -1,5 +1,7 @@
 
 #include <spsync/test/test_server_runner.hpp>
+
+#include <spsync/client/record_util.hpp>
 #include <spsync/comm/net_connection.hpp>
 #include <spsync/core/encryption_key_storage.hpp>
 #include <spsync/engine/sync_engine.hpp>
@@ -34,6 +36,10 @@ public:
 	, database(test::create_test_database("test_connection_client_" + std::to_string(n) + ".db"))
 	{
 		//add_test_key();
+	}
+
+	~test_client() {
+		stop_handler();
 	}
 
 	void connect() {
@@ -104,7 +110,7 @@ public:
 		for(auto v : members) {
 			initial.add(util::user_access{v, util::access_type::user_management_access});
 		}
-		engine->sync_user_change(initial);
+		engine->sync_user_change(encrypt_last_key_for_users(initial, cc));
 	}
 
 	//t: remove when we have real key handling implemented

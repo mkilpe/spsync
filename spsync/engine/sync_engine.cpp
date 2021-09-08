@@ -28,9 +28,10 @@ public:
 	, config(std::move(config))
 	{}
 
-	void commit_record(record_handle h) {
+	request_handle commit_record(record_handle h) {
 		request_handle req = comm.commit_record(h);
 		LINFO("trying to commit record to server [tag = %, request handle = %]", to_hex(h->tag()), req);
+		return req;
 	}
 
 	void notify_on_record(record_handle h) {
@@ -57,7 +58,7 @@ public:
 						LINFO("saving not seen encryption key (seq=%)", v.key_seq);
 						crypto.enc_keys().insert(v);
 					} else {
-						LTRACE("already known encryption key (seq=%)");
+						LTRACE("already known encryption key (seq=%)", v.key_seq);
 					}
 				}
 			} catch(std::exception const& exp) {
@@ -271,22 +272,22 @@ public:
 	}
 
 	void try_commit_pending() {
-		//t: can we optimise when we are trying to push commits again
-		// ie. pushing currently even if we just did and something came in meanwhile
-		LTRACE("trying to commit pending records");
-		auto handle = records.find_first_pending_commit();
-		if(handle) {
-			// we only want to rewrite/update the records in case of require all mode
-			//f: handle require_special_seen and require_data_add_remove_seen modes
-			if(config.mode == sync_mode::require_all_seen) {
-				auto record = update_pending_commit(handle->record());
-				if(record.is_valid()) {
-					handle->set_record(record);
-					commit_record(handle);
+		if(!pushing_pending_commit) {
+			//t: can we optimise when we are trying to push commits again
+			// ie. pushing currently even if we just did and something came in meanwhile
+			LTRACE("trying to commit pending records");
+			auto handle = records.find_first_pending_commit();
+			if(handle) {
+				// we only want to rewrite/update the records in case of require all mode
+				//f: handle require_special_seen and require_data_add_remove_seen modes
+				if(config.mode == sync_mode::require_all_seen) {
+					auto record = update_pending_commit(handle->record());
+					if(record.is_valid()) {
+						handle->set_record(record);
+					}
 				}
-			} else {
 				//t: handle allow_all correctly, not trying to recommit always
-				commit_record(handle);
+				pushing_pending_commit = commit_record(handle);
 			}
 		}
 	}
@@ -306,6 +307,8 @@ public:
 	sync_engine_config config;
 	engine_output* output{};
 	sequence_number server_seq;
+	// if we have ongoing committing going for pending record
+	request_handle pushing_pending_commit{};
 };
 
 // redefine to use the impl for normal members
@@ -341,12 +344,14 @@ void sync_engine::set_config(sync_engine_config config) {
 //--- comm_output interface, see comm/interface.hpp
 void sync_engine::on_connected() {
 	std::unique_lock lock{impl_->mutex};
+	impl_->pushing_pending_commit = 0;
 	auto handle = impl_->comm.fetch_sequence_number();
 	LTRACE("on_connected, requested sequence number (request handle %)", handle);
 }
 
 void sync_engine::on_disconnected(std::optional<error> err) {
 	std::unique_lock lock{impl_->mutex};
+	impl_->pushing_pending_commit = 0;
 	LTRACE("on_disconnected [error = %]", err.value_or(error()));
 	// nothing for sync_engine
 }
@@ -361,6 +366,9 @@ void sync_engine::on_sequence_number_response(request_handle req_handle, result<
 			// try to fetch all records we don't have
 			auto req_h = impl_->comm.fetch_records(highest_seq, sequence_number{});
 			LTRACE("requested records [%,-] (request handle %)", highest_seq, req_h);
+		} else {
+			//already up-to-date with server but perhaps we have some local pending commits
+			impl_->try_commit_pending();
 		}
 	} else {
 		LINFO("on_sequence_number_response with error: % (request handle %)", res.get_error(), req_handle);
@@ -396,6 +404,11 @@ void sync_engine::on_data_response(request_handle req_handle, result<record_data
 void sync_engine::on_commit_response(request_handle req_handle, commit_response const& res) {
 	std::unique_lock lock{impl_->mutex};
 	LINFO("on_commit_response [request handle = %]", req_handle);
+
+	if(req_handle == impl_->pushing_pending_commit) {
+		LTRACE("clearing pending commit request handle [%]", req_handle);
+		impl_->pushing_pending_commit = 0;
+	}
 
 	if(res.data) {
 		auto block = res.data.value();
@@ -474,17 +487,14 @@ record_handle sync_engine::sync_object_change(object_id oid, metadata mdata, rec
 	return h;
 }
 
-record_handle sync_engine::sync_user_change(users user_change, metadata mdata) {
+record_handle sync_engine::sync_user_change(plain_user_change_data change_data, metadata mdata) {
 	std::unique_lock lock{impl_->mutex};
-	LTRACE("sync user change: users=%", user_change);
+	LTRACE("sync user change: users=%", change_data.access());
 
 	auto last_block = impl_->records.last_block(true); //q: no 'true' for non-require all modes?
 
 	user_change_record_creator creator(impl_->crypto.enc_keys().current_key(), last_block);
-
-	creator.set_change(std::move(user_change), std::move(mdata));
-	// for now just always envelope the newest key for all, later on consider other strategies too
-	creator.encrypt_last_key_for_users(impl_->crypto);
+	creator.set_change(std::move(change_data), std::move(mdata));
 
 	record_handle h = impl_->records.create(creator.result());
 	impl_->commit_record(h);

@@ -18,9 +18,12 @@ using namespace securepath::sync::util;
 // + (5) two clients, one out of sync with seq -> fails (out of sync)
 // + (6) three clients, pushing changes -> all in sync at the end
 // + (7) single client sync multiple records (require all seen mode)
-// - (8) two clients both try to commit follow up for record -> one fails (conflict)
-// - (9) multi client set-up where all commits (other modes than allow all)
-// - (10) two clients, one is off-line and does changes and goes then on-line
+// + (8) disconnect/connect with pending commits
+// + (9) sync new records after disconnect/connect
+// - () two clients, both push new enc key at the same time (require all seen mode)
+// - () two clients both try to commit follow up for record -> one fails (conflict)
+// - () multi client set-up where all commits (other modes than allow all)
+// - () two clients, one is off-line and does changes and goes then on-line
 
 // (1) single client sync records (allow all mode)
 TEST_CASE("engine sync single client", "[unit]") {
@@ -118,12 +121,39 @@ TEST_CASE("engine sync single client multi", "[unit]") {
 	test::test_sync_context context(chain_sync_config{sync_mode::require_all_seen});
 	context.add_client();
 	context.create_initial_record();
-//	context.handle_events();
 	for(int i = 0; i != 5; ++i) {
 		context.client(0).engine.sync_object_change(create_object_id(), metadata{});
 	}
 	while(context.handle_events()) {}
 	CHECK(context.compare_record_storages(sequence_number{6}));
+}
+
+// (8) disconnect/connect with pending commits
+TEST_CASE("engine sync pending after disconnect/connect", "[unit]") {
+	test::test_sync_context context(chain_sync_config{sync_mode::require_all_seen});
+	context.add_client(true, 2);
+	context.create_initial_record();
+	while(context.handle_events()) {}
+	context.disconnect_client(0);
+	context.client(0).engine.sync_object_change(create_object_id(), metadata{});
+	while(context.handle_events()) {}
+	context.connect_client(0);
+	while(context.handle_events()) {}
+	CHECK(context.compare_record_storages(sequence_number{2}));
+}
+
+// (9) sync new records after disconnect/connect
+TEST_CASE("sync new records after disconnect/connect", "[unit]") {
+	test::test_sync_context context(chain_sync_config{sync_mode::require_all_seen});
+	context.add_client(true, 2);
+	context.create_initial_record();
+	while(context.handle_events()) {}
+	context.disconnect_client(0);
+	context.client(1).engine.sync_object_change(create_object_id(), metadata{});
+	while(context.handle_events()) {}
+	context.connect_client(0);
+	while(context.handle_events()) {}
+	CHECK(context.compare_record_storages(sequence_number{2}));
 }
 
 }

@@ -19,6 +19,10 @@ public:
 	, groupchat(*this, context, groupchat_config{})
 	{}
 
+	~test_groupchat() {
+		stop_handler();
+	}
+
 	/// called when server connected
 	void on_connect(server_id) {
 		connected.set_value(error{});

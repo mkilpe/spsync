@@ -35,6 +35,9 @@ public:
 	/// construct with database connection
 	encryption_key_storage(database::connection_ptr);
 
+	encryption_key_storage(encryption_key_storage const&) = delete;
+	encryption_key_storage operator=(encryption_key_storage const&) = delete;
+
 	/// returns the current encryption key to use (key with highest sequence number)
 	encryption_key current_key() const;
 

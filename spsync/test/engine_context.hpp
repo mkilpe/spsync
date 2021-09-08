@@ -6,6 +6,7 @@
 #include "test_sync_engine.hpp"
 #include "util.hpp"
 
+#include <spsync/client/record_util.hpp>
 #include <spsync/core/encryption_key_storage.hpp>
 #include <securepath/crypto/public_key_cache.hpp>
 #include <securepath/crypto/private_data_cache.hpp>
@@ -30,7 +31,7 @@ public:
 		enc_keys.insert(encryption_key{sequence_number{1}, to_octet_vector("12345678901234567890123456789012")});
 		users initial;
 		initial.add(util::user_access{root_user, util::access_type::user_management_access});
-		engine.sync_user_change(initial);
+		engine.sync_user_change(encrypt_last_key_for_users(initial, cc));
 	}
 
 	void add_default_commit_response() {
