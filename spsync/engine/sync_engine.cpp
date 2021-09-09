@@ -29,9 +29,9 @@ public:
 	{}
 
 	request_handle commit_record(record_handle h) {
-		request_handle req = comm.commit_record(h);
-		LINFO("trying to commit record to server [tag = %, request handle = %]", to_hex(h->tag()), req);
-		return req;
+		pushing_pending_commit = comm.commit_record(h);
+		LINFO("trying to commit record to server [tag = %, request handle = %]", to_hex(h->tag()), pushing_pending_commit);
+		return pushing_pending_commit;
 	}
 
 	void notify_on_record(record_handle h) {
@@ -287,7 +287,7 @@ public:
 					}
 				}
 				//t: handle allow_all correctly, not trying to recommit always
-				pushing_pending_commit = commit_record(handle);
+				commit_record(handle);
 			}
 		}
 	}
@@ -445,6 +445,8 @@ void sync_engine::on_commit_response(request_handle req_handle, commit_response 
 				//already up-to-date with server but perhaps we have some local pending commits
 				impl_->try_commit_pending();
 			}
+		} else if(check_result_error(res.data, protocol::errc::record_already_committed)) {
+			impl_->try_commit_pending();
 		}
 	}
 }

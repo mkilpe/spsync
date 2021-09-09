@@ -229,7 +229,6 @@ TEST_CASE("client_sync", "[unit]") {
 		CHECK(check_member_status(c2, net_context.key_id(1), member_status::pending_remove));
 	}
 
-	LOG_TRACE("--------------");
 	c1.connect();
 	c2.connect();
 
