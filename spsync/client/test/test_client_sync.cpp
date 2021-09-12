@@ -114,7 +114,7 @@ private:
 };
 
 bool check_member_status(test_client const& c, crypto::public_key_id const& uid, member_status status) {
-	auto m = c.find(util::user_id{uid});
+	auto m = c.find_member(util::user_id{uid});
 	REQUIRE(m);
 	CHECK(m->status() == status);
 	return m->status() == status;
@@ -167,8 +167,8 @@ TEST_CASE("client_sync", "[unit]") {
 	}
 
 	// add members
-	c1.add(util::user_id{net_context.key_id(2)});
-	c2.add(util::user_id{net_context.key_id(3)});
+	c1.add_member(util::user_id{net_context.key_id(2)});
+	c2.add_member(util::user_id{net_context.key_id(3)});
 
 	{
 		WAIT_CHECK(c1.user_changes().size() == 3, 2s);
@@ -188,8 +188,8 @@ TEST_CASE("client_sync", "[unit]") {
 	}
 
 	// remove members
-	c1.remove(util::user_id{net_context.key_id(2)});
-	c2.remove(util::user_id{net_context.key_id(3)});
+	c1.remove_member(util::user_id{net_context.key_id(2)});
+	c2.remove_member(util::user_id{net_context.key_id(3)});
 
 	{
 		WAIT_CHECK(c1.user_changes().size() == 5, 2s);
@@ -208,7 +208,7 @@ TEST_CASE("client_sync", "[unit]") {
 
 	// pending add members
 	c1.disconnect();
-	c1.add(util::user_id{net_context.key_id(2)});
+	c1.add_member(util::user_id{net_context.key_id(2)});
 
 	{
 		auto m = c1.members();
@@ -220,7 +220,7 @@ TEST_CASE("client_sync", "[unit]") {
 
 	// pending remove members
 	c2.disconnect();
-	c2.remove(util::user_id{net_context.key_id(1)});
+	c2.remove_member(util::user_id{net_context.key_id(1)});
 
 	{
 		auto m = c2.members();

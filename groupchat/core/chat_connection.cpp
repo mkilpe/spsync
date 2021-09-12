@@ -30,10 +30,11 @@ struct chat_connection::impl
 		stop_handler();
 	}
 
-	void connect_to_storage(sync::storage_id const& cid) {
+	channel& connect_to_storage(sync::storage_id const& cid) {
 		assert(!cid.empty());
 		auto ret = channels.emplace(cid, std::make_unique<channel>(sid, callback, context, cid));
-		ret.first->second->init(net);
+		ret.first->second->init(cid, net);
+		return *ret.first->second;
 	}
 
 	void on_connect() {
@@ -49,7 +50,7 @@ struct chat_connection::impl
 			assert(!cid.empty());
 			auto it = channels.find(cid);
 			if(it != channels.end()) {
-				it->second->init(net);
+				it->second->init(cid, net);
 				it->second->create_initial_record();
 			} else {
 				LOG_WARN("no channel found for chat: %", to_hex(cid));
@@ -66,11 +67,11 @@ struct chat_connection::impl
 				, event_dest<sync::events::on_create_storage>(&impl::on_create_storage) );
 	}
 
-	sync::storage_id create_chat(std::string name) {
+	channel& create_chat(std::string name) {
 		auto cid = net.create_storage();
 		auto ret = channels.emplace(cid, std::make_unique<channel>(sid, callback, context, cid));
 		ret.first->second->set_name(std::move(name));
-		return cid;
+		return *ret.first->second;
 	}
 
 	void connect() {
@@ -104,28 +105,20 @@ void chat_connection::disconnect() {
 	impl_->net.close();
 }
 
-sync::storage_id chat_connection::create_chat(std::string name) {
+channel& chat_connection::create_chat(std::string name) {
 	return impl_->create_chat(std::move(name));
 }
 
-void chat_connection::change_user(chat_id const& storage, sync::users change) {
+channel& chat_connection::join(chat_id const& storage) {
+	return impl_->connect_to_storage(storage);
+}
+
+channel& chat_connection::get(chat_id const& storage) {
 	auto it = impl_->channels.find(storage);
 	if(it == impl_->channels.end()) {
 		throw std::runtime_error("no such storage");
 	}
-	return it->second->change_user(std::move(change));
-}
-
-void chat_connection::join(chat_id const& storage) {
-	impl_->connect_to_storage(storage);
-}
-
-message_id chat_connection::send_message(chat_id const& storage, std::string const& message) {
-	auto it = impl_->channels.find(storage);
-	if(it == impl_->channels.end()) {
-		throw std::runtime_error("no such storage");
-	}
-	return it->second->send_message(message);
+	return *it->second;
 }
 
 network::context& chat_connection::context() {

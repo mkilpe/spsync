@@ -240,7 +240,7 @@ std::deque<std::unique_ptr<member>> client_sync::members() const {
 	return ret;
 }
 
-std::unique_ptr<member> client_sync::find(util::user_id const& uid) const {
+std::unique_ptr<member> client_sync::find_member(util::user_id const& uid) const {
 	std::unique_ptr<member> ret;
 	member_status status;
 	std::optional<std::uint64_t> member_id = impl_->find_member(uid, status);
@@ -251,15 +251,15 @@ std::unique_ptr<member> client_sync::find(util::user_id const& uid) const {
 	return ret;
 }
 
-std::unique_ptr<member> client_sync::add(util::user_id const& uid) {
+std::unique_ptr<member> client_sync::add_member(util::user_id const& uid) {
 	users us{users_change_mode::delta};
 	us.add(util::user_access{uid, util::access_type::user_management_access});
 	impl_->add_or_remove_user_access(us);
 	impl_->create_member(uid, member_status::pending_add);
-	return find(uid);
+	return find_member(uid);
 }
 
-void client_sync::remove(util::user_id const& uid) {
+void client_sync::remove_member(util::user_id const& uid) {
 	users us{users_change_mode::delta};
 	us.remove(uid);
 	impl_->add_or_remove_user_access(us);

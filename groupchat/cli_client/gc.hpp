@@ -28,6 +28,7 @@ public:
 
 private:
 	cli_window& win_;
+	std::map<chat_id, int> channel_map_;
 };
 
 }

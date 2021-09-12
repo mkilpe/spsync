@@ -18,16 +18,24 @@ class cli_window {
 public:
 	cli_window(console::context&);
 
+	int add_channel(std::wstring name);
 	void add_message(int channel, std::wstring msg);
 	void add_info(int channel, std::wstring msg);
+
+	int current_channel() const;
 	void change_channel(int channel);
+
 private:
 	void add_line_to_screen(cli_message const& msg);
 	void add_line(int channel, cli_message msg);
 private:
+	struct channel_info {
+		std::wstring name;
+		std::deque<cli_message> history;
+	};
 	console::context& context_;
 	int current_channel_{};
-	std::map<int, std::deque<cli_message>> history_;
+	std::map<int, channel_info> channels_;
 	std::shared_ptr<console::text_window> text_area_;
 };
 

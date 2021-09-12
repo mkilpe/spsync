@@ -30,16 +30,13 @@ public:
 	void disconnect();
 
 	/// Create chat on given server, will call on_create when fail or succeed
-	chat_id create_chat(std::string name);
-
-	/// change users for chat
-	void change_user(chat_id const& storage, sync::users change);
+	channel& create_chat(std::string name);
 
 	/// join existing chat
-	void join(chat_id const& storage);
+	channel& join(chat_id const& storage);
 
-	/// Send a message to the chat
-	message_id send_message(chat_id const& chat, std::string const& message);
+	/// get existing storage, otherwise throw exception
+	channel& get(chat_id const& storage);
 
 	/// Attached network context
 	network::context& context();

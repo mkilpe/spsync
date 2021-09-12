@@ -11,92 +11,64 @@
 
 namespace securepath::groupchat {
 
+std::string const gc_name_tag = "gc.chat.name";
+
 channel::channel(server_id sid, event_system::event_handler& callback, network::context& context, chat_id const& cid)
-: engine_output(callback.event_loop())
+: client_sync(callback.event_loop(), database::sqlite::create_sqlite_connection(to_hex(cid) + ".db"))
 , callback_(callback)
 , context_(context)
 , sid_(sid)
 , chat_id_(cid)
-, progress_(callback.event_loop())
-, database_()
 {
 }
 
+channel::~channel() {
+	stop_handler();
+}
+
 void channel::set_name(std::string name) {
-	name_ = std::move(name);
-	//t: update name in db
+	insert(gc_name_tag, name);
 }
 
-void channel::init(sync::network_connection& conn) {
-	database_ = database::sqlite::create_sqlite_connection(to_hex(chat_id_) + ".db");
-	storage_ = std::make_unique<sync::record_storage>(database_);
-	enc_keys_ = std::make_unique<sync::encryption_key_storage>(database_);
-	crypto_ = std::make_unique<sync::crypto_context>(context_.public_keys(), context_.private_data(), *enc_keys_);
-
-	sync::storage_connection sconn{conn.create_storage_connection(chat_id_, *storage_, progress_)};
-	engine_ = std::make_unique<sync::sync_engine>(event_loop(), sconn.input(), *crypto_, sync::sync_engine_config{});
-	engine_->set_output(this);
-
-	//after this the events will be received
-	sconn.attach(*engine_);
-
-	// key for testing
-	sync::encryption_key res;
-	res.key_seq = sync::sequence_number{1};
-	res.key = to_octet_vector("test key plah plkah plah");
-	enc_keys_->insert(res);
-}
-
-void channel::on_object_data_changed(sync::record_handle rec) {
+void channel::on_data_change(sync::record_handle rec, std::deque<sync::single_data_change> changes) {
 	LOG_TRACE("on_object_data_changed");
-	assert(engine_);
 	//t: handle nick etc
-
-	auto opt_meta = extract_single_object_meta(*enc_keys_, rec);
-	if(opt_meta) {
-		auto opt = opt_meta->find<message_data>(groupchat_message_id);
+	for(auto const& c : changes) {
+		auto opt = c.header.metadata().find<message_data>(groupchat_message_id);
 		if(opt) {
 			message m{opt->message, "test", opt->sender_time, rec->block_id().sequence};
 			callback_.emit<events::on_message>(sid_, chat_id_, m);
 		} else {
 			LOG_WARN("invalid record, no groupchat message found");
 		}
-	} else {
-		LOG_WARN("invalid record");
 	}
 }
 
-void channel::on_user_changed(sync::record_handle rec) {
-	//t: implement
-	callback_.emit<events::on_change_user>(sid_, chat_id_, sync::users{}, error{});
+void channel::on_user_change(sync::record_handle, sync::user_change usc) {
+	callback_.emit<events::on_change_user>(sid_, chat_id_, usc.members, error{});
 }
 
 void channel::create_initial_record() {
-	assert(engine_);
-	//enc_keys_->create_key();
-
 	auto own_key = context_.private_data().my_private_key();
 	assert(own_key);
 	sync::metadata header;
-	header.insert(groupchat_name_id, name_);
+	header.insert(groupchat_name_id, find<std::string>(gc_name_tag).value_or(to_hex(chat_id_)));
 	sync::users initial;
 	initial.add(sync::util::user_access{own_key->id(), sync::util::access_type::user_management_access});
-	engine_->sync_user_change(encrypt_last_key_for_users(initial, *crypto_), std::move(header));
+	send_user_change(std::move(initial), std::move(header));
 }
 
 message_id channel::send_message(std::string const& msg) {
-	assert(engine_);
 	message_data chat_msg{msg, clock_type::now()};
 	sync::metadata header;
 	header.insert(groupchat_message_id, chat_msg);
 	auto msg_id = sync::util::create_object_id();
-	engine_->sync_object_change(msg_id, std::move(header));
+	send_data_change(msg_id, std::move(header));
 	return msg_id;
 }
 
-void channel::change_user(sync::users change) {
-	assert(engine_);
-	engine_->sync_user_change(std::move(change));
+chat_id channel::id() const {
+	return chat_id_;
 }
 
 }

@@ -34,13 +34,13 @@ public:
 	std::deque<std::unique_ptr<member>> members() const;
 
 	/// find a member based on user_id
-	std::unique_ptr<member> find(util::user_id const&) const;
+	std::unique_ptr<member> find_member(util::user_id const&) const;
 
-	/// add new member
-	std::unique_ptr<member> add(util::user_id const&);
+	/// add new member, locally add pending member and make user change record
+	std::unique_ptr<member> add_member(util::user_id const&);
 
-	/// remove member
-	void remove(util::user_id const&);
+	/// remove existing member, locally add pending remove and make user change record
+	void remove_member(util::user_id const&);
 
 	/// apply the users to current members
 	void apply(users const&);

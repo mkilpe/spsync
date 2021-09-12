@@ -16,6 +16,9 @@ cli_window::cli_window(console::context& context)
 	if(!console::make_colour_pair(console::colour_index{2}, console::colour::green, console::colour::black)) {
 		throw std::runtime_error("failed to initialise colours");
 	}
+	if(!console::make_colour_pair(console::colour_index{3}, console::colour::white, console::colour::blue)) {
+		throw std::runtime_error("failed to initialise colours");
+	}
 
 	auto size = context.screen_size();
 	text_area_ = std::make_shared<console::text_window>(console::rect{console::point{0,0}, {size.x, size.y-1}});
@@ -31,10 +34,25 @@ void cli_window::add_line_to_screen(cli_message const& msg) {
 }
 
 void cli_window::add_line(int channel, cli_message msg) {
+	auto c = channels_.find(channel);
+	if(c == channels_.end()) {
+		throw std::runtime_error("no such channel");
+	}
 	if(channel == current_channel_) {
 		add_line_to_screen(msg);
 	}
-	history_[channel].push_back(std::move(msg));
+	c->second.history.push_back(std::move(msg));
+}
+
+int cli_window::add_channel(std::wstring name) {
+	int i = 0;
+	for(;i != std::numeric_limits<int>::max(); ++i) {
+		if(channels_.count(i) == 0) {
+			channels_[i] = channel_info{std::move(name)};
+			return i;
+		}
+	}
+	throw std::runtime_error("too many channels");
 }
 
 void cli_window::add_message(int channel, std::wstring msg) {
