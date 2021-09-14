@@ -36,7 +36,6 @@ private:
 	network::context& context_;
 	server_id const sid_;
 	chat_id const chat_id_;
-	std::string name_;
 };
 
 }

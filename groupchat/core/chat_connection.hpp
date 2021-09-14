@@ -2,6 +2,7 @@
 
 #include "message.hpp"
 #include "channel.hpp"
+#include "channel_list.hpp"
 #include "types.hpp"
 
 #include <spsync/core/users.hpp>
@@ -20,7 +21,7 @@ namespace securepath::groupchat {
  */
 class chat_connection {
 public:
-	chat_connection(server_id, host_port, event_system::event_handler& callback, network::context& context);
+	chat_connection(server_id, host_port, event_system::event_handler& callback, network::context& context, channel_list&);
 	~chat_connection();
 
 	/// connect to storage server
@@ -43,6 +44,9 @@ public:
 
 	/// Host and port for this connection
 	host_port end_point() const;
+
+	/// Get the id of this chat connection
+	server_id id() const;
 
 private:
 	class impl;

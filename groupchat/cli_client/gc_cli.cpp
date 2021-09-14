@@ -33,7 +33,7 @@ gc_cli::gc_cli(gc_cli_config)
 	init_commands();
 	// modes need to be set before constructing the windows
 	win_ = std::make_unique<cli_window>(*this);
-	gc_  = std::make_unique<gc>(static_cast<event_system::event_loop&>(*this), *win_);
+	gc_  = std::make_unique<cli_groupchat>(static_cast<event_system::event_loop&>(*this), *win_);
 
 	// add info channel, index 0
 	win_->add_channel(L"Info");

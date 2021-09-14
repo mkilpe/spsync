@@ -68,6 +68,8 @@ public:
 };
 
 TEST_CASE("groupchat_test", "[system]") {
+	std::remove(groupchat_config{}.db.c_str());
+
 	network::test::testing_context net_context;
 	net_context.set_server_dh_parameters();
 	net_context.set_server_pk_parameters();
@@ -75,30 +77,57 @@ TEST_CASE("groupchat_test", "[system]") {
 	net_context.set_client_pk_parameters();
 
 	//add client key to the db
-	net_context.keys.insert(my_private_key(net_context.client_private_data).public_key());
+	//net_context.keys.insert(my_private_key(net_context.client_private_data).public_key());
 
 	sync::test::test_server server(net_context.server_context);
 	server.run();
 	std::this_thread::sleep_for(1s);
 
+	host_port hp{"127.0.0.1", sync::default_storage_server_port};
 	event_system::single_thread_event_loop loop;
-	test_groupchat client(net_context.client_context, loop);
-	auto conn = client.load("127.0.0.1", sync::default_storage_server_port);
-
-	conn->connect();
 	{
-		auto f = client.connected.get_future();
-		WAIT_CHECK(f.valid(), 2s);
-		REQUIRE(f.valid());
-		REQUIRE(!f.get());
+		test_groupchat client(net_context.client_context, loop);
+
+		CHECK(!client.account_info());
+
+		client.create_account(hp, "test");
+
+		auto info = client.account_info();
+		REQUIRE(info);
+		CHECK(info->server == hp);
+		CHECK(info->name == "test");
+		CHECK(info->key_id.is_valid());
+
+		auto conn = client.load(hp);
+
+		conn->connect();
+		{
+			auto f = client.connected.get_future();
+			WAIT_CHECK(f.valid(), 2s);
+			REQUIRE(f.valid());
+			REQUIRE(!f.get());
+		}
+
+		auto cid = conn->create_chat("test").id();
+		{
+			auto f = client.created.get_future();
+			WAIT_CHECK(f.valid(), 2s);
+			REQUIRE(f.valid());
+			REQUIRE(f.get() == cid);
+		}
 	}
-
-	auto cid = conn->create_chat("test").id();
 	{
-		auto f = client.created.get_future();
-		WAIT_CHECK(f.valid(), 2s);
-		REQUIRE(f.valid());
-		REQUIRE(f.get() == cid);
+		test_groupchat client(net_context.client_context, loop);
+
+		auto info = client.account_info();
+		REQUIRE(info);
+		CHECK(info->server == hp);
+		CHECK(info->name == "test");
+		CHECK(info->key_id.is_valid());
+
+		auto ids = client.load_channels();
+		CHECK(ids.size() == 1);
+		//t: implement rest
 	}
 }
 

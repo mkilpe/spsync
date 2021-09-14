@@ -9,13 +9,15 @@
 #include <securepath/network/encryption/handshake/dh_handshake.hpp>
 #include <securepath/network/encryption/handshake/pk_handshake.hpp>
 
+#include <mutex>
+
 namespace securepath::groupchat {
 
 struct chat_connection::impl
 : public network::encrypted_net_base
 , public event_system::event_handler
 {
-	impl(server_id sid, host_port hp, event_system::event_handler& callback, network::context& context)
+	impl(server_id sid, host_port hp, event_system::event_handler& callback, network::context& context, channel_list& ch_list)
 	: encrypted_net_base(context)
 	, event_handler(callback.event_loop())
 	, context(context)
@@ -23,6 +25,7 @@ struct chat_connection::impl
 	, net(context, *this)
 	, sid(sid)
 	, hp(std::move(hp))
+	, ch_list(ch_list)
 	{
 	}
 
@@ -47,6 +50,7 @@ struct chat_connection::impl
 
 	void on_create_storage(sync::storage_id const& cid, error err) {
 		if(!err) {
+			std::unique_lock l{mutex};
 			assert(!cid.empty());
 			auto it = channels.find(cid);
 			if(it != channels.end()) {
@@ -71,12 +75,15 @@ struct chat_connection::impl
 		auto cid = net.create_storage();
 		auto ret = channels.emplace(cid, std::make_unique<channel>(sid, callback, context, cid));
 		ret.first->second->set_name(std::move(name));
+		ch_list.add(cid, hp);
 		return *ret.first->second;
 	}
 
 	void connect() {
 		net.connect(hp.host, hp.port);
 	}
+
+	mutable std::mutex mutex;
 
 	network::context& context;
 	event_system::event_handler& callback;
@@ -86,10 +93,12 @@ struct chat_connection::impl
 
 	server_id const sid;
 	host_port const hp;
+
+	channel_list& ch_list;
 };
 
-chat_connection::chat_connection(server_id sid, host_port hp, event_system::event_handler& callback, network::context& context)
-: impl_(std::make_unique<impl>(sid, hp, callback, context))
+chat_connection::chat_connection(server_id sid, host_port hp, event_system::event_handler& callback, network::context& context, channel_list& ch_list)
+: impl_(std::make_unique<impl>(sid, hp, callback, context, ch_list))
 {
 }
 
@@ -106,14 +115,17 @@ void chat_connection::disconnect() {
 }
 
 channel& chat_connection::create_chat(std::string name) {
+	std::unique_lock l{impl_->mutex};
 	return impl_->create_chat(std::move(name));
 }
 
 channel& chat_connection::join(chat_id const& storage) {
+	std::unique_lock l{impl_->mutex};
 	return impl_->connect_to_storage(storage);
 }
 
 channel& chat_connection::get(chat_id const& storage) {
+	std::unique_lock l{impl_->mutex};
 	auto it = impl_->channels.find(storage);
 	if(it == impl_->channels.end()) {
 		throw std::runtime_error("no such storage");
@@ -127,6 +139,10 @@ network::context& chat_connection::context() {
 
 host_port chat_connection::end_point() const {
 	return impl_->hp;
+}
+
+server_id chat_connection::id() const {
+	return impl_->sid;
 }
 
 }

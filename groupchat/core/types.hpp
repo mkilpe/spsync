@@ -3,6 +3,9 @@
 
 #include <spsync/util/object_id.hpp>
 
+#include <securepath/serialisation/types.hpp>
+#include <securepath/serialisation/sequence.hpp>
+
 #include <cstdint>
 #include <memory>
 #include <string>
@@ -26,6 +29,12 @@ struct host_port {
 	std::uint16_t port;
 
 	auto operator<=>(host_port const&) const = default;
+
+	template<typename Ar>
+	void serialise(Ar& ar) {
+		serialisation::sequence<Ar> seq(ar);
+		seq & host & port;
+	}
 };
 
 }

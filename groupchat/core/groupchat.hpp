@@ -3,6 +3,7 @@
 #include "message.hpp"
 #include "channel.hpp"
 #include "chat_connection.hpp"
+#include "contact_list.hpp"
 #include "types.hpp"
 
 #include <spsync/core/users.hpp>
@@ -15,11 +16,17 @@
 #include <string>
 
 namespace securepath::groupchat {
+namespace gc = groupchat;
 
 /// Configuration for the group chat
 struct groupchat_config {
 	std::string db{"gc_client.db"};
-	//identity et al
+};
+
+struct account_info {
+	host_port server;
+	std::string name;
+	crypto::public_key_id key_id;
 };
 
 /**
@@ -31,15 +38,36 @@ public:
 	groupchat(event_system::event_handler& callback, network::context& context, groupchat_config);
 	~groupchat();
 
-	std::shared_ptr<chat_connection> load(std::string const& host, std::uint16_t port);
+	/// Returns associated account information if account exists
+	std::optional<gc::account_info> account_info() const;
+
+	/// Try to create account (create key, register key to the server)
+	void create_account(host_port const& server, std::string const& name);
+
+	/// Load and connect to existing channels
+	std::deque<server_id> load_channels();
+
+	/// create/get chat connection to given server
+	std::shared_ptr<chat_connection> load(host_port const& server);
 	std::shared_ptr<chat_connection> find(server_id) const;
+
+	/// return contacts
+	contact_list& contacts();
 
 	/// Attached network context
 	network::context& context();
 
 private:
+	bool check_account_exists(groupchat_config const&) const;
+
+private:
+	groupchat_config config_;
+	event_system::event_handler& callback_;
+	network::context* context_{};
+
 	class impl;
 	std::unique_ptr<impl> impl_;
+
 };
 
 }

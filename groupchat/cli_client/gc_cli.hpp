@@ -1,7 +1,7 @@
 #pragma once
 
 #include "cli_window.hpp"
-#include "gc.hpp"
+#include "cli_groupchat.hpp"
 
 #include <securepath/console/context.hpp>
 #include <securepath/event_system/event_handler.hpp>
@@ -35,7 +35,7 @@ private:
 	void my_info(std::vector<std::wstring_view> const& args);
 private:
 	std::unique_ptr<cli_window> win_;
-	std::unique_ptr<gc> gc_;
+	std::unique_ptr<cli_groupchat> gc_;
 	std::map<std::wstring, std::function<void (std::vector<std::wstring_view> const&)>> cmds_;
 };
 

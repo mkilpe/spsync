@@ -6,6 +6,7 @@
 #include <spsync/core/progress.hpp>
 #include <spsync/engine/sync_engine.hpp>
 
+#include <securepath/common/key_value_database.hpp>
 #include <securepath/crypto/rsa.hpp>
 #include <securepath/database/sqlite/connection.hpp>
 #include <securepath/event_system/event_handler.hpp>
@@ -26,34 +27,34 @@ struct groupchat::impl
 : public network::encrypted_net_base
 , public event_system::event_handler
 {
-	impl(event_system::event_handler& callback, network::context& context, groupchat_config conf)
+	impl(event_system::event_handler& callback, network::context* context, groupchat_config conf)
 	: encrypted_net_base(network::client_tag, {conf.db, conf.db, conf.db, conf.db})
 	, event_handler(callback.event_loop())
-	, context(context)
+	, own_context(context ? std::optional<network::context>{} : construct_context())
+	, context(context ? *context : *own_context)
 	, conf(std::move(conf))
-	, database(open_gc_client_database(conf))
+	, database(open_gc_client_database(this->conf))
 	, callback(callback)
+	, channels(database)
+	, contacts(database)
 	{
-		network::enable_client_dh_handshake(context);
-		network::enable_client_pk_handshake(context);
-	}
+		network::enable_client_dh_handshake(this->context);
+		network::enable_client_pk_handshake(this->context);
 
-	impl(event_system::event_handler& callback, groupchat_config conf)
-	: encrypted_net_base(network::client_tag, {conf.db, conf.db, conf.db, conf.db})
-	, event_handler(callback.event_loop())
-	, own_context(construct_context())
-	, context(*own_context)
-	, conf(std::move(conf))
-	, database(open_gc_client_database(conf))
-	, callback(callback)
-	{
-		network::enable_client_dh_handshake(context);
-		network::enable_client_pk_handshake(context);
-		run();
+		if(!context) {
+			run();
+		}
 	}
 
 	~impl() {
 		stop_handler();
+	}
+
+	void load_info() {
+		gc_info = std::make_unique<key_value_database>(database, "gc_info");
+		info.key_id = my_private_key(context.private_data()).id();
+		info.name = gc_info->find<std::string>("name").value_or(info.key_id.in_hex());
+		info.server = gc_info->find<host_port>("server").value_or(host_port{});
 	}
 
 	bool init_crypto() {
@@ -66,6 +67,17 @@ struct groupchat::impl
 
 	void create_crypto_materials() {
 		context.private_data().set_my_private_key(crypto::generate_rsa_private_key(2048));
+	}
+
+	void create_account(host_port const& server, std::string const& name) {
+		init_crypto();
+		register_my_key(server.host);
+		info.key_id = my_private_key(context.private_data()).id();
+		info.name = name;
+		info.server = server;
+		gc_info = std::make_unique<key_value_database>(database, "gc_info");
+		gc_info->insert("name", info.name);
+		gc_info->insert("server", info.server);
 	}
 
 	void handle_event(std::unique_ptr<event_system::event_base> ev) override {
@@ -87,41 +99,85 @@ struct groupchat::impl
 
 	std::shared_ptr<chat_connection> create_connection(host_port const& hp) {
 		auto id = ++last_id;
-		auto p = std::make_shared<chat_connection>(id, hp, callback, context);
+		auto p = std::make_shared<chat_connection>(id, hp, callback, context, channels);
 		hp_map[hp] = id;
 		connections[id] = p;
 		return p;
 	}
 
+	gc::account_info info;
 	std::optional<network::context> own_context;
 	network::context& context;
 	groupchat_config conf;
 
 	database::connection_ptr database;
+	std::unique_ptr<key_value_database> gc_info;
 	event_system::event_handler& callback;
 
 	server_id last_id{};
 	std::map<host_port, server_id> hp_map;
 	std::map<server_id, std::shared_ptr<chat_connection>> connections;
+
+	channel_list channels;
+	contact_list contacts;
 };
 
+bool groupchat::check_account_exists(groupchat_config const& conf) const {
+	auto db = open_gc_client_database(conf);
+	return db && db->has_table("gc_info");
+}
+
 groupchat::groupchat(event_system::event_handler& callback, groupchat_config conf)
-: impl_(std::make_unique<impl>(callback, std::move(conf)))
+: config_(std::move(conf))
+, callback_(callback)
+, impl_(check_account_exists(config_) ? std::make_unique<impl>(callback, nullptr, config_) : nullptr)
 {
+	if(impl_) {
+		impl_->load_info();
+	}
 }
 
 groupchat::groupchat(event_system::event_handler& callback, network::context& context, groupchat_config conf)
-: impl_(std::make_unique<impl>(callback, context, std::move(conf)))
+: config_(std::move(conf))
+, callback_(callback)
+, context_(&context)
+, impl_(check_account_exists(config_) ? std::make_unique<impl>(callback, &context, config_) : nullptr)
 {
+	if(impl_) {
+		impl_->load_info();
+	}
 }
 
 groupchat::~groupchat()
 {
 }
 
-std::shared_ptr<chat_connection> groupchat::load(std::string const& host, std::uint16_t port) {
+std::optional<gc::account_info> groupchat::account_info() const {
+	return impl_ ? impl_->info : std::optional<gc::account_info>{};
+}
+
+void groupchat::create_account(host_port const& server, std::string const& name) {
+	if(impl_) {
+		throw make_error(sync::errc::constraint_violation, "account already exists");
+	}
+	impl_ = std::make_unique<impl>(callback_, context_, config_);
+	impl_->create_account(server, name);
+}
+
+std::deque<server_id> groupchat::load_channels() {
+	std::deque<server_id> ret;
+	for(auto const& v : impl_->channels.enumerate()) {
+		auto s = load(v.server);
+		//q: is this correct function to load the channel?
+		s->join(v.cid);
+		ret.push_back(s->id());
+	}
+	return ret;
+}
+
+std::shared_ptr<chat_connection> groupchat::load(host_port const& hp) {
+	assert(impl_);
 	std::shared_ptr<chat_connection> ret;
-	host_port hp{host, port};
 	auto it = impl_->hp_map.find(hp);
 	if(it != impl_->hp_map.end()) {
 		auto c_it = impl_->connections.find(it->second);
@@ -136,11 +192,17 @@ std::shared_ptr<chat_connection> groupchat::load(std::string const& host, std::u
 }
 
 std::shared_ptr<chat_connection> groupchat::find(server_id sid) const {
+	assert(impl_);
 	auto c_it = impl_->connections.find(sid);
 	return c_it != impl_->connections.end() ? c_it->second : nullptr;
 }
 
+contact_list& groupchat::contacts() {
+	return impl_->contacts;
+}
+
 network::context& groupchat::context() {
+	assert(impl_);
 	return impl_->context;
 }
 
