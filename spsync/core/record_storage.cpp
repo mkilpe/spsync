@@ -10,6 +10,7 @@
 
 #include <memory>
 #include <mutex>
+#include <unordered_map>
 
 namespace securepath::sync {
 namespace {

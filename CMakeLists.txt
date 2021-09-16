@@ -19,3 +19,27 @@ include("${sp_main_repository_path}/cmake.main")
 # actual projects
 add_subdirectory(spsync)
 add_subdirectory(groupchat)
+
+# combined library for groupchat (used for mobile)
+add_library(gc_lib STATIC
+	$<TARGET_OBJECTS:groupchat_json_protocol>
+	$<TARGET_OBJECTS:groupchat_core>
+
+	$<TARGET_OBJECTS:spsync_client>
+	$<TARGET_OBJECTS:spsync_comm>
+	$<TARGET_OBJECTS:spsync_core>
+	$<TARGET_OBJECTS:spsync_engine>
+	$<TARGET_OBJECTS:spsync_protocol>
+	$<TARGET_OBJECTS:spsync_util>
+
+	$<TARGET_OBJECTS:client_common>
+	$<TARGET_OBJECTS:common>
+	$<TARGET_OBJECTS:crypto>
+	$<TARGET_OBJECTS:database>
+	$<TARGET_OBJECTS:key_client_lib>
+	$<TARGET_OBJECTS:log>
+	$<TARGET_OBJECTS:network>
+	$<TARGET_OBJECTS:remote_object>
+	$<TARGET_OBJECTS:serialisation>
+	$<TARGET_OBJECTS:util>
+	)

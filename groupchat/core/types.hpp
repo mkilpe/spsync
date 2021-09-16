@@ -28,7 +28,12 @@ struct host_port {
 	std::string host;
 	std::uint16_t port;
 
-	auto operator<=>(host_port const&) const = default;
+	//auto operator<=>(host_port const&) const = default;
+	//not working on ndk 23 with clang
+
+	bool operator<(host_port const& v) const {
+		return host < v.host || (host == v.host && port < v.port);
+	}
 
 	template<typename Ar>
 	void serialise(Ar& ar) {

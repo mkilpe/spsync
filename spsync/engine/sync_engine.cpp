@@ -178,7 +178,7 @@ public:
 			verify_block(*enc_key, record, id, rec);
 		} else {
 			auto last_block = records.last_block();
-			if(last_block.sequence == sequence_number{} && record.sequence() == sequence_number(1)) {
+			if(last_block.sequence == sequence_number{} && record.sequence() == sequence_number{1}) {
 				LTRACE("first record, attempting to extract encryption key");
 				//t: optional check of the tag of the first record (i.e. if given from above)
 				//this is first record, try to extract enc key
