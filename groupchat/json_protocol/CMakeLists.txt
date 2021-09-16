@@ -5,3 +5,5 @@ set_target_properties(groupchat_json_protocol PROPERTIES LINKER_LANGUAGE CXX)
 target_link_libraries(groupchat_json_protocol groupchat_core)
 
 #add_subdirectory(test)
+
+add_definitions(-DBOOST_JSON_STANDALONE)
