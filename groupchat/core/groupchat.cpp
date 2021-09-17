@@ -27,11 +27,11 @@ struct groupchat::impl
 : public network::encrypted_net_base
 , public event_system::event_handler
 {
-	impl(event_system::event_handler& callback, network::context* context, groupchat_config conf)
+	impl(event_system::event_handler& callback, network::context* c, groupchat_config conf)
 	: encrypted_net_base(network::client_tag, {conf.db, conf.db, conf.db, conf.db})
 	, event_handler(callback.event_loop())
-	, own_context(context ? std::optional<network::context>{} : construct_context())
-	, context(context ? *context : *own_context)
+	, own_context(c ? std::optional<network::context>{} : construct_context())
+	, context(c ? *c : *own_context)
 	, conf(std::move(conf))
 	, database(open_gc_client_database(this->conf))
 	, callback(callback)
@@ -41,7 +41,7 @@ struct groupchat::impl
 		network::enable_client_dh_handshake(this->context);
 		network::enable_client_pk_handshake(this->context);
 
-		if(!context) {
+		if(!c) {
 			run();
 		}
 	}
