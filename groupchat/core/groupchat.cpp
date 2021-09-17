@@ -123,8 +123,13 @@ struct groupchat::impl
 };
 
 bool groupchat::check_account_exists(groupchat_config const& conf) const {
-	auto db = open_gc_client_database(conf);
-	return db && db->has_table("gc_info");
+	try {
+		auto db = open_gc_client_database(conf);
+		return db && db->has_table("gc_info");
+	} catch(std::exception const& ex) {
+		LOG_WARN("failed to open database: %", conf.db);
+	}
+	return false;
 }
 
 groupchat::groupchat(event_system::event_handler& callback, groupchat_config conf)

@@ -3,6 +3,8 @@
 #include <securepath/crypto/random.hpp>
 #include <securepath/util/conversions.hpp>
 
+#include <ostream>
+
 namespace securepath::sync::util {
 
 //Fixed size of the object id octets
@@ -42,7 +44,8 @@ bool operator<(object_id const& left, object_id const& right) {
 }
 
 std::ostream& operator<<(std::ostream& out, object_id const& id) {
-	return out << (id.is_valid() ? id.to_hex() : "<invalid object id>");
+	std::string res = id.is_valid() ? id.to_hex() : "<invalid object id>";
+	return out << res;
 }
 
 }

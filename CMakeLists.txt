@@ -37,6 +37,7 @@ add_library(gc_lib STATIC
 	$<TARGET_OBJECTS:common>
 	$<TARGET_OBJECTS:crypto>
 	$<TARGET_OBJECTS:database>
+	$<TARGET_OBJECTS:event_system>
 	$<TARGET_OBJECTS:key_client_lib>
 	$<TARGET_OBJECTS:log>
 	$<TARGET_OBJECTS:network>

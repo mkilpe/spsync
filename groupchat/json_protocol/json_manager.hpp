@@ -6,6 +6,8 @@
 
 namespace securepath::groupchat::json_protocol {
 
+void initialise_logging();
+
 class json_manager {
 public:
 	json_manager(std::function<void(std::string)>);

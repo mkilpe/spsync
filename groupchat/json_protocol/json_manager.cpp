@@ -8,7 +8,15 @@
 #include <spsync/util/object_id.hpp>
 #include <securepath/event_system/event_loop.hpp>
 
+#include <securepath/log/backend/backend.hpp>
+#include <securepath/log/backend/file_output.hpp>
+
 namespace securepath::groupchat::json_protocol {
+
+void initialise_logging() {
+	log::backend::add_backend<log::backend::file_output>("file", "gc.log");
+	LOG_TRACE("logging initialised");
+}
 
 std::uint16_t const default_storage_server_port{18200};
 
@@ -17,11 +25,11 @@ struct json_manager::impl
 	, public groupchat
 {
 public:
-	impl(std::unique_ptr<event_system::event_loop> loop, std::function<void(std::string)> func)
-	: event_handler(*loop)
+	impl(std::unique_ptr<event_system::event_loop> l, std::function<void(std::string)> func)
+	: event_handler(*l)
 	, groupchat(*this, groupchat_config{})
 	, notify(std::move(func))
-	, loop(std::move(loop))
+	, loop(std::move(l))
 	{}
 
 	~impl() {
@@ -128,7 +136,7 @@ std::string json_manager::create_account(std::string const& arg) {
 			return error_to_json(make_error(errc::invalid_state, "account already exists"));
 		} else {
 			json::value v = json::parse(arg);
-			impl_->create_account(host_port{"127.0.0.1", default_storage_server_port}
+			impl_->create_account(host_port{"192.168.10.62", default_storage_server_port}
 				, extract<std::string>(v.as_object(), "name"));
 			return get_account();
 		}

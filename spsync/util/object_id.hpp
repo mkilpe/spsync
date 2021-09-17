@@ -4,6 +4,7 @@
 #include <securepath/util/octet_vector.hpp>
 #include <securepath/serialisation/sequence.hpp>
 
+#include <iosfwd>
 #include <string>
 #include <map>
 
