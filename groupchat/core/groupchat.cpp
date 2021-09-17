@@ -70,6 +70,7 @@ struct groupchat::impl
 	}
 
 	void create_account(host_port const& server, std::string const& name) {
+		LOG_TRACE("groupchat create_account");
 		init_crypto();
 		register_my_key(server.host);
 		info.key_id = my_private_key(context.private_data()).id();
@@ -162,6 +163,7 @@ std::optional<gc::account_info> groupchat::account_info() const {
 }
 
 void groupchat::create_account(host_port const& server, std::string const& name) {
+	LOG_TRACE("groupchat::create_account");
 	if(impl_) {
 		throw make_error(sync::errc::constraint_violation, "account already exists");
 	}

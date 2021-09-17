@@ -1,6 +1,6 @@
 
 #include "json_manager.hpp"
-#include "json.hpp"
+#include "json_helpers.hpp"
 
 #include <groupchat/core/groupchat.hpp>
 #include <groupchat/core/events.hpp>
@@ -25,11 +25,16 @@ struct json_manager::impl
 	, public groupchat
 {
 public:
-	impl(std::unique_ptr<event_system::event_loop> l, std::function<void(std::string)> func)
-	: event_handler(*l)
+	impl(event_system::event_loop& l, std::function<void(std::string)> func)
+	: event_handler(l)
 	, groupchat(*this, groupchat_config{})
 	, notify(std::move(func))
-	, loop(std::move(l))
+	{}
+
+	impl(event_system::event_loop& l, network::context& context, std::function<void(std::string)> func)
+	: event_handler(l)
+	, groupchat(*this, context, groupchat_config{})
+	, notify(std::move(func))
 	{}
 
 	~impl() {
@@ -72,44 +77,24 @@ public:
 
 public:
 	 std::function<void(std::string)> const notify;
-	 std::unique_ptr<event_system::event_loop> loop;
 };
 
 
 json_manager::json_manager(std::function<void(std::string)> func)
-: impl_(std::make_unique<impl>(std::make_unique<event_system::single_thread_event_loop>(), std::move(func)))
+: loop_(std::make_unique<event_system::single_thread_event_loop>())
+, impl_(std::make_unique<impl>(*loop_, std::move(func)))
+{
+}
+
+
+json_manager::json_manager(network::context& context, std::function<void(std::string)> func)
+: loop_(std::make_unique<event_system::single_thread_event_loop>())
+, impl_(std::make_unique<impl>(*loop_, context, std::move(func)))
 {
 }
 
 json_manager::~json_manager()
 {
-}
-
- //{"error": {"code": 10001, "message": "msg"}}
-static std::string error_to_json(securepath::error const& err) {
-	json::object error{
-			{"code", err.code().value()},
-			{"message", err.code().message()},
-			{"aux_message", err.message()}};
-	json::object ret{{"error", error}};
-	return json::serialize(ret);
-}
-
-static std::string call(auto Func) {
-	try {
-		return Func();
-	} catch(securepath::error const& err) {
-		return error_to_json(err);
-	} catch(std::exception const& exp) {
-		return error_to_json(make_error(errc::exception_occurred, exp.what()));
-	} catch(...) {
-		return error_to_json(make_error(errc::exception_occurred, "Unknown exception"));
-	}
-}
-
-template<class T>
-T extract(json::object const& obj, std::string_view key) {
-	return json::value_to<T>(obj.at(key));
 }
 
 //std::string json_manager::process(std::string cmd) {
@@ -120,24 +105,31 @@ std::string json_manager::get_account() const {
 	return call([&]{
 		auto acc = impl_->account_info();
 		if(acc) {
+			LOG_TRACE("found account");
 			json::object user{{"name", acc->name}};
 			json::object ret{{"user", user}};
 			return json::serialize(ret);
 		} else {
+			LOG_TRACE("no account found");
 			return std::string("{}");
 		}
 	});
 }
 
 std::string json_manager::create_account(std::string const& arg) {
+	LOG_TRACE("json_manager::create_account");
 	return call([&]{
 		auto acc = impl_->account_info();
 		if(acc) {
+			LOG_WARN("account already exists");
 			return error_to_json(make_error(errc::invalid_state, "account already exists"));
 		} else {
 			json::value v = json::parse(arg);
-			impl_->create_account(host_port{"192.168.10.62", default_storage_server_port}
-				, extract<std::string>(v.as_object(), "name"));
+			auto obj = v.as_object();
+			auto opt_host = extract_opt<std::string>(obj, "server_host");
+			auto opt_port = extract_opt<int>(obj, "server_port");
+			host_port hp{opt_host.value_or("gc.securepath.fi"), static_cast<std::uint16_t>(opt_port.value_or(default_storage_server_port))};
+			impl_->create_account(hp, extract<std::string>(obj, "name"));
 			return get_account();
 		}
 	});
