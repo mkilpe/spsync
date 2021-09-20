@@ -27,14 +27,14 @@ struct groupchat::impl
 : public network::encrypted_net_base
 , public event_system::event_handler
 {
-	impl(event_system::event_handler& callback, network::context* c, groupchat_config conf)
+	impl(event_system::event_handler& callb, network::context* c, groupchat_config conf)
 	: encrypted_net_base(network::client_tag, {conf.db, conf.db, conf.db, conf.db})
-	, event_handler(callback.event_loop())
+	, event_handler(callb.event_loop())
 	, own_context(c ? std::optional<network::context>{} : construct_context())
 	, context(c ? *c : *own_context)
 	, conf(std::move(conf))
 	, database(open_gc_client_database(this->conf))
-	, callback(callback)
+	, callback(callb)
 	, channels(database)
 	, contacts(database)
 	{
@@ -71,14 +71,20 @@ struct groupchat::impl
 
 	void create_account(host_port const& server, std::string const& name) {
 		LOG_TRACE("groupchat create_account");
+
+		database::transaction t{*database};
 		init_crypto();
 		register_my_key(server.host);
-		info.key_id = my_private_key(context.private_data()).id();
+
+		auto key_id = my_private_key(context.private_data()).id();
+
+		gc_info = std::make_unique<key_value_database>(database, "gc_info");
+		gc_info->insert("name", name);
+		gc_info->insert("server", server);
+
+		info.key_id = key_id;
 		info.name = name;
 		info.server = server;
-		gc_info = std::make_unique<key_value_database>(database, "gc_info");
-		gc_info->insert("name", info.name);
-		gc_info->insert("server", info.server);
 	}
 
 	void handle_event(std::unique_ptr<event_system::event_base> ev) override {
@@ -167,8 +173,12 @@ void groupchat::create_account(host_port const& server, std::string const& name)
 	if(impl_) {
 		throw make_error(sync::errc::constraint_violation, "account already exists");
 	}
-	impl_ = std::make_unique<impl>(callback_, context_, config_);
-	impl_->create_account(server, name);
+	try {
+		impl_ = std::make_unique<impl>(callback_, context_, config_);
+		impl_->create_account(server, name);
+	} catch(...) {
+		impl_.reset();
+	}
 }
 
 std::deque<server_id> groupchat::load_channels() {
