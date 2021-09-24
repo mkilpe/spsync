@@ -54,6 +54,7 @@ struct client_sync::impl : engine_output {
 		assert(engine);
 		assert(enc_keys);
 		enc_keys->create_key();
+		update_members(us);
 		return engine->sync_user_change(encrypt_last_key_for_users(us, *crypto), std::move(mdata));
 	}
 
@@ -88,6 +89,7 @@ struct client_sync::impl : engine_output {
 		database::transaction trans{*db};
 
 		if(us.mode() == users_change_mode::full) {
+			//t: consider how to do this so that we don't overwrite possible pending changes
 			remove_all_members();
 			for(auto const& v : change.access()) {
 				create_member(v.user, member_status::member);
@@ -170,11 +172,35 @@ struct client_sync::impl : engine_output {
 		q.execute();
 	}
 
+	void update_members(users const& us) {
+		if(us.mode() != users_change_mode::delta) {
+			for(auto v : us.access()) {
+				member_status status;
+				if(find_member(v.user, status)) {
+					if(v.access == util::access_type::no_access) {
+						set_member_status(v.user, member_status::pending_remove);
+					} else if(status == member_status::pending_remove) {
+						set_member_status(v.user, member_status::pending_add);
+					}
+				} else if(v.access != util::access_type::no_access) {
+					create_member(v.user, member_status::pending_add);
+				}
+			}
+		} else {
+			remove_all_members();
+			for(auto const& v : us.access()) {
+				create_member(v.user, member_status::pending_add);
+			}
+		}
+	}
+
 	void add_or_remove_user_access(users const& us) {
+		assert(engine);
 		if(us.mode() != users_change_mode::delta) {
 			LOG_WARN("users change is not in delta mode: %", us);
 			throw make_error(securepath::errc::invalid_data, "users change is not in delta mode");
 		}
+		update_members(us);
 		engine->sync_user_change(encrypt_last_key_for_users(us, *crypto), metadata{});
 	}
 
@@ -219,6 +245,7 @@ record_handle client_sync::send_user_change(users us, metadata mdata) {
 	if(!impl_->storage->last_block().is_valid()) {
 		return impl_->create_initial_record(std::move(us), std::move(mdata));
 	} else {
+		impl_->update_members(us);
 		return impl_->engine->sync_user_change(std::move(us), std::move(mdata));
 	}
 }
@@ -255,7 +282,6 @@ std::unique_ptr<member> client_sync::add_member(util::user_id const& uid) {
 	users us{users_change_mode::delta};
 	us.add(util::user_access{uid, util::access_type::user_management_access});
 	impl_->add_or_remove_user_access(us);
-	impl_->create_member(uid, member_status::pending_add);
 	return find_member(uid);
 }
 
@@ -263,28 +289,10 @@ void client_sync::remove_member(util::user_id const& uid) {
 	users us{users_change_mode::delta};
 	us.remove(uid);
 	impl_->add_or_remove_user_access(us);
-	impl_->set_member_status(uid, member_status::pending_remove);
 }
 
 void client_sync::apply(users const& us) {
-	if(us.mode() == users_change_mode::full) {
-		LOG_WARN("apply full mode change not implemented");
-		throw make_error(securepath::errc::not_implemented, "apply full mode change not implemented");
-	} else {
-		impl_->add_or_remove_user_access(us);
-		for(auto v : us.access()) {
-			member_status status;
-			if(impl_->find_member(v.user, status)) {
-				if(v.access == util::access_type::no_access) {
-					impl_->set_member_status(v.user, member_status::pending_remove);
-				} else if(status == member_status::pending_remove) {
-					impl_->set_member_status(v.user, member_status::pending_add);
-				}
-			} else if(v.access != util::access_type::no_access) {
-				impl_->set_member_status(v.user, member_status::pending_add);
-			}
-		}
-	}
+	impl_->add_or_remove_user_access(us);
 }
 
 sync::crypto_context& client_sync::crypto_context() const {

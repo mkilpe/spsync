@@ -6,7 +6,6 @@
 
 namespace securepath::sync {
 
-
 }
 
 #endif

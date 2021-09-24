@@ -46,4 +46,21 @@ std::deque<channel_data> channel_list::enumerate(std::optional<host_port> server
 	return ret;
 }
 
+std::optional<host_port> channel_list::find_server(chat_id const& cid) const {
+	std::optional<host_port> ret;
+
+	auto q = db_->prepare("SELECT server_host, server_port FROM channel_list WHERE chat_id = :cid;");
+	q.bind(":cid", cid);
+
+	auto res = q.execute();
+	if(res) {
+		std::optional<std::string> host = res.value<std::string>(0);
+		std::optional<std::int64_t> port = res.value<std::int64_t>(1);
+		if(host && port) {
+			ret = host_port{*host, static_cast<std::uint16_t>(*port)};
+		}
+	}
+	return ret;
+}
+
 }

@@ -34,6 +34,7 @@ public:
 
 	~storage_server_client() {
 		LOG_TRACE("destructing storage_server_client %", this);
+		encrypted_connection::close();
 	}
 
 	virtual void send(octet_span s) override {

@@ -62,7 +62,7 @@ public:
 					}
 				}
 			} catch(std::exception const& exp) {
-				LWARN("exception while handling encryption key from user change record (tag=%, exp=%)", to_hex(rec.tag()), exp);
+				LWARN("exception while handling encryption key from user change record (tag=%, exp=%)", to_hex(rec.tag()), exp.what());
 			}
 		}
 	}

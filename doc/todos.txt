@@ -1,10 +1,14 @@
 
+= client_sync
+* state when creating channel, when it was successful, failed, pending
+* someway to store and check the status / retry if failed
 
 
 = records
 * get history for higher levels
 * allow to give tag of the first record (or some other record?) to engine when joining a storage to check the authenticity
 * allow to start local chain from given record, so that when someone joins, he needs to only anchor the user change that contains the key for him and everything after that
+* support signing records
 
 = client
 * provide client level interface that does decrypting on the fly
@@ -13,6 +17,7 @@
 
 = server
 * update and check user access rights for storage when handling records
+* improve event handling (i.e. try to remove blocking mutexes with strands etc)
 
 out of sync:
 

@@ -68,7 +68,7 @@ public:
 };
 
 TEST_CASE("groupchat_test", "[system]") {
-	std::remove(groupchat_config{}.db.c_str());
+	std::remove(groupchat_config{}.db().c_str());
 
 	network::test::testing_context net_context;
 	net_context.set_server_dh_parameters();
@@ -82,6 +82,8 @@ TEST_CASE("groupchat_test", "[system]") {
 	sync::test::test_server server(net_context.server_context);
 	server.run();
 	std::this_thread::sleep_for(1s);
+
+	chat_id cid;
 
 	host_port hp{"127.0.0.1", sync::default_storage_server_port};
 	event_system::single_thread_event_loop loop;
@@ -108,12 +110,13 @@ TEST_CASE("groupchat_test", "[system]") {
 			REQUIRE(!f.get());
 		}
 
-		auto cid = conn->create_chat("test").id();
+		cid = conn->create_chat("test").id();
 		{
 			auto f = client.created.get_future();
 			WAIT_CHECK(f.valid(), 2s);
 			REQUIRE(f.valid());
 			REQUIRE(f.get() == cid);
+			CHECK(client.channel_ids().find_server(cid));
 		}
 	}
 	{
@@ -124,6 +127,7 @@ TEST_CASE("groupchat_test", "[system]") {
 		CHECK(info->server == hp);
 		CHECK(info->name == "test");
 		CHECK(info->key_id.is_valid());
+		CHECK(client.channel_ids().find_server(cid));
 
 		auto ids = client.load_channels();
 		CHECK(ids.size() == 1);

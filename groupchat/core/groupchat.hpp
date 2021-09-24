@@ -20,13 +20,20 @@ namespace gc = groupchat;
 
 /// Configuration for the group chat
 struct groupchat_config {
-	std::string db{"gc_client.db"};
+	std::string path;
+
+	std::string db() const { return path.empty() ? "gc_client.db" : path + "/gc_client.db"; };
 };
 
 struct account_info {
 	host_port server;
 	std::string name;
 	crypto::public_key_id key_id;
+};
+
+struct channel_id {
+	server_id sid;
+	chat_id cid;
 };
 
 /**
@@ -45,14 +52,18 @@ public:
 	void create_account(host_port const& server, std::string const& name);
 
 	/// Load and connect to existing channels
-	std::deque<server_id> load_channels();
+	std::deque<channel_id> load_channels();
 
 	/// create/get chat connection to given server
 	std::shared_ptr<chat_connection> load(host_port const& server);
 	std::shared_ptr<chat_connection> find(server_id) const;
+	std::vector<std::shared_ptr<chat_connection>> connections() const;
 
 	/// return contacts
 	contact_list& contacts();
+
+	/// return stored channel ids
+	channel_list& channel_ids();
 
 	/// Attached network context
 	network::context& context();

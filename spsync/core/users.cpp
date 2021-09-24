@@ -76,6 +76,10 @@ users::const_iterator users::end() const {
 	return users_.end();
 }
 
+bool users::empty() const {
+	return users_.empty();
+}
+
 users_change_mode users::mode() const {
 	return mode_;
 }

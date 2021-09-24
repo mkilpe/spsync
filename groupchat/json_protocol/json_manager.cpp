@@ -6,8 +6,12 @@
 #include <groupchat/core/events.hpp>
 #include <spsync/core/types.hpp>
 #include <spsync/util/object_id.hpp>
-#include <securepath/event_system/event_loop.hpp>
+#include <spsync/protocol/ports.hpp>
 
+#include <infrastructure/key_client_lib/unknown_user_key_client.hpp>
+#include <infrastructure/key_server/server_lib/defaults.hpp>
+
+#include <securepath/event_system/event_loop.hpp>
 #include <securepath/log/backend/backend.hpp>
 #include <securepath/log/backend/file_output.hpp>
 
@@ -17,8 +21,6 @@ void initialise_logging() {
 	log::backend::add_backend<log::backend::file_output>("file", "gc.log");
 	LOG_TRACE("logging initialised");
 }
-
-std::uint16_t const default_storage_server_port{18200};
 
 struct json_manager::impl
 	: public event_system::event_handler
@@ -31,9 +33,9 @@ public:
 	, notify(std::move(func))
 	{}
 
-	impl(event_system::event_loop& l, network::context& context, std::function<void(std::string)> func)
+	impl(event_system::event_loop& l, network::context& context, std::function<void(std::string)> func, std::string path)
 	: event_handler(l)
-	, groupchat(*this, context, groupchat_config{})
+	, groupchat(*this, context, groupchat_config{std::move(path)})
 	, notify(std::move(func))
 	{}
 
@@ -75,6 +77,44 @@ public:
 			, event_dest<events::on_message>(&impl::on_message) );
 	}
 
+	std::optional<crypto::public_key> query_key(host_port const& server, crypto::public_key_id const& key_id) {
+		auto key = context().public_keys().find(key_id);
+		if(!key) {
+			//t: non-blocking
+			key_client::unknown_user_key_client client{context()};
+			client.connect(server.host, server.port);
+			client.wait_for_connection();
+			key = client.find_key(key_id);
+		}
+		return key;
+	}
+
+
+	host_port extract_host_port(json::object const& obj, std::string const& default_host, uint16_t default_port) {
+		auto opt_server = extract_opt<json::object>(obj, "server");
+		auto opt_host = opt_server ? extract_opt<std::string>(*opt_server, "host") : std::nullopt;
+		auto opt_port = opt_server ? extract_opt<int>(*opt_server, "port") : std::nullopt;
+		return host_port{opt_host.value_or(default_host), static_cast<std::uint16_t>(opt_port.value_or(default_port))};
+	}
+
+	host_port extract_storage_host_port(json::object const& obj) {
+		auto info = account_info();
+		if(info) {
+			return extract_host_port(obj, info->server.host, info->server.port);
+		} else {
+			return extract_host_port(obj, "gc.securepath.fi", sync::default_storage_server_port);
+		}
+	}
+	host_port extract_key_host_port(json::object const& obj) {
+		auto info = account_info();
+		if(info) {
+			//t: also parameterise the key server port for own account
+			return extract_host_port(obj, info->server.host, sync::default_key_server_port);
+		} else {
+			return extract_host_port(obj, "gc.securepath.fi", sync::default_key_server_port);
+		}
+	}
+
 public:
 	 std::function<void(std::string)> const notify;
 };
@@ -87,9 +127,9 @@ json_manager::json_manager(std::function<void(std::string)> func)
 }
 
 
-json_manager::json_manager(network::context& context, std::function<void(std::string)> func)
+json_manager::json_manager(network::context& context, std::function<void(std::string)> func, std::string path)
 : loop_(std::make_unique<event_system::single_thread_event_loop>())
-, impl_(std::make_unique<impl>(*loop_, context, std::move(func)))
+, impl_(std::make_unique<impl>(*loop_, context, std::move(func), std::move(path)))
 {
 }
 
@@ -97,26 +137,20 @@ json_manager::~json_manager()
 {
 }
 
-//std::string json_manager::process(std::string cmd) {
-//	return cmd;
-//}
-
 std::string json_manager::get_account() const {
 	return call([&]{
 		auto acc = impl_->account_info();
 		if(acc) {
-			LOG_TRACE("found account");
 			json::object user{{"name", acc->name}};
-			json::object ret{{"user", user}};
+			json::object ret{{"user", user}, {"key_id", acc->key_id.in_hex()}};
 			return json::serialize(ret);
 		} else {
-			LOG_TRACE("no account found");
 			return std::string("{}");
 		}
 	});
 }
 
-std::string json_manager::create_account(std::string const& arg) {
+std::string json_manager::create_account(std::string_view const& arg) {
 	LOG_TRACE("json_manager::create_account");
 	return call([&]{
 		auto acc = impl_->account_info();
@@ -124,14 +158,261 @@ std::string json_manager::create_account(std::string const& arg) {
 			LOG_WARN("account already exists");
 			return error_to_json(make_error(errc::invalid_state, "account already exists"));
 		} else {
-			json::value v = json::parse(arg);
-			auto obj = v.as_object();
-			auto opt_host = extract_opt<std::string>(obj, "server_host");
-			auto opt_port = extract_opt<int>(obj, "server_port");
-			host_port hp{opt_host.value_or("gc.securepath.fi"), static_cast<std::uint16_t>(opt_port.value_or(default_storage_server_port))};
-			impl_->create_account(hp, extract<std::string>(obj, "name"));
+			json::object obj = json::parse(arg).as_object();
+			impl_->create_account(impl_->extract_storage_host_port(obj), extract<std::string>(obj, "name"));
 			return get_account();
 		}
+	});
+}
+
+std::string json_manager::connect() {
+	return call([&]{
+		impl_->load_channels();
+		return std::string("{}");
+	});
+}
+
+std::string json_manager::disconnect() {
+	return call([&]{
+		for(auto&& v : impl_->connections()) {
+			v->disconnect();
+		}
+		return std::string("{}");
+	});
+}
+
+std::string json_manager::get_contacts(std::string_view const& arg) const {
+	return call([&]{
+		if(!arg.empty()) {
+			LOG_WARN("json_manager::get_contacts not implement for non-empty argument");
+			return error_to_json(make_error(errc::not_implemented));
+		}
+		auto contacts = impl_->contacts().enumerate();
+		json::array json_c;
+		for(auto& v : contacts) {
+			std::string key_id = v->id().public_key_id().in_hex();
+			json_c.push_back(json::object{{"name", v->name()}, {"id", key_id}, {"key_id", key_id}});
+		}
+		json::object ret{{"data", json_c}};
+		return json::serialize(ret);
+	});
+}
+
+std::string json_manager::add_contact(std::string_view const& arg) {
+	return call([&]{
+		json::object obj = json::parse(arg).as_object();
+		auto name = extract<std::string>(obj, "name");
+		auto key_id_string = extract<std::string>(obj, "key_id");
+
+		crypto::public_key_id key_id{key_id_string};
+
+		if(impl_->contacts().find(key_id)) {
+			LOG_INFO("Already have contact with key id %", key_id.in_hex());
+			return error_to_json(make_error(errc::invalid_state, "Contact with given key id already exists"));
+		}
+
+		auto opt_key = impl_->query_key(impl_->extract_key_host_port(obj), key_id);
+		if(!opt_key) {
+			LOG_INFO("No public key found when adding contact [name=%, key_id=%]", name, key_id.in_hex());
+			return error_to_json(make_error(crypto::errc::no_such_key, "Could not find requested public key for contact"));
+		}
+		impl_->context().public_keys().insert(*opt_key);
+		auto contact = impl_->contacts().add(user_id{key_id});
+		contact->set_name(name);
+		auto kid = key_id.in_hex();
+		return json::serialize(json::object{{"name", name}, {"id", kid}, {"key_id", kid}});
+	});
+}
+
+std::string json_manager::get_chats(std::string_view const&) const {
+	return call([&]{
+		json::array arr;
+		for(auto const& c : impl_->connections()) {
+			for(auto const& c_id : c->channel_ids()) {
+				channel& ch = c->get(c_id);
+				arr.push_back(json::object{{"name", ch.name()}, {"id", to_hex(ch.id())}});
+			}
+		}
+		return json::serialize(json::object{{"data", arr}});
+	});
+}
+
+std::string json_manager::create_chat(std::string_view const& arg) {
+	return call([&]{
+		json::object obj = json::parse(arg).as_object();
+		std::string name = extract<std::string>(obj, "name");
+		auto conn = impl_->load(impl_->extract_storage_host_port(obj));
+		conn->connect().get(); //t: make this whole thing correctly async
+
+		users member_list;
+		std::optional<json::array> members = extract_opt<json::array>(obj, "members");
+		if(members) {
+			for(auto m : *members) {
+				json::object m_obj = m.as_object();
+				std::string kid = extract<std::string>(m_obj, "user");
+				member_list.add(sync::util::user_access{crypto::public_key_id{kid}
+					, sync::util::access_type::user_management_access});
+			}
+		}
+
+		auto cid = conn->create_chat(name, member_list).id();
+		return json::serialize(json::object{{"name", name}, {"id", to_hex(cid)}});
+	});
+}
+
+std::string json_manager::join_chat(std::string_view const& arg) {
+	return call([&]{
+		json::object obj = json::parse(arg).as_object();
+		chat_id cid = from_hex(extract<std::string>(obj, "chat_id"));
+		auto conn = impl_->load(impl_->extract_storage_host_port(obj));
+		conn->connect().get(); //t: make this whole thing correctly async
+		conn->join(cid);
+		return json::serialize(json::object{{"id", to_hex(cid)}});
+	});
+}
+
+std::string json_manager::get_chat_members(std::string_view const& arg) const {
+	return call([&]{
+		json::object obj = json::parse(arg).as_object();
+		chat_id cid = from_hex(extract<std::string>(obj, "chat_id"));
+
+		auto hp = impl_->channel_ids().find_server(cid);
+		if(!hp) {
+			LOG_TRACE("no chat with id %", to_hex(cid));
+			return error_to_json(make_error(errc::no_such_data, "could not find chat"));
+		}
+
+		auto conn = impl_->load(*hp);
+		auto& channel = conn->get(cid);
+
+		json::array m_arr;
+		auto members = channel.members();
+		for(auto const& m : members) {
+			auto user_id = m->id();
+			auto opt_contact = impl_->contacts().find(user_id);
+
+			m_arr.push_back(json::object{
+				{"name", opt_contact ? opt_contact->name() : user_id.public_key_id().in_hex()},
+				{"status", to_string(m->status())},
+				{"key_id", user_id.public_key_id().in_hex()},
+				{"is_contact", static_cast<bool>(opt_contact)}});
+		}
+		return json::serialize(json::object{{"data", m_arr}});
+	});
+}
+
+static users parse_users(json::object const& obj) {
+	auto opt_add_m = extract_opt<json::array>(obj, "add");
+	auto opt_remove_m = extract_opt<json::array>(obj, "remove");
+
+	users change{sync::users_change_mode::delta};
+	if(opt_add_m) {
+		for(auto m : *opt_add_m) {
+			json::object m_obj = m.as_object();
+			std::string kid = extract<std::string>(m_obj, "user");
+			change.add(sync::util::user_access{crypto::public_key_id{kid}
+				, sync::util::access_type::user_management_access});
+		}
+	}
+	if(opt_remove_m) {
+		for(auto m : *opt_remove_m) {
+			json::object m_obj = m.as_object();
+			std::string kid = extract<std::string>(m_obj, "user");
+			change.remove(crypto::public_key_id{kid});
+		}
+	}
+
+	return change;
+}
+
+std::string json_manager::change_chat_member(std::string_view const& arg) {
+	return call([&]{
+		json::object obj = json::parse(arg).as_object();
+		chat_id cid = from_hex(extract<std::string>(obj, "chat_id"));
+
+		auto hp = impl_->channel_ids().find_server(cid);
+		if(!hp) {
+			return error_to_json(make_error(errc::no_such_data, "could not find chat"));
+		}
+
+		users change = parse_users(obj);
+
+		if(change.empty()) {
+			return error_to_json(make_error(errc::invalid_data, "no members to change"));
+		}
+
+		auto conn = impl_->load(*hp);
+		auto& channel = conn->get(cid);
+
+		channel.apply(change);
+
+		return json::serialize(json::object{});
+	});
+}
+
+static std::string time_to_string(time_point time) {
+	std::tm t{};
+	if(!log::gmtime(time_point::clock::to_time_t(time), t)) {
+		LOG_WARN("encode: cannot convert time");
+		throw make_error(errc::invalid_data, "could not convert time");
+	}
+	char buffer[17] = {};
+	std::snprintf(buffer, 16, "%04d%02d%02d%02d%02d%02dZ"
+		, t.tm_year + 1900, t.tm_mon + 1, t.tm_mday
+		, t.tm_hour, t.tm_min, t.tm_sec);
+	return std::string(buffer);
+}
+
+
+std::string json_manager::get_messages(std::string_view const& arg) const {
+	return call([&]{
+		json::object obj = json::parse(arg).as_object();
+		chat_id cid = from_hex(extract<std::string>(obj, "chat_id"));
+
+		auto hp = impl_->channel_ids().find_server(cid);
+		if(!hp) {
+			return error_to_json(make_error(errc::no_such_data, "could not find chat"));
+		}
+
+		auto conn = impl_->load(*hp);
+		auto& channel = conn->get(cid);
+
+		json::array m_arr;
+		for(auto m : channel.messages()) {
+			auto user_id = m.sender_id;
+			auto opt_contact = impl_->contacts().find(user_id);
+
+			m_arr.push_back(json::object{
+				{"message", m.data},
+				{"date", time_to_string(m.time)},
+				{"seq", m.seq.value},
+				{"message_id", m.mid.to_hex()},
+				{"sender", json::object{
+					{"name", opt_contact ? opt_contact->name() : user_id.public_key_id().in_hex()},
+					{"key_id", user_id.public_key_id().in_hex()},
+					{"is_contact", static_cast<bool>(opt_contact)}}}
+				});
+		}
+		return json::serialize(json::object{{"data", m_arr}});
+	});
+}
+
+std::string json_manager::send_message(std::string_view const& arg) {
+	return call([&]{
+		json::object obj = json::parse(arg).as_object();
+		chat_id cid = from_hex(extract<std::string>(obj, "chat_id"));
+		std::string message = extract<std::string>(obj, "message");
+
+		auto hp = impl_->channel_ids().find_server(cid);
+		if(!hp) {
+			return error_to_json(make_error(errc::no_such_data, "could not find chat"));
+		}
+
+		auto conn = impl_->load(*hp);
+		auto& channel = conn->get(cid);
+
+		auto mid = channel.send_message(message);
+		return json::serialize(json::object{{"message_id", mid.to_hex()}});
 	});
 }
 

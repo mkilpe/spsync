@@ -38,7 +38,11 @@ network_connection::~network_connection()
 }
 
 void network_connection::connect(std::string_view host, std::uint16_t port) {
-	impl_->connect(host, port);
+	if(impl_->state() == network::encrypted_connection::not_connected) {
+		impl_->connect(host, port);
+	} else {
+		LOG_TRACE("calling connect in some other than not_connected state");
+	}
 }
 
 void network_connection::close() {

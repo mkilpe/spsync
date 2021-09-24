@@ -457,7 +457,7 @@ record_handle record_storage::create_impl(RecordType const& r, chain_block const
 }
 
 record_handle record_storage::create(chain_block const& rec, record_state state) {
-	LOG_TRACE("creating record to storage % (state %)", to_hex(rec.tag()), state);
+	LOG_TRACE("creating record to storage [tag=%, state=%]", to_hex(rec.tag()), state);
 	return rec.deserialise_record<record_handle>([&, this](auto const& r)
 		{
 			return create_impl(r, rec, state);
@@ -465,7 +465,7 @@ record_handle record_storage::create(chain_block const& rec, record_state state)
 }
 
 record_handle record_storage::create(auth_record<data_change_record> const& rec) {
-	LOG_TRACE("creating record to storage %", to_hex(rec.auth.tag()));
+	LOG_TRACE("creating record to storage [tag=%]", to_hex(rec.auth.tag()));
 
 	database::transaction tact(*impl_->db);
 	auto handle = insert_to_db(chain_block(rec, rec.record.last_seen_block().sequence + 1), record_state::pending_commit, data_change_record_tag);

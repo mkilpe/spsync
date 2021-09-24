@@ -53,8 +53,8 @@ void cli_groupchat::on_join(server_id sid, chat_id cid, error) {
 }
 
 void cli_groupchat::on_message(server_id, chat_id, message m) {
-	auto s = print("%> %", m.sender_nick, m.data);
-	win_.add_message(0, to_wstring(s));
+	//auto s = print("%> %", m.sender_nick, m.data);
+	//win_.add_message(0, to_wstring(s));
 }
 
 void cli_groupchat::handle_event(std::unique_ptr<event_system::event_base> ev) {

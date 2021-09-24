@@ -51,6 +51,8 @@ public:
 	const_iterator begin() const;
 	const_iterator end() const;
 
+	bool empty() const;
+
 	users_change_mode mode() const;
 private:
 	// the access for users

@@ -1,12 +1,10 @@
 #pragma once
 
-#include <spsync/core/users.hpp>
+#include "types.hpp"
 
 #include <securepath/common/key_value_cache.hpp>
 
 namespace securepath::groupchat {
-
-using user_id = sync::util::user_id;
 
 /// GC contact
 class contact : public key_value_cache {

@@ -5,6 +5,7 @@
 #include <spsync/core/encryption_key_storage.hpp>
 #include <spsync/core/progress.hpp>
 #include <spsync/engine/sync_engine.hpp>
+#include <spsync/protocol/ports.hpp>
 
 #include <securepath/common/key_value_database.hpp>
 #include <securepath/crypto/rsa.hpp>
@@ -17,10 +18,20 @@
 #include <infrastructure/key_client_lib/unknown_user_key_client.hpp>
 #include <infrastructure/key_server/server_lib/defaults.hpp>
 
+#include <filesystem>
+
 namespace securepath::groupchat {
 
-static database::connection_ptr open_gc_client_database(groupchat_config config) {
-	return database::sqlite::create_sqlite_connection(config.db);
+static database::connection_ptr open_gc_client_database(groupchat_config const& config) {
+	return database::sqlite::create_sqlite_connection(config.db());
+}
+
+static network::encrypted_net_base_params net_base_params(groupchat_config const& conf) {
+	if(!conf.path.empty()) {
+		//make sure the path exists, this does nothing if it already does
+		std::filesystem::create_directories(conf.path);
+	}
+	return {conf.db(), conf.db(), conf.db(), conf.db()};
 }
 
 struct groupchat::impl
@@ -28,7 +39,7 @@ struct groupchat::impl
 , public event_system::event_handler
 {
 	impl(event_system::event_handler& callb, network::context* c, groupchat_config conf)
-	: encrypted_net_base(network::client_tag, {conf.db, conf.db, conf.db, conf.db})
+	: encrypted_net_base(network::client_tag, net_base_params(conf))
 	, event_handler(callb.event_loop())
 	, own_context(c ? std::optional<network::context>{} : construct_context())
 	, context(c ? *c : *own_context)
@@ -97,7 +108,7 @@ struct groupchat::impl
 	void register_my_key(std::string_view server) {
 		//t: non-blocking
 		key_client::unknown_user_key_client client(context);
-		client.connect(server, key_server::default_unknown_user_key_server_port);
+		client.connect(server, sync::default_key_server_port);
 		client.wait_for_connection();
 		auto my_key = context.private_data().my_private_key();
 		assert(my_key);
@@ -106,7 +117,7 @@ struct groupchat::impl
 
 	std::shared_ptr<chat_connection> create_connection(host_port const& hp) {
 		auto id = ++last_id;
-		auto p = std::make_shared<chat_connection>(id, hp, callback, context, channels);
+		auto p = std::make_shared<chat_connection>(chat_conn_context{id, hp, callback, context, channels, conf.path});
 		hp_map[hp] = id;
 		connections[id] = p;
 		return p;
@@ -134,7 +145,7 @@ bool groupchat::check_account_exists(groupchat_config const& conf) const {
 		auto db = open_gc_client_database(conf);
 		return db && db->has_table("gc_info");
 	} catch(std::exception const& ex) {
-		LOG_WARN("failed to open database: %", conf.db);
+		LOG_WARN("failed to open database: %", conf.db());
 	}
 	return false;
 }
@@ -178,16 +189,16 @@ void groupchat::create_account(host_port const& server, std::string const& name)
 		impl_->create_account(server, name);
 	} catch(...) {
 		impl_.reset();
+		throw;
 	}
 }
 
-std::deque<server_id> groupchat::load_channels() {
-	std::deque<server_id> ret;
+std::deque<channel_id>groupchat::load_channels() {
+	std::deque<channel_id> ret;
 	for(auto const& v : impl_->channels.enumerate()) {
 		auto s = load(v.server);
-		//q: is this correct function to load the channel?
-		s->join(v.cid);
-		ret.push_back(s->id());
+		s->load(v.cid);
+		ret.push_back(channel_id{s->id(), v.cid});
 	}
 	return ret;
 }
@@ -214,8 +225,21 @@ std::shared_ptr<chat_connection> groupchat::find(server_id sid) const {
 	return c_it != impl_->connections.end() ? c_it->second : nullptr;
 }
 
+std::vector<std::shared_ptr<chat_connection>> groupchat::connections() const {
+	std::vector<std::shared_ptr<chat_connection>> ret;
+	assert(impl_);
+	for(auto v : impl_->connections) {
+		ret.push_back(v.second);
+	}
+	return ret;
+}
+
 contact_list& groupchat::contacts() {
 	return impl_->contacts;
+}
+
+channel_list& groupchat::channel_ids() {
+	return impl_->channels;
 }
 
 network::context& groupchat::context() {

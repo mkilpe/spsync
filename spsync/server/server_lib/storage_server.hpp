@@ -2,14 +2,12 @@
 #define SPSYNC_SERVER_STORAGE_SERVER_HEADER
 
 #include <securepath/network/encryption/context.hpp>
+#include <spsync/protocol/ports.hpp>
 
 #include <cstdint>
 #include <memory>
 
 namespace securepath::sync {
-
-//t: move this to some place else
-std::uint16_t const default_storage_server_port{18200};
 
 struct storage_server_params {
 	std::uint16_t storage_server_port{default_storage_server_port};

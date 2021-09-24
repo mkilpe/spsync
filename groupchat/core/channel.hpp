@@ -1,30 +1,29 @@
 #ifndef GROUPCHAT_CORE_CHANNEL_HEADER
 #define GROUPCHAT_CORE_CHANNEL_HEADER
 
-#include "types.hpp"
+#include "chat_conn_context.hpp"
+#include "message.hpp"
 
 #include <spsync/client/client_sync.hpp>
 
-#include <securepath/database/sqlite/connection.hpp>
-#include <securepath/event_system/event_handler.hpp>
-
 namespace securepath::groupchat {
-
-/// associate object id to a message
-using message_id = sync::util::object_id;
 
 class groupchat;
 
 class channel : public sync::client_sync
 {
 public:
-	channel(server_id sid, event_system::event_handler& callback, network::context& context, chat_id const&);
+	channel(chat_conn_context& context, chat_id const&);
 	~channel();
 
-	void set_name(std::string name);
+	std::string name() const;
+
+	/// data that is set when creating the chat
+	void set_data(std::string name, users members);
 
 	void create_initial_record();
 	message_id send_message(std::string const& message);
+	std::deque<message> messages(message_search = {}) const;
 
 	chat_id id() const;
 private:
@@ -32,10 +31,9 @@ private:
 	void on_user_change(sync::record_handle, sync::user_change) override;
 
 private:
-	event_system::event_handler& callback_;
-	network::context& context_;
-	server_id const sid_;
+	chat_conn_context& ccontext_;
 	chat_id const chat_id_;
+	users initial_members_;
 };
 
 }

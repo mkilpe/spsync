@@ -17,15 +17,11 @@ struct chat_connection::impl
 : public network::encrypted_net_base
 , public event_system::event_handler
 {
-	impl(server_id sid, host_port hp, event_system::event_handler& callback, network::context& context, channel_list& ch_list)
-	: encrypted_net_base(context)
-	, event_handler(callback.event_loop())
-	, context(context)
-	, callback(callback)
-	, net(context, *this)
-	, sid(sid)
-	, hp(std::move(hp))
-	, ch_list(ch_list)
+	impl(chat_conn_context context)
+	: encrypted_net_base(context.context)
+	, event_handler(context.callback.event_loop())
+	, ccontext(context)
+	, net(ccontext.context, *this)
 	{
 	}
 
@@ -35,17 +31,19 @@ struct chat_connection::impl
 
 	channel& connect_to_storage(sync::storage_id const& cid) {
 		assert(!cid.empty());
-		auto ret = channels.emplace(cid, std::make_unique<channel>(sid, callback, context, cid));
+		auto ret = channels.emplace(cid, std::make_unique<channel>(ccontext, cid));
 		ret.first->second->init(cid, net);
 		return *ret.first->second;
 	}
 
 	void on_connect() {
-		callback.emit<events::on_connect>(sid);
+		ccontext.callback.emit<events::on_connect>(ccontext.sid);
+		connect_promise.set_value();
 	}
 
 	void on_disconnect(error const& err) {
-		callback.emit<events::on_disconnect>(sid, err);
+		ccontext.callback.emit<events::on_disconnect>(ccontext.sid, err);
+		connect_promise.set_exception(std::make_exception_ptr(err));
 	}
 
 	void on_create_storage(sync::storage_id const& cid, error err) {
@@ -61,7 +59,7 @@ struct chat_connection::impl
 				err = make_error(securepath::errc::invalid_state, "chat room not set");
 			}
 		}
-		callback.emit<events::on_create>(sid, cid, err);
+		ccontext.callback.emit<events::on_create>(ccontext.sid, cid, err);
 	}
 
 	void handle_event(std::unique_ptr<event_system::event_base> ev) override {
@@ -71,34 +69,32 @@ struct chat_connection::impl
 				, event_dest<sync::events::on_create_storage>(&impl::on_create_storage) );
 	}
 
-	channel& create_chat(std::string name) {
+	channel& create_chat(std::string name, users members) {
 		auto cid = net.create_storage();
-		auto ret = channels.emplace(cid, std::make_unique<channel>(sid, callback, context, cid));
-		ret.first->second->set_name(std::move(name));
-		ch_list.add(cid, hp);
+		auto ret = channels.emplace(cid, std::make_unique<channel>(ccontext, cid));
+		ret.first->second->set_data(std::move(name), std::move(members));
+		ccontext.channels.add(cid, ccontext.server);
 		return *ret.first->second;
 	}
 
-	void connect() {
-		net.connect(hp.host, hp.port);
+	std::future<void> connect() {
+		connect_promise = {};
+		net.connect(ccontext.server.host, ccontext.server.port);
+		return connect_promise.get_future();
 	}
 
 	mutable std::mutex mutex;
 
-	network::context& context;
-	event_system::event_handler& callback;
+	chat_conn_context ccontext;
 	sync::network_connection net;
 
 	std::map<sync::storage_id, std::unique_ptr<channel>> channels;
 
-	server_id const sid;
-	host_port const hp;
-
-	channel_list& ch_list;
+	std::promise<void> connect_promise;
 };
 
-chat_connection::chat_connection(server_id sid, host_port hp, event_system::event_handler& callback, network::context& context, channel_list& ch_list)
-: impl_(std::make_unique<impl>(sid, hp, callback, context, ch_list))
+chat_connection::chat_connection(chat_conn_context context)
+: impl_(std::make_unique<impl>(context))
 {
 }
 
@@ -106,7 +102,7 @@ chat_connection::~chat_connection()
 {
 }
 
-void chat_connection::connect() {
+std::future<void> chat_connection::connect() {
 	return impl_->connect();
 }
 
@@ -114,12 +110,18 @@ void chat_connection::disconnect() {
 	impl_->net.close();
 }
 
-channel& chat_connection::create_chat(std::string name) {
+channel& chat_connection::create_chat(std::string name, users members) {
 	std::unique_lock l{impl_->mutex};
-	return impl_->create_chat(std::move(name));
+	return impl_->create_chat(std::move(name), std::move(members));
 }
 
 channel& chat_connection::join(chat_id const& storage) {
+	std::unique_lock l{impl_->mutex};
+	impl_->ccontext.channels.add(storage, impl_->ccontext.server);
+	return impl_->connect_to_storage(storage);
+}
+
+channel& chat_connection::load(chat_id const& storage) {
 	std::unique_lock l{impl_->mutex};
 	return impl_->connect_to_storage(storage);
 }
@@ -133,16 +135,25 @@ channel& chat_connection::get(chat_id const& storage) {
 	return *it->second;
 }
 
+std::deque<chat_id> chat_connection::channel_ids() const {
+	std::deque<chat_id> res;
+	std::unique_lock l{impl_->mutex};
+	for(auto const& v : impl_->channels) {
+		res.push_back(v.first);
+	}
+	return res;
+}
+
 network::context& chat_connection::context() {
-	return impl_->context;
+	return impl_->ccontext.context;
 }
 
 host_port chat_connection::end_point() const {
-	return impl_->hp;
+	return impl_->ccontext.server;
 }
 
 server_id chat_connection::id() const {
-	return impl_->sid;
+	return impl_->ccontext.sid;
 }
 
 }

@@ -32,7 +32,11 @@ inline std::string call(auto Func) {
 
 template<class T>
 T extract(json::object const& obj, std::string_view key) {
-	return json::value_to<T>(obj.at(key));
+	auto it = obj.find(key);
+	if(it == obj.end()) {
+		throw make_error(errc::invalid_data, "missing element '" + std::string(key) + "'");
+	}
+	return json::value_to<T>(it->value());
 }
 
 template<class T>

@@ -1,6 +1,7 @@
 #ifndef GROUPCHAT_CORE_TYPES_HEADER
 #define GROUPCHAT_CORE_TYPES_HEADER
 
+#include <spsync/core/users.hpp>
 #include <spsync/util/object_id.hpp>
 
 #include <securepath/serialisation/types.hpp>
@@ -17,6 +18,14 @@ using chat_id = octet_vector;
 
 /// handle for server
 using server_id = std::size_t;
+
+/// id for user/member/contact
+using user_id = sync::util::user_id;
+
+/// associate object id to a message
+using message_id = sync::util::object_id;
+
+using sync::users;
 
 // key for the message metadata
 std::string const groupchat_message_id{"gc_message_v1"};
