@@ -119,7 +119,6 @@ public:
 	 std::function<void(std::string)> const notify;
 };
 
-
 json_manager::json_manager(std::function<void(std::string)> func)
 : loop_(std::make_unique<event_system::single_thread_event_loop>())
 , impl_(std::make_unique<impl>(*loop_, std::move(func)))

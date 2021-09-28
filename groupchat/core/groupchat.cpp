@@ -81,7 +81,7 @@ struct groupchat::impl
 	}
 
 	void create_account(host_port const& server, std::string const& name) {
-		LOG_TRACE("groupchat create_account");
+		LOG_TRACE("groupchat create_account [server=%:%]", server.host, server.port);
 
 		database::transaction t{*database};
 		init_crypto();
@@ -153,7 +153,7 @@ bool groupchat::check_account_exists(groupchat_config const& conf) const {
 groupchat::groupchat(event_system::event_handler& callback, groupchat_config conf)
 : config_(std::move(conf))
 , callback_(callback)
-, impl_(check_account_exists(config_) ? std::make_unique<impl>(callback, nullptr, config_) : nullptr)
+, impl_(check_account_exists(config_) ? std::make_unique<impl>(callback_, nullptr, config_) : nullptr)
 {
 	if(impl_) {
 		impl_->load_info();
@@ -164,7 +164,7 @@ groupchat::groupchat(event_system::event_handler& callback, network::context& co
 : config_(std::move(conf))
 , callback_(callback)
 , context_(&context)
-, impl_(check_account_exists(config_) ? std::make_unique<impl>(callback, &context, config_) : nullptr)
+, impl_(check_account_exists(config_) ? std::make_unique<impl>(callback_, &context, config_) : nullptr)
 {
 	if(impl_) {
 		impl_->load_info();
