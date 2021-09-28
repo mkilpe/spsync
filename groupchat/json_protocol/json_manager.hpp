@@ -60,6 +60,9 @@ public:
 	/// send message to given chat
 	std::string send_message(std::string_view const&);
 
+	/// handle scanned qr code
+	std::string handle_qr_code(std::string_view const&);
+
 	void close();
 private:
 	std::unique_ptr<event_system::event_loop> loop_;

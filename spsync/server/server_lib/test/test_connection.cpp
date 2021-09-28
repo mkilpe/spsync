@@ -125,7 +125,7 @@ public:
 	test::test_progress progress;
 	record_storage storage{database};
 	encryption_key_storage enc_keys{database};
-	crypto_context cc{context.public_keys(), context.private_data(), enc_keys};
+	crypto_context cc{context.public_keys(), context.private_data(), enc_keys, storage};
 	sync_engine_config engine_config;
 
 	std::unique_ptr<sync_engine> engine;

@@ -19,6 +19,8 @@ struct sequence_number {
 
 	sequence_number& operator++();
 	sequence_number operator++(int);
+	sequence_number& operator--();
+	sequence_number operator--(int);
 	sequence_number& operator+=(int);
 	explicit operator bool() const { return value; }
 

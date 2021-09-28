@@ -3,6 +3,7 @@
 
 #include "types.hpp"
 
+#include <spsync/client/record_util.hpp>
 #include <spsync/util/sequence_number.hpp>
 
 #include <chrono>
@@ -23,6 +24,7 @@ struct message {
 
 struct message_search {
 	std::size_t max_count = 0;
+	sync::record_order order{sync::record_order::seq_descending};
 	//t: add here what ever search criteria wanted
 };
 

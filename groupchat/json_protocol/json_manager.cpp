@@ -416,6 +416,31 @@ std::string json_manager::send_message(std::string_view const& arg) {
 	});
 }
 
+//supported qr codes:
+//1) sp-gc:{"type":"user","data":{"key_id":"BF42982C6801562694A3B315009E8777FF751DD321DAA2753AD41895865A55D9","name":"my test name","server":{"host":"gc.securepath.fi"}}}
+//2) sp-gc:{"type":"join","data":{"chat_id":"30202290BB417247B4D91F7E72544403","server":{"host":"gc.securepath.fi"}}}
+std::string json_manager::handle_qr_code(std::string_view const& arg) {
+	return call([&]{
+		if(!arg.starts_with("sp-gc:")) {
+			LOG_WARN("qr code data does not start with 'sp-gc:' [data=%]", arg);
+			return error_to_json(make_error(errc::invalid_data, "invalid qr code data"));
+		}
+		json::object obj = json::parse(arg.substr(6)).as_object();
+		auto type = extract<std::string>(obj, "type");
+
+		json::object type_res;
+		if(type == "user") {
+			auto s = json::serialize(extract<json::object>(obj, "data"));
+			type_res = json::parse(add_contact(s)).as_object();
+		} else {
+			auto s = json::serialize(extract<json::object>(obj, "data"));
+			type_res = json::parse(join_chat(s)).as_object();
+		}
+
+		return json::serialize(json::object{{"type", type}, {"data", type_res}});
+	});
+}
+
 void json_manager::close() {
 
 }

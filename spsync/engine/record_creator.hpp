@@ -2,7 +2,6 @@
 #define SPSYNC_ENGINE_RECORD_CREATOR_HEADER
 
 #include <spsync/core/encryption_key_storage.hpp>
-#include <spsync/core/crypto_context.hpp>
 #include <spsync/core/records/data_change_record.hpp>
 #include <spsync/core/records/user_change_record.hpp>
 #include <spsync/core/records/segment_record.hpp>

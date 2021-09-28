@@ -78,7 +78,7 @@ public:
 	encryption_key_storage enc_keys{database};
 	crypto::public_key_cache pkeys;
 	crypto::private_data_cache pdata;
-	crypto_context cc{pkeys, pdata, enc_keys};
+	crypto_context cc{pkeys, pdata, enc_keys, io.records()};
 	sync_engine_config engine_config;
 	test_sync_engine engine{single_thread_event_loop, io, cc, engine_config};
 };

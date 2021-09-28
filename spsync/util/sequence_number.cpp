@@ -15,6 +15,17 @@ sequence_number sequence_number::operator++(int) {
 	return s;
 }
 
+sequence_number& sequence_number::operator--() {
+	--value;
+	return *this;
+}
+
+sequence_number sequence_number::operator--(int) {
+	sequence_number s{*this};
+	--value;
+	return s;
+}
+
 sequence_number& sequence_number::operator+=(int v) {
 	value += v;
 	return *this;

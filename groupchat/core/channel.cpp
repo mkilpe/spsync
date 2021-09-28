@@ -44,7 +44,7 @@ void channel::on_data_change(sync::record_handle rec, std::deque<sync::single_da
 	for(auto const& c : changes) {
 		auto opt = c.header.metadata().find<message_data>(groupchat_message_id);
 		if(opt) {
-			message m{opt->message, opt->sender, c.data.id, opt->sender_time, rec->block_id().sequence};
+			message m{opt->message, opt->sender, c.data.id, opt->sender_time, c.seq};
 			ccontext_.callback.emit<events::on_message>(ccontext_.sid, chat_id_, m);
 		} else {
 			LOG_WARN("invalid record, no groupchat message found");
@@ -79,6 +79,19 @@ message_id channel::send_message(std::string const& msg) {
 
 std::deque<message> channel::messages(message_search ms) const {
 	std::deque<message> ret;
+
+	sync::search_data_records rs{crypto_context()};
+	rs.ordering(ms.order);
+	auto list = rs.get(ms.max_count);
+
+	for(auto const& e : list) {
+		auto opt = e.header.metadata().find<message_data>(groupchat_message_id);
+		if(opt) {
+			ret.push_back(message{opt->message, opt->sender, e.data.id, opt->sender_time, e.seq});
+		} else {
+			LOG_WARN("no groupchat data in the record");
+		}
+	}
 
 	return ret;
 }

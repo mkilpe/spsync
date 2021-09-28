@@ -40,7 +40,11 @@ struct client_sync::impl : engine_output {
 	void init(storage_id const& sid, network_connection& conn) {
 		storage = std::make_unique<record_storage>(db);
 		enc_keys = std::make_unique<encryption_key_storage>(db);
-		crypto = std::make_unique<sync::crypto_context>(conn.context().public_keys(), conn.context().private_data(), *enc_keys);
+		crypto = std::make_unique<sync::crypto_context>(
+			conn.context().public_keys(),
+			conn.context().private_data(),
+			*enc_keys,
+			*storage);
 
 		storage_connection sconn{conn.create_storage_connection(sid, *storage, progress)};
 		engine = std::make_unique<sync_engine>(event_loop(), sconn.input(), *crypto, sync_engine_config{});
@@ -71,7 +75,12 @@ struct client_sync::impl : engine_output {
 			if(ver.is_authentic()) {
 				std::deque<single_data_change> res;
 				for(auto const& h : ver.headers()) {
-					res.push_back(single_data_change{h.data, h.header});
+					res.push_back(
+						single_data_change{
+							h.data,
+							h.header,
+							record.sequence(),
+							rec->internal_id()});
 				}
 				if(!res.empty()) {
 					parent->on_data_change(rec, std::move(res));

@@ -48,15 +48,20 @@ struct chat_connection::impl
 
 	void on_create_storage(sync::storage_id const& cid, error err) {
 		if(!err) {
-			std::unique_lock l{mutex};
-			assert(!cid.empty());
-			auto it = channels.find(cid);
-			if(it != channels.end()) {
-				it->second->init(cid, net);
-				it->second->create_initial_record();
-			} else {
-				LOG_WARN("no channel found for chat: %", to_hex(cid));
-				err = make_error(securepath::errc::invalid_state, "chat room not set");
+			try {
+				std::unique_lock l{mutex};
+				assert(!cid.empty());
+				auto it = channels.find(cid);
+				if(it != channels.end()) {
+					it->second->init(cid, net);
+					it->second->create_initial_record();
+				} else {
+					LOG_WARN("no channel found for chat: %", to_hex(cid));
+					err = make_error(securepath::errc::invalid_state, "chat room not set");
+				}
+			} catch(error const& e) {
+				LOG_WARN("exception while initialising storage: %", e);
+				err = e;
 			}
 		}
 		ccontext.callback.emit<events::on_create>(ccontext.sid, cid, err);
@@ -70,6 +75,7 @@ struct chat_connection::impl
 	}
 
 	channel& create_chat(std::string name, users members) {
+		//t: check we have keys for the members (as otherwise on_create_storage will fail)
 		auto cid = net.create_storage();
 		auto ret = channels.emplace(cid, std::make_unique<channel>(ccontext, cid));
 		ret.first->second->set_data(std::move(name), std::move(members));

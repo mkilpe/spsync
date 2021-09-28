@@ -69,8 +69,7 @@ public:
 
 	template<typename RecordType>
 	chain_block(RecordType const& rec, util::content_auth auth)
-	: record_(serialisation::asn_der_serialise_choice<record_types>(rec))
-	, auth_(std::move(auth))
+	: chain_block(auth_record<RecordType>{rec, std::move(auth)})
 	{
 	}
 

@@ -58,8 +58,10 @@ TEST_CASE("user_change_record_creator", "[unit]") {
 
 	crypto::public_key_cache keycache;
 	crypto::private_data_cache datacache;
-	encryption_key_storage kstorage(test::create_test_database());
-	crypto_context crypto{keycache, datacache, kstorage};
+	auto db = test::create_test_database();
+	encryption_key_storage kstorage(db);
+	record_storage rstorage(db);
+	crypto_context crypto{keycache, datacache, kstorage, rstorage};
 
 	encryption_key key{1, random_octet_vector(crypto::aes_gcm_key_size())};
 	kstorage.insert(key);
