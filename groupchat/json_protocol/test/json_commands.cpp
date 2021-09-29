@@ -31,12 +31,12 @@ std::string json_get_contacts_result(std::vector<json_contact> list) {
 }
 
 std::string json_add_contact(json_contact c) {
-	return print(R"({ "name" : "%", "key_id": "%"})", c.name, c.kid.in_hex());
+	return print(R"({ "name" : "%", "id": "%"})", c.name, c.kid.in_hex());
 }
 
 std::string json_add_contact_result(json_contact c) {
 	auto kid_str = c.kid.in_hex();
-	return print(R"({ "name" : "%", "key_id": "%", "id": "%" })", c.name, kid_str, kid_str);
+	return print(R"({ "name" : "%", "id": "%"})", c.name, kid_str);
 }
 
 std::string json_get_chats_result(std::vector<json_chat> list) {
@@ -84,18 +84,18 @@ std::string json_get_chat_members_result(std::vector<json_chat_member> list) {
 			res += ", ";
 		}
 		first = false;
-		res += print(R"({"name": "%", "key_id": "%", "is_contact" : %})", e.name, e.kid.in_hex(), e.is_contact ? "true" : "false");
+		res += print(R"({"name": "%", "id": "%", "contact" : %})", e.name, e.kid.in_hex(), e.is_contact ? "true" : "false");
 	}
 	res += R"(]})";
 	return res;
 }
 
 std::string json_get_chat_members(std::string id) {
-	return print(R"({ "chat_id" : "%"})", id);
+	return print(R"({ "id" : "%"})", id);
 }
 
 std::string json_join_chat(std::string id) {
-	return print(R"({ "chat_id" : "%"})", id);
+	return print(R"({ "id" : "%"})", id);
 }
 
 std::string json_join_chat_result(std::string id) {
@@ -110,7 +110,7 @@ std::string json_get_messages_result(std::vector<json_message> list) {
 			res += ", ";
 		}
 		first = false;
-		res += print(R"({"seq": %, "message_id": "%", "message": "%", "sender": { "key_id": "%" }})"
+		res += print(R"({"seq": %, "id": "%", "message": "%", "sender": { "id": "%" }})"
 			, e.seq, e.id, e.message, e.sender_kid.in_hex());
 	}
 	res += R"(]})";
@@ -118,19 +118,19 @@ std::string json_get_messages_result(std::vector<json_message> list) {
 }
 
 std::string json_get_messages(std::string id) {
-	return print(R"({ "chat_id": "%"})", id);
+	return print(R"({ "id": "%"})", id);
 }
 
 json_send_message_result::json_send_message_result(std::string str)
 {
 	CHECK_NOTHROW([&]{
 		auto obj = json::parse(str).as_object();
-		id = extract<std::string>(obj, "message_id");
+		id = extract<std::string>(obj, "id");
 	}());
 }
 
 std::string json_send_message(std::string chat_id, std::string message) {
-	return print(R"({ "chat_id" : "%", "message": "%"})", chat_id, message);
+	return print(R"({ "id" : "%", "message": "%"})", chat_id, message);
 }
 
 std::string json_handle_qr_code_user(json_contact user) {
@@ -138,7 +138,7 @@ std::string json_handle_qr_code_user(json_contact user) {
 			"type":"user",
 			"data" : {
 				"name" : "%",
-				"key_id": "%"
+				"id": "%"
 			}
 			})", user.name, user.kid.in_hex());
 }
@@ -148,7 +148,7 @@ std::string json_handle_qr_code_user_result(json_contact user) {
 }
 
 std::string json_handle_qr_code_join(std::string chat_id) {
-	return print(R"(sp-gc:{ "type":"join", "data": {"chat_id": "%"} })", chat_id);
+	return print(R"(sp-gc:{ "type":"join", "data": {"id": "%"} })", chat_id);
 }
 
 std::string json_handle_qr_code_join_result(std::string chat_id) {

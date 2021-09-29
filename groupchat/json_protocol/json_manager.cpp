@@ -141,7 +141,7 @@ std::string json_manager::get_account() const {
 		auto acc = impl_->account_info();
 		if(acc) {
 			json::object user{{"name", acc->name}};
-			json::object ret{{"user", user}, {"key_id", acc->key_id.in_hex()}};
+			json::object ret{{"user", user}, {"id", acc->key_id.in_hex()}};
 			return json::serialize(ret);
 		} else {
 			return std::string("{}");
@@ -190,7 +190,7 @@ std::string json_manager::get_contacts(std::string_view const& arg) const {
 		json::array json_c;
 		for(auto& v : contacts) {
 			std::string key_id = v->id().public_key_id().in_hex();
-			json_c.push_back(json::object{{"name", v->name()}, {"id", key_id}, {"key_id", key_id}});
+			json_c.push_back(json::object{{"name", v->name()}, {"id", key_id}});
 		}
 		json::object ret{{"data", json_c}};
 		return json::serialize(ret);
@@ -201,7 +201,7 @@ std::string json_manager::add_contact(std::string_view const& arg) {
 	return call([&]{
 		json::object obj = json::parse(arg).as_object();
 		auto name = extract<std::string>(obj, "name");
-		auto key_id_string = extract<std::string>(obj, "key_id");
+		auto key_id_string = extract<std::string>(obj, "id");
 
 		crypto::public_key_id key_id{key_id_string};
 
@@ -219,7 +219,7 @@ std::string json_manager::add_contact(std::string_view const& arg) {
 		auto contact = impl_->contacts().add(user_id{key_id});
 		contact->set_name(name);
 		auto kid = key_id.in_hex();
-		return json::serialize(json::object{{"name", name}, {"id", kid}, {"key_id", kid}});
+		return json::serialize(json::object{{"name", name}, {"id", kid}});
 	});
 }
 
@@ -262,7 +262,7 @@ std::string json_manager::create_chat(std::string_view const& arg) {
 std::string json_manager::join_chat(std::string_view const& arg) {
 	return call([&]{
 		json::object obj = json::parse(arg).as_object();
-		chat_id cid = from_hex(extract<std::string>(obj, "chat_id"));
+		chat_id cid = from_hex(extract<std::string>(obj, "id"));
 		auto conn = impl_->load(impl_->extract_storage_host_port(obj));
 		conn->connect().get(); //t: make this whole thing correctly async
 		conn->join(cid);
@@ -273,7 +273,7 @@ std::string json_manager::join_chat(std::string_view const& arg) {
 std::string json_manager::get_chat_members(std::string_view const& arg) const {
 	return call([&]{
 		json::object obj = json::parse(arg).as_object();
-		chat_id cid = from_hex(extract<std::string>(obj, "chat_id"));
+		chat_id cid = from_hex(extract<std::string>(obj, "id"));
 
 		auto hp = impl_->channel_ids().find_server(cid);
 		if(!hp) {
@@ -293,8 +293,8 @@ std::string json_manager::get_chat_members(std::string_view const& arg) const {
 			m_arr.push_back(json::object{
 				{"name", opt_contact ? opt_contact->name() : user_id.public_key_id().in_hex()},
 				{"status", to_string(m->status())},
-				{"key_id", user_id.public_key_id().in_hex()},
-				{"is_contact", static_cast<bool>(opt_contact)}});
+				{"id", user_id.public_key_id().in_hex()},
+				{"contact", static_cast<bool>(opt_contact)}});
 		}
 		return json::serialize(json::object{{"data", m_arr}});
 	});
@@ -327,7 +327,7 @@ static users parse_users(json::object const& obj) {
 std::string json_manager::change_chat_member(std::string_view const& arg) {
 	return call([&]{
 		json::object obj = json::parse(arg).as_object();
-		chat_id cid = from_hex(extract<std::string>(obj, "chat_id"));
+		chat_id cid = from_hex(extract<std::string>(obj, "id"));
 
 		auto hp = impl_->channel_ids().find_server(cid);
 		if(!hp) {
@@ -366,7 +366,7 @@ static std::string time_to_string(time_point time) {
 std::string json_manager::get_messages(std::string_view const& arg) const {
 	return call([&]{
 		json::object obj = json::parse(arg).as_object();
-		chat_id cid = from_hex(extract<std::string>(obj, "chat_id"));
+		chat_id cid = from_hex(extract<std::string>(obj, "id"));
 
 		auto hp = impl_->channel_ids().find_server(cid);
 		if(!hp) {
@@ -385,11 +385,11 @@ std::string json_manager::get_messages(std::string_view const& arg) const {
 				{"message", m.data},
 				{"date", time_to_string(m.time)},
 				{"seq", m.seq.value},
-				{"message_id", m.mid.to_hex()},
+				{"id", m.mid.to_hex()},
 				{"sender", json::object{
 					{"name", opt_contact ? opt_contact->name() : user_id.public_key_id().in_hex()},
-					{"key_id", user_id.public_key_id().in_hex()},
-					{"is_contact", static_cast<bool>(opt_contact)}}}
+					{"id", user_id.public_key_id().in_hex()},
+					{"contact", static_cast<bool>(opt_contact)}}}
 				});
 		}
 		return json::serialize(json::object{{"data", m_arr}});
@@ -399,7 +399,7 @@ std::string json_manager::get_messages(std::string_view const& arg) const {
 std::string json_manager::send_message(std::string_view const& arg) {
 	return call([&]{
 		json::object obj = json::parse(arg).as_object();
-		chat_id cid = from_hex(extract<std::string>(obj, "chat_id"));
+		chat_id cid = from_hex(extract<std::string>(obj, "id"));
 		std::string message = extract<std::string>(obj, "message");
 
 		auto hp = impl_->channel_ids().find_server(cid);
@@ -411,7 +411,7 @@ std::string json_manager::send_message(std::string_view const& arg) {
 		auto& channel = conn->get(cid);
 
 		auto mid = channel.send_message(message);
-		return json::serialize(json::object{{"message_id", mid.to_hex()}});
+		return json::serialize(json::object{{"id", mid.to_hex()}});
 	});
 }
 
