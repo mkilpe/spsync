@@ -47,12 +47,14 @@ bool check_contains_json(json::object const& in, json::object const& exp) {
 }
 
 bool check_contains_json(std::string const& in, std::string const& exp) {
+	CAPTURE(in, exp);
 	auto in_j = json::parse(in).as_object();
 	auto exp_j = json::parse(exp).as_object();
 	return check_contains_json(in_j, exp_j);
 }
 
 bool check_equal_json(std::string const& in, std::string const& exp) {
+	CAPTURE(in, exp);
 	auto in_j = json::parse(in).as_object();
 	auto exp_j = json::parse(exp).as_object();
 	return in_j == exp_j;
@@ -63,11 +65,23 @@ bool check_equal_json(std::string const& in, std::string const& exp) {
 	CHECKED_ELSE(check_contains_json(in, exp)) \
 		WARN(in + " not containing " + exp); }
 
+#define REQUIRE_JSON(input, expect) \
+	{ std::string in = input; std::string exp = expect; \
+	CHECKED_ELSE(check_contains_json(in, exp)) \
+		FAIL(in + " not containing " + exp); }
+
 #define CHECK_EQUAL_JSON(input, expect) \
 	{ std::string in = input; std::string exp = expect; \
 	CHECKED_ELSE(check_equal_json(in, exp)) \
 		WARN(in + " not equal to " + exp); }
 
+#define WAIT_CHECK_JSON(input, expect, time) \
+	{ CHECK_NOTHROW([&]{WAIT(check_contains_json(input, expect), time);}()); \
+	CHECK_JSON(input, expect); }
+
+#define WAIT_REQUIRE_JSON(input, expect, time) \
+	{ CHECK_NOTHROW([&]{WAIT(check_contains_json(input, expect), time);}()); \
+	REQUIRE_JSON(input, expect); }
 
 }
 }

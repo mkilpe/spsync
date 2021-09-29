@@ -193,7 +193,8 @@ void groupchat::create_account(host_port const& server, std::string const& name)
 	}
 }
 
-std::deque<channel_id>groupchat::load_channels() {
+std::deque<channel_id> groupchat::load_channels() {
+	assert(impl_);
 	std::deque<channel_id> ret;
 	for(auto const& v : impl_->channels.enumerate()) {
 		auto s = load(v.server);
@@ -235,10 +236,12 @@ std::vector<std::shared_ptr<chat_connection>> groupchat::connections() const {
 }
 
 contact_list& groupchat::contacts() {
+	assert(impl_);
 	return impl_->contacts;
 }
 
 channel_list& groupchat::channel_ids() {
+	assert(impl_);
 	return impl_->channels;
 }
 

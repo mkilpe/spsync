@@ -1,5 +1,6 @@
 
 #include "json_test_helpers.hpp"
+#include "json_commands.hpp"
 
 #include <groupchat/json_protocol/json_helpers.hpp>
 #include <groupchat/json_protocol/json_manager.hpp>
@@ -28,54 +29,44 @@ TEST_CASE("json_manager_test", "[system]") {
 
 	{
 		json_manager manager(net_context.client_context(0), [](auto){}, "client_1");
-		CHECK_EQUAL_JSON(manager.get_account(), R"({})");
+		CHECK_EQUAL_JSON(manager.get_account(), "{}");
 		{
-			CHECK_JSON(manager.create_account(R"({"name": "test", "server": { "host": "127.0.0.1"} })")
-				, R"({ "user" : { "name": "test" }})");
+			CHECK_JSON(manager.create_account(json_create_account("test")), json_create_account_result("test"));
 		}
-		CHECK_JSON(manager.get_account(), R"({ "user" : { "name": "test" }})");
+		CHECK_JSON(manager.get_account(), json_get_account_result("test"));
 	}
 	{
 		json_manager manager(net_context.client_context(0), [](auto){}, "client_1");
-		CHECK_JSON(manager.get_account(), R"({ "user" : { "name": "test" }})");
+		CHECK_JSON(manager.get_account(), json_get_account_result("test"));
 	}
 	{ // create second account
 		json_manager manager(net_context.client_context(1), [](auto){}, "client_2");
-		CHECK_JSON(manager.create_account(R"({"name": "test contact", "server": { "host": "127.0.0.1"} })")
-			, R"({ "user" : { "name": "test contact" }})");
-		CHECK_JSON(manager.get_account(), R"({ "user" : { "name": "test contact" }})");
+		CHECK_JSON(manager.create_account(json_create_account("test contact")), json_create_account_result("test contact"));
+		CHECK_JSON(manager.get_account(), json_get_account_result("test contact"));
 	}
 	{ // create third account
 		json_manager manager(net_context.client_context(2), [](auto){}, "client_3");
-		CHECK_JSON(manager.create_account(R"({"name": "some", "server": { "host": "127.0.0.1"} })")
-			, R"({ "user" : { "name": "some" }})");
-		CHECK_JSON(manager.get_account(), R"({ "user" : { "name": "some" }})");
+		CHECK_JSON(manager.create_account(json_create_account("some")), json_create_account_result("some"));
+		CHECK_JSON(manager.get_account(), json_get_account_result("some"));
 	}
 	{ // contacts
 		json_manager manager(net_context.client_context(0), [](auto){}, "client_1");
-		CHECK_JSON(manager.get_account(), R"({ "user" : { "name": "test" }})");
+		CHECK_JSON(manager.get_account(), json_get_account_result("test"));
 
 		CHECK_EQUAL_JSON(manager.connect(), "{}");
 		CHECK_EQUAL_JSON(manager.disconnect(), "{}");
 
-		auto contact_key = net_context.key_id(1).in_hex();
+		CHECK_JSON(manager.get_contacts(""), json_get_contacts_result({}));
 
-		CHECK_JSON(manager.get_contacts(""), R"({ "data" : []})");
+		CHECK_JSON(manager.add_contact(json_add_contact({"my contact", net_context.key_id(1)}))
+			, json_add_contact_result({"my contact", net_context.key_id(1)}));
+		CHECK_JSON(manager.get_contacts(""), json_get_contacts_result({json_contact{"my contact", net_context.key_id(1)}}));
 
-		auto contact_res = print(R"({ "name" : "my contact", "key_id": "%", "id": "%" })", contact_key, contact_key);
-		CHECK_JSON(manager.add_contact(print(R"({ "name" : "my contact", "key_id": "%"})", contact_key)), contact_res);
-		CHECK_JSON(manager.get_contacts(""), print(R"({ "data" : [%] })", contact_res));
-
-		CHECK_JSON(manager.add_contact(print(R"({ "name" : "my contact", "key_id": "%"})", contact_key)), R"({ "error" : {}})");
+		CHECK_JSON(manager.add_contact(json_add_contact({"my contact", net_context.key_id(1)})), R"({ "error" : {}})");
 
 		//add third as contact too so we can create chat later on (this causes the client to download the key)
-		CHECK_JSON(manager.add_contact(print(R"({
-				"name" : "my other contact",
-				"key_id": "%"
-			})", net_context.key_id(2).in_hex())), print(R"({
-					"name" : "my other contact",
-					"key_id": "%", "id": "%"
-				})", net_context.key_id(2).in_hex(), net_context.key_id(2).in_hex()));
+		CHECK_JSON(manager.add_contact(json_add_contact({"my other contact", net_context.key_id(2)}))
+			, json_add_contact_result({"my other contact", net_context.key_id(2)}));
 	}
 
 	//chat id
@@ -84,131 +75,65 @@ TEST_CASE("json_manager_test", "[system]") {
 		json_manager manager1(net_context.client_context(0), [](auto){}, "client_1");
 		json_manager manager2(net_context.client_context(1), [](auto){}, "client_2");
 
-		CHECK_EQUAL_JSON(manager1.get_chats(""), R"({ "data" : []})");
-		CHECK_EQUAL_JSON(manager2.get_chats(""), R"({ "data" : []})");
+		CHECK_EQUAL_JSON(manager1.get_chats(""), json_get_chats_result({}));
+		CHECK_EQUAL_JSON(manager2.get_chats(""), json_get_chats_result({}));
 
-		auto user_key = net_context.key_id(1).in_hex();
-		auto cres = manager1.create_chat(print(R"({ "name" : "test chat", "members" : [{"user": "%"}, {"user": "%"}] })", user_key, net_context.key_id(2).in_hex()));
-		CHECK_JSON(cres, R"({ "name" : "test chat" })");
-		id = extract<std::string>(json::parse(cres).as_object(), "id"); // get the chat id
+		json_create_chat_result cc_res = manager1.create_chat(
+			json_create_chat("test chat", {net_context.key_id(1), net_context.key_id(2)}));
 
-		CHECK_JSON(manager1.get_chats(""), print(R"({"data" : [{"name": "test chat", "id": "%"}] })", id));
+		CHECK(cc_res.result.name == "test chat");
+		REQUIRE(!cc_res.result.id.empty());
+		id = cc_res.result.id;
+
+		CHECK_JSON(manager1.get_chats(""), json_get_chats_result({{"test chat", cc_res.result.id}}));
 
 		//this not working currently
 		//CHECK_EQUAL_JSON(manager1.change_chat_member(print(R"({ "chat_id" : "%", "add" : [{"user": "%"}] })", id, user_key)), "{}");
 
-		CHECK_JSON(manager1.get_chat_members(print(R"({ "chat_id" : "%"})", id))
-			, print(R"({ "data" : [{"name": "my contact", "key_id": "%", "is_contact": true}] })", user_key));
+		CHECK_JSON(manager1.get_chat_members(json_get_chat_members(id))
+			, json_get_chat_members_result({{"my contact", net_context.key_id(1), true}}));
 
-		CHECK_JSON(manager2.join_chat(print(R"({ "chat_id" : "%"})", id)), print(R"({ "id" : "%"})", id));
-		WAIT(check_contains_json(manager2.get_chat_members(print(R"({ "chat_id" : "%"})", id))
-			, print(R"({ "data" : [{"key_id": "%", "is_contact": false}] })", user_key)), 2s);
+		CHECK_JSON(manager2.join_chat(json_join_chat(id)), json_join_chat_result(id));
 
-		CHECK_JSON(manager2.get_chat_members(print(R"({ "chat_id" : "%"})", id))
-			, print(R"({ "data" : [{"key_id": "%", "is_contact": false}] })", user_key));
-		REQUIRE(check_contains_json(manager2.get_chat_members(print(R"({ "chat_id" : "%"})", id))
-			, print(R"({ "data" : [{"key_id": "%", "is_contact": false}] })", user_key)));
+		WAIT_REQUIRE_JSON(manager2.get_chat_members(json_get_chat_members(id))
+			, json_get_chat_members_result({{net_context.key_id(1).in_hex(), net_context.key_id(1), false}}), 2s);
 
-
-		CHECK_EQUAL_JSON(manager1.get_messages(print(R"({ "chat_id": "%"})", id)), R"({ "data": []})");
-		CHECK_EQUAL_JSON(manager2.get_messages(print(R"({ "chat_id": "%"})", id)), R"({ "data": []})");
+		CHECK_EQUAL_JSON(manager1.get_messages(json_get_messages(id)), json_get_messages_result({}));
+		CHECK_EQUAL_JSON(manager2.get_messages(json_get_messages(id)), json_get_messages_result({}));
 
 		{
-			auto res = manager1.send_message(print(R"({ "chat_id" : "%", "message": "test message"})", id));
-			auto mid = extract_opt<std::string>(json::parse(res).as_object(), "message_id");
-			REQUIRE(mid);
+			json_send_message_result res = manager1.send_message(json_send_message(id, "test message"));
+			REQUIRE(!res.id.empty());
 
-			WAIT(check_contains_json(manager1.get_messages(print(R"({ "chat_id": "%"})", id))
-				, print(R"({ "data": [{"message_id": "%"}] })", *mid)), 2s);
+			//note: oneself not considered as contact
+			WAIT_CHECK_JSON(manager1.get_messages(json_get_messages(id))
+				, json_get_messages_result({{2, res.id, "test message", net_context.key_id(0)}}), 2s);
 
-			//note, oneself not considered as contact
-			CHECK_JSON(manager1.get_messages(print(R"({ "chat_id" : "%"})", id)),
-				print(R"({ "data" : [
-					{"seq": 2,
-					 "message_id": "%",
-					 "message": "test message",
-					 "sender": {
-					 	"key_id": "%",
-					 	"is_contact": false
-					 }
-					}] })", *mid, net_context.key_id(0).in_hex()));
-
-			WAIT(check_contains_json(manager2.get_messages(print(R"({ "chat_id": "%"})", id))
-				, print(R"({ "data": [{"message_id": "%"}] })", *mid)), 2s);
-
-			CHECK_JSON(manager1.get_messages(print(R"({ "chat_id" : "%"})", id)),
-				print(R"({ "data" : [
-					{"seq": 2,
-					 "message_id": "%",
-					 "message": "test message",
-					 "sender": {
-					 	"key_id": "%",
-					 	"is_contact": false
-					 }
-					}] })", *mid, net_context.key_id(0).in_hex()));
+			WAIT_CHECK_JSON(manager2.get_messages(json_get_messages(id))
+				, json_get_messages_result({{2, res.id, "test message", net_context.key_id(0)}}), 2s);
 		}
 		{
-			auto res = manager2.send_message(print(R"({ "chat_id" : "%", "message": "other message"})", id));
-			auto mid = extract_opt<std::string>(json::parse(res).as_object(), "message_id");
-			REQUIRE(mid);
+			json_send_message_result res = manager2.send_message(json_send_message(id, "other message"));
+			REQUIRE(!res.id.empty());
 
-			WAIT(check_contains_json(manager2.get_messages(print(R"({ "chat_id": "%"})", id))
-				, print(R"({ "data": [{"message_id": "%"}] })", *mid)), 2s);
+			WAIT_CHECK_JSON(manager2.get_messages(json_get_messages(id))
+				, json_get_messages_result({{3, res.id, "other message", net_context.key_id(1)}}), 2s);
 
-			//note, oneself not considered as contact
-			CHECK_JSON(manager2.get_messages(print(R"({ "chat_id" : "%"})", id)),
-				print(R"({ "data" : [
-					{"seq": 3,
-					 "message_id": "%",
-					 "message": "other message",
-					 "sender": {
-					 	"key_id": "%",
-					 	"is_contact": false
-					 }
-					}] })", *mid, net_context.key_id(1).in_hex()));
-
-			WAIT(check_contains_json(manager1.get_messages(print(R"({ "chat_id": "%"})", id))
-				, print(R"({ "data": [{"message_id": "%"}] })", *mid)), 2s);
-
-			CHECK_JSON(manager1.get_messages(print(R"({ "chat_id" : "%"})", id)),
-				print(R"({ "data" : [
-					{"seq": 3,
-					 "message_id": "%",
-					 "message": "other message",
-					 "sender": {
-					 	"name": "my contact",
-					 	"key_id": "%",
-					 	"is_contact": true
-					 }
-					}] })", *mid, net_context.key_id(1).in_hex()));
+			WAIT_CHECK_JSON(manager1.get_messages(json_get_messages(id))
+				, json_get_messages_result({{3, res.id, "other message", net_context.key_id(1)}}), 2s);
 		}
 	}
 	{ //qr code
 		json_manager manager3(net_context.client_context(2), [](auto){}, "client_3");
 
-		auto contact_key = net_context.key_id(0).in_hex();
-		auto contact_res = print(R"({"type":"user", "data": { "name" : "qr code test", "key_id": "%", "id": "%" }})", contact_key, contact_key);
-		CHECK_JSON(manager3.handle_qr_code(print(R"(sp-gc:{
-			"type":"user",
-			"data" : {
-				"name" : "qr code test",
-				"key_id": "%"
-			}
-			})", contact_key)), contact_res);
+		CHECK_JSON(manager3.handle_qr_code(
+			json_handle_qr_code_user(json_contact{"qr code test", net_context.key_id(0)}))
+			, json_handle_qr_code_user_result(json_contact{"qr code test", net_context.key_id(0)}));
 
-		CHECK_JSON(manager3.handle_qr_code(print(R"(sp-gc:{
-			"type":"join",
-			"data" : {"chat_id" : "%"}})", id))
-			, print(R"({
-				"type":"join", "data": {"id" : "%"}})", id));
+		CHECK_JSON(manager3.handle_qr_code(json_handle_qr_code_join(id)), json_handle_qr_code_join_result(id));
 
-		WAIT(check_contains_json(manager3.get_chat_members(print(R"({ "chat_id" : "%"})", id))
-			, print(R"({ "data" : [{"key_id": "%", "is_contact": false}] })", net_context.key_id(1).in_hex())), 2s);
-
-		CHECK_JSON(manager3.get_chat_members(print(R"({ "chat_id" : "%"})", id))
-			, print(R"({ "data" : [{"key_id": "%", "is_contact": false}] })", net_context.key_id(1).in_hex()));
-		REQUIRE(check_contains_json(manager3.get_chat_members(print(R"({ "chat_id" : "%"})", id))
-			, print(R"({ "data" : [{"key_id": "%", "is_contact": false}] })", net_context.key_id(1).in_hex())));
+		WAIT_REQUIRE_JSON(manager3.get_chat_members(json_get_chat_members(id))
+			, json_get_chat_members_result({{net_context.key_id(1).in_hex(), net_context.key_id(1), false}}), 2s);
 	}
 }
 
