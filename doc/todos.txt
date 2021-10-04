@@ -12,8 +12,11 @@
 
 = client
 * provide client level interface that does decrypting on the fly
+* better interface to handle pending/in sync and error cases on client level
 
 = general
+* provide server support to send message to a person (potentially on different server)
+* provide side channel for storages groups to send non-stored packets to each others (eg. "writing a message" in gc)
 
 = server
 * update and check user access rights for storage when handling records

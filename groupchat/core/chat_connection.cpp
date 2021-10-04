@@ -6,6 +6,7 @@
 
 #include <securepath/event_system/event_handler.hpp>
 #include <securepath/network/encrypted_net_base.hpp>
+#include <securepath/network/encryption/error.hpp>
 #include <securepath/network/encryption/handshake/dh_handshake.hpp>
 #include <securepath/network/encryption/handshake/pk_handshake.hpp>
 
@@ -31,9 +32,13 @@ struct chat_connection::impl
 
 	channel& connect_to_storage(sync::storage_id const& cid) {
 		assert(!cid.empty());
-		auto ret = channels.emplace(cid, std::make_unique<channel>(ccontext, cid));
-		ret.first->second->init(cid, net);
-		return *ret.first->second;
+		auto it = channels.find(cid);
+		if(it == channels.end()) {
+			auto ret = channels.emplace(cid, std::make_unique<channel>(ccontext, cid));
+			ret.first->second->init(cid, net);
+			it = ret.first;
+		}
+		return *it->second;
 	}
 
 	void on_connect() {
@@ -75,7 +80,13 @@ struct chat_connection::impl
 	}
 
 	channel& create_chat(std::string name, users members) {
-		//t: check we have keys for the members (as otherwise on_create_storage will fail)
+		//check we have keys for the members (as otherwise on_create_storage will fail)
+		for(auto&& m : members) {
+			if(!ccontext.context.public_keys().find(m.user.public_key_id())) {
+				LOG_WARN("cannot create chat because one of the member keys is missing [key=%]", m.user.public_key_id());
+				throw make_error(crypto::errc::no_such_key, "cannot create chat, member key missing");
+			}
+		}
 		auto cid = net.create_storage();
 		auto ret = channels.emplace(cid, std::make_unique<channel>(ccontext, cid));
 		ret.first->second->set_data(std::move(name), std::move(members));
@@ -85,7 +96,15 @@ struct chat_connection::impl
 
 	std::future<void> connect() {
 		connect_promise = {};
-		net.connect(ccontext.server.host, ccontext.server.port);
+		error err = net.connect(ccontext.server.host, ccontext.server.port);
+		if(err) {
+			if(make_error_code(network::errc::already_connected) == err.code()) {
+				// connected already, just set the value
+				connect_promise.set_value();
+			} else {
+				throw err;
+			}
+		}
 		return connect_promise.get_future();
 	}
 

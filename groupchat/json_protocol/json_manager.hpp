@@ -63,6 +63,9 @@ public:
 	/// handle scanned qr code
 	std::string handle_qr_code(std::string_view const&);
 
+	/// get version and license information
+	std::string get_version() const;
+
 	void close();
 private:
 	std::unique_ptr<event_system::event_loop> loop_;

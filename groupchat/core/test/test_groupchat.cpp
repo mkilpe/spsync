@@ -5,8 +5,7 @@
 #include <securepath/test_frame/test_utils.hpp>
 
 #include <spsync/test/test_server_runner.hpp>
-#include <securepath/network/test/support/testing_context.hpp>
-
+#include <spsync/test/test_context.hpp>
 
 namespace securepath::groupchat::test {
 
@@ -43,8 +42,15 @@ public:
 	/// called when user changed or failed
 	void on_change_user(server_id, chat_id, sync::users change, error) {
 	}
+
 	/// called when chat joined or it failed
-	void on_join(server_id, chat_id, error) {
+	void on_join(server_id, chat_id cid, error err) {
+		if(err) {
+			joined.set_exception(std::make_exception_ptr(err));
+		} else {
+			joined.set_value(cid);
+		}
+
 	}
 	/// called when chat message received
 	void on_message(server_id, chat_id id, message m) {
@@ -65,21 +71,16 @@ public:
 
 	std::promise<error> connected;
 	std::promise<chat_id> created;
+	std::promise<chat_id> joined;
 };
 
 TEST_CASE("groupchat_test", "[system]") {
 	std::remove(groupchat_config{}.db().c_str());
 
-	network::test::testing_context net_context;
-	net_context.set_server_dh_parameters();
-	net_context.set_server_pk_parameters();
-	net_context.set_client_dh_parameters();
-	net_context.set_client_pk_parameters();
+	sync::test::test_context net_context;
+	net_context.add_client(3);
 
-	//add client key to the db
-	//net_context.keys.insert(my_private_key(net_context.client_private_data).public_key());
-
-	sync::test::test_server server(net_context.server_context);
+	sync::test::test_server server(net_context.server_context());
 	server.run();
 	std::this_thread::sleep_for(1s);
 
@@ -88,7 +89,7 @@ TEST_CASE("groupchat_test", "[system]") {
 	host_port hp{"127.0.0.1", sync::default_storage_server_port};
 	event_system::single_thread_event_loop loop;
 	{
-		test_groupchat client(net_context.client_context, loop);
+		test_groupchat client(net_context.client_context(0), loop);
 
 		CHECK(!client.account_info());
 
@@ -120,7 +121,7 @@ TEST_CASE("groupchat_test", "[system]") {
 		}
 	}
 	{
-		test_groupchat client(net_context.client_context, loop);
+		test_groupchat client(net_context.client_context(0), loop);
 
 		auto info = client.account_info();
 		REQUIRE(info);

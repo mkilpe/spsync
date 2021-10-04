@@ -49,6 +49,7 @@ struct json_message {
 };
 std::string json_get_messages_result(std::vector<json_message>);
 std::string json_get_messages(std::string);
+std::vector<json_message> list_messages(std::string);
 
 struct json_send_message_result {
 	json_send_message_result(std::string);

@@ -6,13 +6,9 @@
 #include <spsync/client/record_util.hpp>
 #include <spsync/util/sequence_number.hpp>
 
-#include <chrono>
 #include <string>
 
 namespace securepath::groupchat {
-
-using clock_type = std::chrono::system_clock;
-using time_point = std::chrono::time_point<clock_type>;
 
 struct message {
 	std::string data;

@@ -8,7 +8,9 @@
 
 #include <securepath/crypto/random.hpp>
 #include <securepath/network/encryption/encrypted_connection.hpp>
+#include <securepath/network/encryption/error.hpp>
 #include <securepath/serialisation/util.hpp>
+#include <securepath/util/error.hpp>
 
 namespace securepath::sync {
 
@@ -37,12 +39,19 @@ network_connection::~network_connection()
 {
 }
 
-void network_connection::connect(std::string_view host, std::uint16_t port) {
+error network_connection::connect(std::string_view host, std::uint16_t port) {
+	error err;
 	if(impl_->state() == network::encrypted_connection::not_connected) {
 		impl_->connect(host, port);
 	} else {
 		LOG_TRACE("calling connect in some other than not_connected state");
+		if(impl_->state() == network::encrypted_connection::connected) {
+			err = make_error(network::errc::already_connected);
+		} else {
+			err = make_error(securepath::errc::invalid_state, "calling connect in some other than not_connected state");
+		}
 	}
+	return err;
 }
 
 void network_connection::close() {

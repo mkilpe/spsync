@@ -13,7 +13,7 @@ std::string json_create_account(std::string name) {
 }
 
 std::string json_create_account_result(std::string name) {
-	return print(R"({ "user" : { "name": "%" } })", name);
+	return print(R"({ "user" : { "name": "%" }, "server": { "host": "127.0.0.1"} })", name);
 }
 
 std::string json_get_contacts_result(std::vector<json_contact> list) {
@@ -119,6 +119,23 @@ std::string json_get_messages_result(std::vector<json_message> list) {
 
 std::string json_get_messages(std::string id) {
 	return print(R"({ "id": "%"})", id);
+}
+
+std::vector<json_message> list_messages(std::string str) {
+	std::vector<json_message> res;
+	CHECK_NOTHROW([&]{
+		auto obj = json::parse(str).as_object();
+		auto msg_arr = extract<json::array>(obj, "data");
+		for(auto it = msg_arr.begin(); it != msg_arr.end(); ++it) {
+			auto obj = it->as_object();
+			res.push_back(json_message{
+				extract<int>(obj, "seq"),
+				extract<std::string>(obj, "id"),
+				extract<std::string>(obj, "message"),
+				crypto::public_key_id{extract<std::string>(extract<json::object>(obj, "sender"), "id")}});
+		}
+	}());
+	return res;
 }
 
 json_send_message_result::json_send_message_result(std::string str)

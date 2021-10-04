@@ -93,7 +93,9 @@ struct client_sync::impl : engine_output {
 		}
 	}
 
-	void process_user_change(plain_user_change_data const& change) {
+	//todo: handle return correct for higher level notification
+	users process_user_change(plain_user_change_data const& change) {
+		users delta;
 		auto us = change.access();
 		database::transaction trans{*db};
 
@@ -104,6 +106,7 @@ struct client_sync::impl : engine_output {
 				create_member(v.user, member_status::member);
 			}
 		} else {
+			delta = change.access();
 			for(auto const& v : change.access()) {
 				member_status status;
 				auto k = find_member(v.user, status);
@@ -116,6 +119,7 @@ struct client_sync::impl : engine_output {
 				}
 			}
 		}
+		return delta;
 	}
 
 	void on_user_changed(record_handle rec) override {
@@ -137,7 +141,6 @@ struct client_sync::impl : engine_output {
 			LOG_WARN("could not find key to decrypt message (seq=%)", user_rec.encryption_key());
 		}
 	}
-
 
 	std::optional<std::uint64_t> find_member(util::user_id const& uid, member_status& status) const {
 		auto q = db->prepare("SELECT key, status FROM members WHERE key_id = :id");

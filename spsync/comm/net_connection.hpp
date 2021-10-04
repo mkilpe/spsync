@@ -59,7 +59,7 @@ public:
 	~network_connection();
 
 	/// Connect this network connection to server
-	void connect(std::string_view host, std::uint16_t port);
+	error connect(std::string_view host, std::uint16_t port);
 	void close();
 
 	/// Create storage on the server, one should wait for the on_create_storage event to see if the network call succeeded

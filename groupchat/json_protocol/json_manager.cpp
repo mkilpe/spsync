@@ -4,7 +4,9 @@
 
 #include <groupchat/core/groupchat.hpp>
 #include <groupchat/core/events.hpp>
+#include <groupchat/core/version.hpp>
 #include <spsync/core/types.hpp>
+#include <spsync/core/version.hpp>
 #include <spsync/util/object_id.hpp>
 #include <spsync/protocol/ports.hpp>
 
@@ -14,6 +16,7 @@
 #include <securepath/event_system/event_loop.hpp>
 #include <securepath/log/backend/backend.hpp>
 #include <securepath/log/backend/file_output.hpp>
+#include <securepath/version.hpp>
 
 namespace securepath::groupchat::json_protocol {
 
@@ -43,28 +46,49 @@ public:
 		stop_handler();
 	}
 
-	void on_connect(server_id) {
-
+	void on_connect(server_id sid) {
+		json::object event{
+			{"connection", "online"},
+			{"server", sid}};
+		notify(json::serialize(json::object{{"type", "connection state changed"}, {"data", event}}));
 	}
 
-	void on_disconnect(server_id, error) {
-
+	void on_disconnect(server_id sid, error err) {
+		json::object event{
+			{"connection", "offline"},
+			{"server", sid},
+			{"error", error_to_object(err)}};
+		notify(json::serialize(json::object{{"type", "connection state changed"}, {"data", event}}));
 	}
 
-	void on_create(server_id, chat_id, error) {
-
+	void on_create(server_id sid, chat_id cid, error err) {
+		json::object event{
+			{"action", "create"},
+			{"server", sid},
+			{"chat", to_hex(cid)},
+			{"error", error_to_object(err)}};
+		notify(json::serialize(json::object{{"type", "chat state changed"}, {"data", event}}));
 	}
 
-	void on_change_user(server_id, chat_id, sync::users change, error) {
-
+	void on_change_user(server_id sid, chat_id cid, sync::users change, error err) {
 	}
 
-	void on_join(server_id, chat_id, error) {
-
+	void on_join(server_id sid, chat_id cid, error err) {
+		json::object event{
+			{"action", "join"},
+			{"server", sid},
+			{"chat", to_hex(cid)},
+			{"error", error_to_object(err)}};
+		notify(json::serialize(json::object{{"type", "chat state changed"}, {"data", event}}));
 	}
 
-	void on_message(server_id, chat_id, message) {
-
+	void on_message(server_id sid, chat_id cid, message msg) {
+		json::object event{
+			{"action", "message"},
+			{"server", sid},
+			{"chat", to_hex(cid)},
+			{"message", message_to_object(msg)}};
+		notify(json::serialize(json::object{{"type", "chat state changed"}, {"data", event}}));
 	}
 
 	void handle_event(std::unique_ptr<event_system::event_base> ev) override {
@@ -115,25 +139,51 @@ public:
 		}
 	}
 
+	void load_channels() {
+		if(!channel_init) {
+			channel_init = true;
+			groupchat::load_channels();
+		}
+	}
+
+	json::object message_to_object(message const& m) {
+		auto user_id = m.sender_id;
+		auto opt_contact = contacts().find(user_id);
+
+		return json::object{
+			{"message", m.data},
+			{"date", time_to_string(m.time)},
+			{"seq", m.seq.value},
+			{"id", m.mid.to_hex()},
+			{"sender", json::object{
+				{"name", opt_contact ? opt_contact->name() : user_id.public_key_id().in_hex()},
+				{"id", user_id.public_key_id().in_hex()},
+				{"contact", static_cast<bool>(opt_contact)}}}
+			};
+	}
+
 public:
 	 std::function<void(std::string)> const notify;
+	 bool channel_init{false};
 };
 
 json_manager::json_manager(std::function<void(std::string)> func)
 : loop_(std::make_unique<event_system::single_thread_event_loop>())
 , impl_(std::make_unique<impl>(*loop_, std::move(func)))
 {
+	LOG_TRACE("json_manager ctor %", this);
 }
-
 
 json_manager::json_manager(network::context& context, std::function<void(std::string)> func, std::string path)
 : loop_(std::make_unique<event_system::single_thread_event_loop>())
 , impl_(std::make_unique<impl>(*loop_, context, std::move(func), std::move(path)))
 {
+	LOG_TRACE("json_manager ctor %", this);
 }
 
 json_manager::~json_manager()
 {
+	LOG_TRACE("json_manager dtor %", this);
 }
 
 std::string json_manager::get_account() const {
@@ -141,7 +191,10 @@ std::string json_manager::get_account() const {
 		auto acc = impl_->account_info();
 		if(acc) {
 			json::object user{{"name", acc->name}};
-			json::object ret{{"user", user}, {"id", acc->key_id.in_hex()}};
+			json::object ret{
+				{"user", user},
+				{"id", acc->key_id.in_hex()},
+				{"server", server_to_object(acc->server)}};
 			return json::serialize(ret);
 		} else {
 			return std::string("{}");
@@ -167,6 +220,9 @@ std::string json_manager::create_account(std::string_view const& arg) {
 std::string json_manager::connect() {
 	return call([&]{
 		impl_->load_channels();
+		for(auto&& v : impl_->connections()) {
+			v->connect();
+		}
 		return std::string("{}");
 	});
 }
@@ -225,6 +281,10 @@ std::string json_manager::add_contact(std::string_view const& arg) {
 
 std::string json_manager::get_chats(std::string_view const&) const {
 	return call([&]{
+
+		// first load channels so that we have all the info we need to enumerate them
+		impl_->load_channels();
+
 		json::array arr;
 		for(auto const& c : impl_->connections()) {
 			for(auto const& c_id : c->channel_ids()) {
@@ -349,20 +409,6 @@ std::string json_manager::change_chat_member(std::string_view const& arg) {
 	});
 }
 
-static std::string time_to_string(time_point time) {
-	std::tm t{};
-	if(!log::gmtime(time_point::clock::to_time_t(time), t)) {
-		LOG_WARN("encode: cannot convert time");
-		throw make_error(errc::invalid_data, "could not convert time");
-	}
-	char buffer[17] = {};
-	std::snprintf(buffer, 16, "%04d%02d%02d%02d%02d%02dZ"
-		, t.tm_year + 1900, t.tm_mon + 1, t.tm_mday
-		, t.tm_hour, t.tm_min, t.tm_sec);
-	return std::string(buffer);
-}
-
-
 std::string json_manager::get_messages(std::string_view const& arg) const {
 	return call([&]{
 		json::object obj = json::parse(arg).as_object();
@@ -378,19 +424,7 @@ std::string json_manager::get_messages(std::string_view const& arg) const {
 
 		json::array m_arr;
 		for(auto m : channel.messages()) {
-			auto user_id = m.sender_id;
-			auto opt_contact = impl_->contacts().find(user_id);
-
-			m_arr.push_back(json::object{
-				{"message", m.data},
-				{"date", time_to_string(m.time)},
-				{"seq", m.seq.value},
-				{"id", m.mid.to_hex()},
-				{"sender", json::object{
-					{"name", opt_contact ? opt_contact->name() : user_id.public_key_id().in_hex()},
-					{"id", user_id.public_key_id().in_hex()},
-					{"contact", static_cast<bool>(opt_contact)}}}
-				});
+			m_arr.push_back(impl_->message_to_object(m));
 		}
 		return json::serialize(json::object{{"data", m_arr}});
 	});
@@ -416,8 +450,8 @@ std::string json_manager::send_message(std::string_view const& arg) {
 }
 
 //supported qr codes:
-//1) sp-gc:{"type":"user","data":{"key_id":"BF42982C6801562694A3B315009E8777FF751DD321DAA2753AD41895865A55D9","name":"my test name","server":{"host":"gc.securepath.fi"}}}
-//2) sp-gc:{"type":"join","data":{"chat_id":"30202290BB417247B4D91F7E72544403","server":{"host":"gc.securepath.fi"}}}
+//1) sp-gc:{"type":"user","data":{"id":"BF42982C6801562694A3B315009E8777FF751DD321DAA2753AD41895865A55D9","name":"my test name","server":{"host":"gc.securepath.fi"}}}
+//2) sp-gc:{"type":"join","data":{"id":"30202290BB417247B4D91F7E72544403","server":{"host":"gc.securepath.fi"}}}
 std::string json_manager::handle_qr_code(std::string_view const& arg) {
 	return call([&]{
 		if(!arg.starts_with("sp-gc:")) {
@@ -431,12 +465,31 @@ std::string json_manager::handle_qr_code(std::string_view const& arg) {
 		if(type == "user") {
 			auto s = json::serialize(extract<json::object>(obj, "data"));
 			type_res = json::parse(add_contact(s)).as_object();
-		} else {
+		} else if(type == "join") {
 			auto s = json::serialize(extract<json::object>(obj, "data"));
 			type_res = json::parse(join_chat(s)).as_object();
+		} else {
+			LOG_WARN("qr code data has unknown type [data=%]", arg);
+			return error_to_json(make_error(errc::invalid_data, "unknown type in qr code"));
 		}
 
 		return json::serialize(json::object{{"type", type}, {"data", type_res}});
+	});
+}
+
+std::string json_manager::get_version() const {
+	return call([&]{
+		json::object ver_obj{
+			{"groupchat", securepath::groupchat::version().to_string()},
+			{"spsync", sync::version().to_string()},
+			{"splib", securepath::library_version().to_string()}};
+
+		json::object info{
+			{"version", ver_obj},
+			{"built", __DATE__},
+			{"license", "<todo>"}};
+
+		return json::serialize(info);
 	});
 }
 

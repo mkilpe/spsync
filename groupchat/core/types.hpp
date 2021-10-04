@@ -7,11 +7,15 @@
 #include <securepath/serialisation/types.hpp>
 #include <securepath/serialisation/sequence.hpp>
 
+#include <chrono>
 #include <cstdint>
 #include <memory>
 #include <string>
 
 namespace securepath::groupchat {
+
+using clock_type = std::chrono::system_clock;
+using time_point = std::chrono::time_point<clock_type>;
 
 /// handle for chat
 using chat_id = octet_vector;
