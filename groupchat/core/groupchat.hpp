@@ -72,9 +72,9 @@ private:
 	bool check_account_exists(groupchat_config const&) const;
 
 private:
-	groupchat_config config_;
+	groupchat_config const config_;
 	event_system::event_handler& callback_;
-	network::context* context_{};
+	network::context* const context_{};
 
 	class impl;
 	std::unique_ptr<impl> impl_;

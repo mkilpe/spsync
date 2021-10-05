@@ -37,7 +37,7 @@ encryption_key encryption_key_storage::current_key() const {
 }
 
 std::optional<encryption_key> encryption_key_storage::find(util::sequence_number const& seq) const {
-	LOG_TRACE("encryption_key_storage::find (seq=%) %", seq, this);
+	//LOG_TRACE("encryption_key_storage::find (seq=%) %", seq, this);
 
 	auto q = db_->prepare("SELECT * FROM encryption_key_storage WHERE seq = :i LIMIT 1;");
 	q.bind(":i", seq.value);

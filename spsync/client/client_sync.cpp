@@ -15,6 +15,7 @@ namespace securepath::sync {
 namespace {
 	struct dummy_progress : sync::progress {
 		dummy_progress(event_system::event_loop& eloop) : progress(eloop) {}
+		~dummy_progress() { stop_handler(); }
 		void handle_event(std::unique_ptr<event_system::event_base>) override {}
 	};
 }
@@ -35,6 +36,10 @@ struct client_sync::impl : engine_output {
 					"status INTEGER);";
 			db->prepare(prepare_str).execute();
 		}
+	}
+
+	~impl() {
+		stop_handler();
 	}
 
 	void init(storage_id const& sid, network_connection& conn) {

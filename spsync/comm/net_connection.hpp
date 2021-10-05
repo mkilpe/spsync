@@ -69,7 +69,7 @@ public:
 	/// Create storage connection, returns storage connection helper. Nothing is received before the attach on the returned object is called.
 	storage_connection create_storage_connection(storage_id, record_storage&, sync::progress&);
 
-	/// This will destroy the underlying comm_input, so make sure nothing is using it any more when this called
+	/// This will destroy the underlying comm_input, so make sure nothing is using it any more when this is called
 	void detach(storage_id const& id);
 
 	/// Get the associated network context

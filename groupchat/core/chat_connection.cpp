@@ -5,22 +5,17 @@
 #include <spsync/comm/net_connection.hpp>
 
 #include <securepath/event_system/event_handler.hpp>
-#include <securepath/network/encrypted_net_base.hpp>
 #include <securepath/network/encryption/error.hpp>
-#include <securepath/network/encryption/handshake/dh_handshake.hpp>
-#include <securepath/network/encryption/handshake/pk_handshake.hpp>
 
 #include <mutex>
 
 namespace securepath::groupchat {
 
 struct chat_connection::impl
-: public network::encrypted_net_base
-, public event_system::event_handler
+: public event_system::event_handler
 {
 	impl(chat_conn_context context)
-	: encrypted_net_base(context.context)
-	, event_handler(context.callback.event_loop())
+	: event_handler(context.callback.event_loop())
 	, ccontext(context)
 	, net(ccontext.context, *this)
 	{
@@ -28,6 +23,8 @@ struct chat_connection::impl
 
 	~impl() {
 		stop_handler();
+		net.close();
+		decltype(channels){}.swap(channels);
 	}
 
 	channel& connect_to_storage(sync::storage_id const& cid) {
@@ -111,11 +108,10 @@ struct chat_connection::impl
 	mutable std::mutex mutex;
 
 	chat_conn_context ccontext;
-	sync::network_connection net;
+	std::promise<void> connect_promise;
 
 	std::map<sync::storage_id, std::unique_ptr<channel>> channels;
-
-	std::promise<void> connect_promise;
+	sync::network_connection net;
 };
 
 chat_connection::chat_connection(chat_conn_context context)

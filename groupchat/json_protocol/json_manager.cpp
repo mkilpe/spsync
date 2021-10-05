@@ -18,6 +18,8 @@
 #include <securepath/log/backend/file_output.hpp>
 #include <securepath/version.hpp>
 
+#include <mutex>
+
 namespace securepath::groupchat::json_protocol {
 
 void initialise_logging() {
@@ -140,8 +142,13 @@ public:
 	}
 
 	void load_channels() {
-		if(!channel_init) {
+		bool load = false;
+		{
+			std::unique_lock l{mutex};
+			load = !channel_init;
 			channel_init = true;
+		}
+		if(load) {
 			groupchat::load_channels();
 		}
 	}
@@ -163,8 +170,9 @@ public:
 	}
 
 public:
-	 std::function<void(std::string)> const notify;
-	 bool channel_init{false};
+	std::mutex mutex;
+	std::function<void(std::string)> const notify;
+	bool channel_init{false};
 };
 
 json_manager::json_manager(std::function<void(std::string)> func)
@@ -280,6 +288,7 @@ std::string json_manager::add_contact(std::string_view const& arg) {
 }
 
 std::string json_manager::get_chats(std::string_view const&) const {
+	LOG_TRACE("json_manager::get_chats");
 	return call([&]{
 
 		// first load channels so that we have all the info we need to enumerate them
@@ -410,6 +419,7 @@ std::string json_manager::change_chat_member(std::string_view const& arg) {
 }
 
 std::string json_manager::get_messages(std::string_view const& arg) const {
+	LOG_TRACE("get_messages: %", arg);
 	return call([&]{
 		json::object obj = json::parse(arg).as_object();
 		chat_id cid = from_hex(extract<std::string>(obj, "id"));

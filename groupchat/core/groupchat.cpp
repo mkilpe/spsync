@@ -59,6 +59,10 @@ struct groupchat::impl
 
 	~impl() {
 		stop_handler();
+
+		// swap the connections out and destroy so there is no more events
+		decltype(connections) tmp;
+		tmp.swap(connections);
 	}
 
 	void load_info() {
@@ -126,7 +130,7 @@ struct groupchat::impl
 	gc::account_info info;
 	std::optional<network::context> own_context;
 	network::context& context;
-	groupchat_config conf;
+	groupchat_config const conf;
 
 	database::connection_ptr database;
 	std::unique_ptr<key_value_database> gc_info;
@@ -134,10 +138,11 @@ struct groupchat::impl
 
 	server_id last_id{};
 	std::map<host_port, server_id> hp_map;
-	std::map<server_id, std::shared_ptr<chat_connection>> connections;
 
 	channel_list channels;
 	contact_list contacts;
+
+	std::map<server_id, std::shared_ptr<chat_connection>> connections;
 };
 
 bool groupchat::check_account_exists(groupchat_config const& conf) const {

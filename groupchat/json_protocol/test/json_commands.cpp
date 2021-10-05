@@ -123,6 +123,7 @@ std::string json_get_messages(std::string id) {
 
 std::vector<json_message> list_messages(std::string str) {
 	std::vector<json_message> res;
+	CAPTURE(str);
 	CHECK_NOTHROW([&]{
 		auto obj = json::parse(str).as_object();
 		auto msg_arr = extract<json::array>(obj, "data");

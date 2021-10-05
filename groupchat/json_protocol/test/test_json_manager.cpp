@@ -150,9 +150,11 @@ TEST_CASE("json_manager_test", "[system]") {
 	}
 }
 
-/*
+
 TEST_CASE("json_manager message test", "[system]") {
 	int const count = 10;
+	int const messages = 100;
+
 	for(int i = 0; i != count; ++i) {
 		std::remove(groupchat_config{print("client_%", i)}.db().c_str());
 	}
@@ -196,7 +198,7 @@ TEST_CASE("json_manager message test", "[system]") {
 	}
 
 	// send messages
-	for(int x = 0; x != 1000; ++x) {
+	for(int x = 0; x != messages; ++x) {
 		for(int i = 0; i != count; ++i) {
 			json_send_message_result res = clients[i]->send_message(json_send_message(chat_res.result.id, "test message"));
 			REQUIRE(!res.id.empty());
@@ -205,8 +207,9 @@ TEST_CASE("json_manager message test", "[system]") {
 
 	// wait to have all the messages
 	for(int i = 0; i != count; ++i) {
-		WAIT_CHECK(list_messages(clients[i]->get_messages("")).size() == count*1000, 5s);
+		WAIT_CHECK(list_messages(clients[i]->get_messages(json_get_messages(chat_res.result.id))).size()
+			 == count*messages, 30s);
 	}
-}*/
+}
 
 }

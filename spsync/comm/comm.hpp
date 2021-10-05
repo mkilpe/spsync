@@ -47,7 +47,7 @@ protected:
 	virtual record_storage& records() const override;
 
 private:
-	network_connection_impl* nc_impl_{};
+	network_connection_impl* const nc_impl_{};
 	storage_id const sid_;
 	record_storage& storage_;
 	sync::progress& progress_;
