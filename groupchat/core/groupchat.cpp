@@ -91,13 +91,14 @@ struct groupchat::impl
 		init_crypto();
 		register_my_key(server.host);
 
-		auto key_id = my_private_key(context.private_data()).id();
+		auto my_key = my_private_key(context.private_data());
+		context.public_keys().insert(my_key.public_key());
 
 		gc_info = std::make_unique<key_value_database>(database, "gc_info");
 		gc_info->insert("name", name);
 		gc_info->insert("server", server);
 
-		info.key_id = key_id;
+		info.key_id = my_key.id();
 		info.name = name;
 		info.server = server;
 	}
