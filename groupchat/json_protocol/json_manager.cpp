@@ -85,6 +85,7 @@ public:
 	}
 
 	void on_message(server_id sid, chat_id cid, message msg) {
+		LOG_TRACE("json_manager::on_message [sid=%, cid=%]", sid, to_hex(cid));
 		json::object event{
 			{"action", "message"},
 			{"server", sid},
@@ -288,9 +289,7 @@ std::string json_manager::add_contact(std::string_view const& arg) {
 }
 
 std::string json_manager::get_chats(std::string_view const&) const {
-	LOG_TRACE("json_manager::get_chats");
 	return call([&]{
-
 		// first load channels so that we have all the info we need to enumerate them
 		impl_->load_channels();
 

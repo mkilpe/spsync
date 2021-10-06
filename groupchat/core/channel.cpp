@@ -40,7 +40,7 @@ void channel::set_data(std::string name, users members) {
 }
 
 void channel::on_data_change(sync::record_handle rec, std::deque<sync::single_data_change> changes) {
-	LOG_TRACE("on_object_data_changed");
+	LOG_TRACE("on_object_data_changed [count=%]", changes.size());
 	for(auto const& c : changes) {
 		auto opt = c.header.metadata().find<message_data>(groupchat_message_id);
 		if(opt) {
@@ -52,7 +52,17 @@ void channel::on_data_change(sync::record_handle rec, std::deque<sync::single_da
 	}
 }
 
-void channel::on_user_change(sync::record_handle, sync::user_change usc) {
+void channel::on_user_change(sync::record_handle rec, sync::user_change usc) {
+	if(rec->block_id().sequence == sync::sequence_number{1}) {
+		auto opt = usc.metadata.find<user_id>(groupchat_creator_id);
+		if(opt) {
+			// check if we created the chat or not
+			auto my_key = my_private_key(ccontext_.context.private_data());
+			if(opt->public_key_id() != my_key.id()) {
+				ccontext_.callback.emit<events::on_join>(ccontext_.sid, chat_id_, error{});
+			}
+		}
+	}
 	ccontext_.callback.emit<events::on_change_user>(ccontext_.sid, chat_id_, usc.members, error{});
 }
 
@@ -61,6 +71,10 @@ void channel::create_initial_record() {
 	assert(own_key);
 	sync::metadata header;
 	header.insert(groupchat_name_id, find<std::string>(gc_name_tag).value_or(to_hex(chat_id_)));
+
+	auto my_key = my_private_key(ccontext_.context.private_data()); //notice this is hack, see message.hpp
+	header.insert(groupchat_creator_id, user_id{my_key.id()});
+
 	sync::users initial = initial_members_;
 	// always add ourself
 	initial.add(sync::util::user_access{own_key->id(), sync::util::access_type::user_management_access});

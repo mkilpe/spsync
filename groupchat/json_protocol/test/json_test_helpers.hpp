@@ -1,3 +1,5 @@
+#pragma once
+
 #include <groupchat/json_protocol/json_helpers.hpp>
 
 #include <securepath/test_frame/test_suite.hpp>

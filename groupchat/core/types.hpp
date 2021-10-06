@@ -37,6 +37,9 @@ std::string const groupchat_message_id{"gc_message_v1"};
 // key for user change metadata
 std::string const groupchat_name_id{"gc_name_v1"};
 
+// key for creator metadata in initial record
+std::string const groupchat_creator_id{"gc_creator_v1"};
+
 struct host_port {
 	std::string host;
 	std::uint16_t port;

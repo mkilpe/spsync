@@ -1,5 +1,6 @@
 
 #include "json_test_helpers.hpp"
+#include "json_test_manager.hpp"
 #include "json_commands.hpp"
 
 #include <groupchat/json_protocol/json_helpers.hpp>
@@ -16,9 +17,6 @@
 namespace securepath::groupchat::json_protocol::test {
 
 TEST_CASE("json_manager_test", "[system]") {
-	std::remove(groupchat_config{"client_1"}.db().c_str());
-	std::remove(groupchat_config{"client_2"}.db().c_str());
-	std::remove(groupchat_config{"client_3"}.db().c_str());
 
 	sync::test::test_context net_context;
 	net_context.add_client(3);
@@ -28,7 +26,7 @@ TEST_CASE("json_manager_test", "[system]") {
 	std::this_thread::sleep_for(1s);
 
 	{
-		json_manager manager(net_context.client_context(0), [](auto){}, "client_1");
+		json_test_manager manager(net_context, 0, remove_db);
 		CHECK_EQUAL_JSON(manager.get_account(), "{}");
 		{
 			CHECK_JSON(manager.create_account(json_create_account("test")), json_create_account_result("test"));
@@ -36,21 +34,21 @@ TEST_CASE("json_manager_test", "[system]") {
 		CHECK_JSON(manager.get_account(), json_get_account_result("test"));
 	}
 	{
-		json_manager manager(net_context.client_context(0), [](auto){}, "client_1");
+		json_test_manager manager(net_context, 0, keep_db);
 		CHECK_JSON(manager.get_account(), json_get_account_result("test"));
 	}
 	{ // create second account
-		json_manager manager(net_context.client_context(1), [](auto){}, "client_2");
+		json_test_manager manager(net_context, 1, remove_db);
 		CHECK_JSON(manager.create_account(json_create_account("test contact")), json_create_account_result("test contact"));
 		CHECK_JSON(manager.get_account(), json_get_account_result("test contact"));
 	}
 	{ // create third account
-		json_manager manager(net_context.client_context(2), [](auto){}, "client_3");
+		json_test_manager manager(net_context, 2, remove_db);
 		CHECK_JSON(manager.create_account(json_create_account("some")), json_create_account_result("some"));
 		CHECK_JSON(manager.get_account(), json_get_account_result("some"));
 	}
 	{ // contacts
-		json_manager manager(net_context.client_context(0), [](auto){}, "client_1");
+		json_test_manager manager(net_context, 0, keep_db);
 		CHECK_JSON(manager.get_account(), json_get_account_result("test"));
 
 		CHECK_EQUAL_JSON(manager.connect(), "{}");
@@ -71,13 +69,15 @@ TEST_CASE("json_manager_test", "[system]") {
 		//add third as contact too so we can create chat later on (this causes the client to download the key)
 		CHECK_JSON(manager.add_contact(json_add_contact({"my other contact", net_context.key_id(2)}))
 			, json_add_contact_result({"my other contact", net_context.key_id(2)}));
+
+		WAIT_CHECK(manager.has_connect_event(), 2s);
 	}
 
 	//chat id
 	std::string id;
 	{ // chats
-		json_manager manager1(net_context.client_context(0), [](auto){}, "client_1");
-		json_manager manager2(net_context.client_context(1), [](auto){}, "client_2");
+		json_test_manager manager1(net_context, 0, keep_db);
+		json_test_manager manager2(net_context, 1, keep_db);
 
 		CHECK_EQUAL_JSON(manager1.get_chats(""), json_get_chats_result({}));
 		CHECK_EQUAL_JSON(manager2.get_chats(""), json_get_chats_result({}));
@@ -95,6 +95,7 @@ TEST_CASE("json_manager_test", "[system]") {
 		}
 
 		CHECK_JSON(manager1.get_chats(""), json_get_chats_result({{"test chat", cc_res.result.id}}));
+		WAIT_CHECK(manager1.has_create_event(cc_res.result.id), 2s);
 
 		//this not working currently
 		//CHECK_EQUAL_JSON(manager1.change_chat_member(print(R"({ "chat_id" : "%", "add" : [{"user": "%"}] })", id, user_key)), "{}");
@@ -103,6 +104,7 @@ TEST_CASE("json_manager_test", "[system]") {
 			, json_get_chat_members_result({{"my contact", net_context.key_id(1), true}}));
 
 		CHECK_JSON(manager2.join_chat(json_join_chat(id)), json_join_chat_result(id));
+		WAIT_CHECK(manager2.has_join_event(id), 2s);
 
 		WAIT_REQUIRE_JSON(manager2.get_chat_members(json_get_chat_members(id))
 			, json_get_chat_members_result({{net_context.key_id(1).in_hex(), net_context.key_id(1), false}}), 2s);
@@ -120,6 +122,9 @@ TEST_CASE("json_manager_test", "[system]") {
 
 			WAIT_CHECK_JSON(manager2.get_messages(json_get_messages(id))
 				, json_get_messages_result({{2, res.id, "test message", net_context.key_id(0)}}), 2s);
+
+			WAIT_CHECK(manager1.has_message_event(id, res.id), 2s);
+			WAIT_CHECK(manager2.has_message_event(id, res.id), 2s);
 		}
 		{
 			json_send_message_result res = manager2.send_message(json_send_message(id, "other message"));
@@ -133,7 +138,7 @@ TEST_CASE("json_manager_test", "[system]") {
 		}
 	}
 	{ //qr code
-		json_manager manager3(net_context.client_context(2), [](auto){}, "client_3");
+		json_test_manager manager3(net_context, 2, keep_db);
 
 		CHECK_JSON(manager3.handle_qr_code(
 			json_handle_qr_code_user(json_contact{"qr code test", net_context.key_id(0)}))
@@ -145,8 +150,15 @@ TEST_CASE("json_manager_test", "[system]") {
 			, json_get_chat_members_result({{net_context.key_id(1).in_hex(), net_context.key_id(1), false}}), 2s);
 	}
 	{ //check chats there after constructing again
-		json_manager manager1(net_context.client_context(0), [](auto){}, "client_1");
-		CHECK_JSON(manager1.get_chats(""), json_get_chats_result({{"test chat", id}}));
+		json_test_manager manager(net_context, 0, keep_db);
+		CHECK_JSON(manager.get_chats(""), json_get_chats_result({{"test chat", id}}));
+
+		CHECK(!manager.has_connect_event());
+
+		manager.connect();
+		WAIT_CHECK(manager.has_connect_event(), 2s);
+		manager.disconnect();
+		WAIT_CHECK(manager.has_disconnect_event(), 2s);
 	}
 }
 
@@ -154,10 +166,6 @@ TEST_CASE("json_manager_test", "[system]") {
 TEST_CASE("json_manager message test", "[system]") {
 	int const count = 10;
 	int const messages = 100;
-
-	for(int i = 0; i != count; ++i) {
-		std::remove(groupchat_config{print("client_%", i)}.db().c_str());
-	}
 
 	sync::test::test_context net_context;
 	net_context.add_client(count);
@@ -171,7 +179,7 @@ TEST_CASE("json_manager message test", "[system]") {
  	// create accounts
 	for(int i = 0; i != count; ++i) {
 		std::string client_str = print("client_%", i);
-		clients.push_back(std::make_unique<json_manager>(net_context.client_context(i), [](auto){}, client_str));
+		clients.push_back(std::make_unique<json_test_manager>(net_context, i, remove_db));
 		CHECK_JSON(clients.back()->create_account(json_create_account(client_str)), json_create_account_result(client_str));
 		CHECK_JSON(clients.back()->get_account(), json_get_account_result(client_str));
 	}
