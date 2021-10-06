@@ -2,7 +2,7 @@
 = client_sync
 * state when creating channel, when it was successful, failed, pending
 * someway to store and check the status / retry if failed
-
+* handle joinin failed/creating failed callback / info for user
 
 = records
 * get history for higher levels
