@@ -15,10 +15,18 @@ namespace securepath::groupchat::json_protocol {
 
 void initialise_logging();
 
+enum class event_type {
+	notification = 1,
+	state_change = 2,
+	request      = 3
+};
+
 class json_manager {
 public:
-	json_manager(std::function<void(std::string)>);
-	json_manager(network::context& context, std::function<void(std::string)>, std::string path = "");
+	using event_callback = std::function<void(event_type, std::string)>;
+
+	json_manager(event_callback);
+	json_manager(network::context& context, event_callback, std::string path = "");
 	~json_manager();
 
 	/// return account information if account exists, otherwise empty json object

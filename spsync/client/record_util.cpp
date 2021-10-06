@@ -55,11 +55,16 @@ void search_data_records::ordering(record_order o) {
 	ordering_ = o;
 }
 
+void search_data_records::only_in_sync(bool b) {
+	only_in_sync_ = b;
+}
+
+//todo: implement only_in_sync_ option
 std::deque<single_data_change> search_data_records::get(std::size_t max) {
 	std::deque<single_data_change> res;
 
 	if(!cur_seq_) {
-		cur_seq_ = ordering_ == record_order::seq_accending ?
+		cur_seq_ = ordering_ == record_order::seq_ascending ?
 			sequence_number{1} : cc_.records().last_block().sequence;
 	}
 
@@ -70,7 +75,7 @@ std::deque<single_data_change> search_data_records::get(std::size_t max) {
 			if(h->type() == data_change_record_tag) {
 				res.push_back(decrypt_data_record(h));
 			}
-			if(ordering_ == record_order::seq_accending) {
+			if(ordering_ == record_order::seq_ascending) {
 				++*cur_seq_;
 			} else {
 				--*cur_seq_;

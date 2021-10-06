@@ -27,14 +27,14 @@ struct json_test_manager : json_manager {
 	json_test_manager(sync::test::test_context& net_context, int id, db_action action)
 	: json_manager(
 		net_context.client_context(id),
-		[&](auto e){ event_handler(e); },
+		[&](auto type, auto e){ event_handler(type, e); },
 		remove_db_helper(print("client_%", id), action))
 	{
 	}
 
-	void event_handler(std::string event) {
+	void event_handler(event_type type, std::string event) {
 		std::unique_lock l{mutex};
-		events.push_back(event);
+		events.push_back(std::make_pair(type, event));
 	}
 
 	void clear_events() {
@@ -42,34 +42,34 @@ struct json_test_manager : json_manager {
 		events.clear();
 	}
 
-	bool contains_event(std::string exp) const {
+	bool contains_event(event_type type, std::string exp) const {
 		std::unique_lock l{mutex};
 		for(auto&& v : events) {
-			if(check_contains_json(v, exp))
+			if(v.first == type && check_contains_json(v.second, exp))
 				return true;
 		}
 		return false;
 	}
 
 	bool has_connect_event() const {
-		return contains_event(R"(
-				{"type": "connection state changed",
+		return contains_event(event_type::state_change, R"(
+				{"type": "connection",
 				 "data":
 				 	{ "connection": "online" }
 				 })");
 	}
 
 	bool has_disconnect_event() const {
-		return contains_event(R"(
-				{"type": "connection state changed",
+		return contains_event(event_type::state_change, R"(
+				{"type": "connection",
 				 "data":
 				 	{ "connection": "offline" }
 				 })");
 	}
 
 	bool has_create_event(std::string cid) const {
-		return contains_event(print(R"(
-				{"type": "chat state changed",
+		return contains_event(event_type::state_change, print(R"(
+				{"type": "chat",
 				 "data":
 				 	{ "action": "create",
 				 	  "chat": "%" }
@@ -77,8 +77,8 @@ struct json_test_manager : json_manager {
 	}
 
 	bool has_failed_create_event(std::string cid) const {
-		return contains_event(print(R"(
-				{"type": "chat state changed",
+		return contains_event(event_type::state_change, print(R"(
+				{"type": "chat",
 				 "data":
 				 	{ "action": "create",
 				 	  "chat": "%",
@@ -87,8 +87,8 @@ struct json_test_manager : json_manager {
 	}
 
 	bool has_join_event(std::string cid) const {
-		return contains_event(print(R"(
-				{"type": "chat state changed",
+		return contains_event(event_type::state_change, print(R"(
+				{"type": "chat",
 				 "data":
 				 	{ "action": "join",
 				 	  "chat": "%" }
@@ -96,8 +96,8 @@ struct json_test_manager : json_manager {
 	}
 
 	bool has_message_event(std::string cid, std::string mid) const {
-		return contains_event(print(R"(
-				{"type": "chat state changed",
+		return contains_event(event_type::state_change, print(R"(
+				{"type": "chat",
 				 "data":
 				 	{ "action": "message",
 				 	  "chat": "%",
@@ -106,7 +106,7 @@ struct json_test_manager : json_manager {
 	}
 
 	mutable std::mutex mutex;
-	std::deque<std::string> events;
+	std::deque<std::pair<event_type, std::string>> events;
 };
 
 }

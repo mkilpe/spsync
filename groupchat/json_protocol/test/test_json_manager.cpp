@@ -28,9 +28,7 @@ TEST_CASE("json_manager_test", "[system]") {
 	{
 		json_test_manager manager(net_context, 0, remove_db);
 		CHECK_EQUAL_JSON(manager.get_account(), "{}");
-		{
-			CHECK_JSON(manager.create_account(json_create_account("test")), json_create_account_result("test"));
-		}
+		CHECK_JSON(manager.create_account(json_create_account("test")), json_create_account_result("test"));
 		CHECK_JSON(manager.get_account(), json_get_account_result("test"));
 	}
 	{
@@ -220,4 +218,194 @@ TEST_CASE("json_manager message test", "[system]") {
 	}
 }
 
+TEST_CASE("json_manager chat order test", "[system]") {
+	sync::test::test_context net_context;
+	net_context.add_client(1);
+
+	sync::test::test_server server(net_context.server_context());
+	server.run();
+	std::this_thread::sleep_for(1s);
+
+ 	json_test_manager manager(net_context, 0, remove_db);
+
+	CHECK_JSON(manager.create_account(json_create_account("test")), json_create_account_result("test"));
+	CHECK_JSON(manager.get_account(), json_get_account_result("test"));
+
+	json_create_chat_result cc_res = manager.create_chat(json_create_chat("test chat", {}));
+	REQUIRE(!cc_res.result.id.empty());
+	std::string cid1 = cc_res.result.id;
+
+	CHECK_JSON(manager.get_chats(""), json_get_chats_result({{"test chat", cid1}}));
+	CHECK_JSON(manager.get_chats(R"({"message": {}})"), json_get_chats_result({{"test chat", cid1}}));
+	CHECK_JSON(manager.get_chats(R"({"message": {"count": 5}})"), json_get_chats_result({{"test chat", cid1}}));
+	CHECK_JSON(manager.get_chats(R"({"message": {"order": "ascending"}})"), json_get_chats_result({{"test chat", cid1}}));
+
+	{
+		auto chats = list_chats(manager.get_chats(""));
+		REQUIRE(chats.size() == 1);
+		CHECK(chats[0].messages.empty());
+	}
+
+	std::vector<json_message> messages;
+
+	{
+		json_send_message_result res = manager.send_message(json_send_message(cid1, "1"));
+		REQUIRE(!res.id.empty());
+		WAIT_CHECK_JSON(manager.get_messages(json_get_messages(cid1))
+			, json_get_messages_result({{2, res.id, "1", net_context.key_id(0)}}), 2s);
+		messages.push_back(json_message{2, res.id, "1", net_context.key_id(0)});
+	}
+
+
+	{
+		auto chats = list_chats(manager.get_chats(""));
+		REQUIRE(chats.size() == 1);
+		CHECK(chats[0].messages.empty());
+		CHECK(chats[0].id == cc_res.result.id);
+	}
+	{
+		auto chats = list_chats(manager.get_chats(R"({"message": {}})"));
+		REQUIRE(chats.size() == 1);
+		REQUIRE(chats[0].messages.size() == 1);
+		CHECK(chats[0].messages[0].id == messages.front().id);
+	}
+
+	for(int i = 0; i != 8; ++i) {
+		std::string m = print("%", i+2);
+		json_send_message_result res = manager.send_message(json_send_message(cid1, m));
+		REQUIRE(!res.id.empty());
+		messages.push_back(json_message{i+3, res.id, m, net_context.key_id(0)});
+	}
+
+	WAIT_CHECK_JSON(manager.get_messages(json_get_messages(cid1))
+		, json_get_messages_result(messages), 10s);
+
+	{
+		auto chats = list_chats(manager.get_chats(R"({"message": {}})"));
+		REQUIRE(chats.size() == 1);
+		REQUIRE(chats[0].messages.size() == 1);
+		CHECK(chats[0].messages[0].id == messages.back().id);
+	}
+	{
+		auto chats = list_chats(manager.get_chats(R"({"message": {"order": "ascending"}})"));
+		REQUIRE(chats.size() == 1);
+		REQUIRE(chats[0].messages.size() == 1);
+		CHECK(chats[0].messages[0].id == messages.front().id);
+	}
+	{
+		auto chats = list_chats(manager.get_chats(R"({"message": {"order": "descending"}})"));
+		REQUIRE(chats.size() == 1);
+		REQUIRE(chats[0].messages.size() == 1);
+		CHECK(chats[0].messages[0].id == messages.back().id);
+	}
+	{
+		auto chats = list_chats(manager.get_chats(R"({"message": {"count": 3}})"));
+		REQUIRE(chats.size() == 1);
+		REQUIRE(chats[0].messages.size() == 3);
+		CHECK(chats[0].messages[0].id == messages.back().id);
+		CHECK(chats[0].messages[1].id == messages[messages.size()-2].id);
+		CHECK(chats[0].messages[2].id == messages[messages.size()-3].id);
+	}
+	{
+		auto chats = list_chats(manager.get_chats(R"({"message": {"count": 4, "order": "ascending"}})"));
+		REQUIRE(chats.size() == 1);
+		REQUIRE(chats[0].messages.size() == 4);
+		CHECK(chats[0].messages[0].id == messages[0].id);
+		CHECK(chats[0].messages[1].id == messages[1].id);
+		CHECK(chats[0].messages[2].id == messages[2].id);
+		CHECK(chats[0].messages[3].id == messages[3].id);
+	}
+	{
+		auto chats = list_chats(manager.get_chats(R"({"message": {"count": 2, "order": "descending"}})"));
+		REQUIRE(chats.size() == 1);
+		REQUIRE(chats[0].messages.size() == 2);
+		CHECK(chats[0].messages[0].id == messages.back().id);
+		CHECK(chats[0].messages[1].id == messages[messages.size()-2].id);
+	}
+
+	std::string cid2;
+	std::string cid3;
+	{
+		json_create_chat_result cc_res = manager.create_chat(json_create_chat("test chat 2", {}));
+		REQUIRE(!cc_res.result.id.empty());
+		cid2 = cc_res.result.id;
+	}
+	{
+		json_create_chat_result cc_res = manager.create_chat(json_create_chat("test chat 3", {}));
+		REQUIRE(!cc_res.result.id.empty());
+		cid3 = cc_res.result.id;
+	}
+	{
+		CHECK_JSON(manager.get_chats(""), json_get_chats_result({
+			{"test chat", cid1},
+			{"test chat 2", cid2},
+			{"test chat 3", cid3}}));
+
+		auto chats = list_chats(manager.get_chats(""));
+		REQUIRE(chats.size() == 3);
+		CHECK(chats[0].messages.empty());
+		CHECK(chats[1].messages.empty());
+		CHECK(chats[2].messages.empty());
+	}
+	{
+		json_send_message_result res = manager.send_message(json_send_message(cid2, "1"));
+		REQUIRE(!res.id.empty());
+		WAIT_CHECK_JSON(manager.get_messages(json_get_messages(cid2))
+			, json_get_messages_result({{2, res.id, "1", net_context.key_id(0)}}), 2s);
+	}
+	{
+		CHECK_JSON(manager.get_chats(""), json_get_chats_result({
+			{"test chat", cid1},
+			{"test chat 2", cid2},
+			{"test chat 3", cid3}}));
+
+		auto chats = list_chats(manager.get_chats(""));
+		REQUIRE(chats.size() == 3);
+		CHECK(chats[0].messages.empty());
+		CHECK(chats[1].messages.empty());
+		CHECK(chats[2].messages.empty());
+	}
+	{
+		auto chats = list_chats(manager.get_chats(R"({"message": {}})"));
+		REQUIRE(chats.size() == 3);
+		CHECK(chats[0].id == cid2);
+		CHECK(chats[0].messages.size() == 1);
+		CHECK(chats[1].id == cid1);
+		CHECK(chats[1].messages.size() == 1);
+		CHECK(chats[1].messages[0].id == messages.back().id);
+		CHECK(chats[2].id == cid3);
+		CHECK(chats[2].messages.size() == 0);
+	}
+	{
+		json_send_message_result res = manager.send_message(json_send_message(cid1, "a"));
+		REQUIRE(!res.id.empty());
+		WAIT_CHECK_JSON(manager.get_messages(json_get_messages(cid1))
+			, json_get_messages_result({{11, res.id, "a", net_context.key_id(0)}}), 2s);
+		messages.push_back(json_message{11, res.id, "a", net_context.key_id(0)});
+	}
+	{
+		auto chats = list_chats(manager.get_chats(R"({"message": {"order": "descending"}})"));
+		REQUIRE(chats.size() == 3);
+		CHECK(chats[0].id == cid1);
+		CHECK(chats[0].messages.size() == 1);
+		CHECK(chats[0].messages[0].id == messages.back().id);
+		CHECK(chats[1].id == cid2);
+		CHECK(chats[1].messages.size() == 1);
+		CHECK(chats[2].id == cid3);
+		CHECK(chats[2].messages.size() == 0);
+	}
+	{
+		auto chats = list_chats(manager.get_chats(R"({"message": {"order": "ascending"}})"));
+		REQUIRE(chats.size() == 3);
+		CHECK(chats[0].id == cid2);
+		CHECK(chats[0].messages.size() == 1);
+		CHECK(chats[1].id == cid1);
+		CHECK(chats[1].messages.size() == 1);
+		CHECK(chats[1].messages[0].id == messages.front().id);
+		CHECK(chats[2].id == cid3);
+		CHECK(chats[2].messages.size() == 0);
+	}
 }
+
+}
+

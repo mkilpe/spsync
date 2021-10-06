@@ -27,18 +27,30 @@ void initialise_logging() {
 	LOG_TRACE("logging initialised");
 }
 
+struct chat_entry {
+	std::string name;
+	chat_id id;
+	std::deque<message> messages;
+};
+
+bool chats_sort(chat_entry const& e1, chat_entry const& e2) {
+	if(e1.messages.empty()) { return false; }
+	if(e2.messages.empty()) { return true;  }
+	return e1.messages[0].time >= e2.messages[0].time;
+}
+
 struct json_manager::impl
 	: public event_system::event_handler
 	, public groupchat
 {
 public:
-	impl(event_system::event_loop& l, std::function<void(std::string)> func)
+	impl(event_system::event_loop& l, event_callback func)
 	: event_handler(l)
 	, groupchat(*this, groupchat_config{})
 	, notify(std::move(func))
 	{}
 
-	impl(event_system::event_loop& l, network::context& context, std::function<void(std::string)> func, std::string path)
+	impl(event_system::event_loop& l, network::context& context, event_callback func, std::string path)
 	: event_handler(l)
 	, groupchat(*this, context, groupchat_config{std::move(path)})
 	, notify(std::move(func))
@@ -52,7 +64,7 @@ public:
 		json::object event{
 			{"connection", "online"},
 			{"server", sid}};
-		notify(json::serialize(json::object{{"type", "connection state changed"}, {"data", event}}));
+		notify(event_type::state_change, json::serialize(json::object{{"type", "connection"}, {"data", event}}));
 	}
 
 	void on_disconnect(server_id sid, error err) {
@@ -60,7 +72,7 @@ public:
 			{"connection", "offline"},
 			{"server", sid},
 			{"error", error_to_object(err)}};
-		notify(json::serialize(json::object{{"type", "connection state changed"}, {"data", event}}));
+		notify(event_type::state_change, json::serialize(json::object{{"type", "connection"}, {"data", event}}));
 	}
 
 	void on_create(server_id sid, chat_id cid, error err) {
@@ -69,7 +81,7 @@ public:
 			{"server", sid},
 			{"chat", to_hex(cid)},
 			{"error", error_to_object(err)}};
-		notify(json::serialize(json::object{{"type", "chat state changed"}, {"data", event}}));
+		notify(event_type::state_change, json::serialize(json::object{{"type", "chat"}, {"data", event}}));
 	}
 
 	void on_change_user(server_id sid, chat_id cid, sync::users change, error err) {
@@ -81,7 +93,7 @@ public:
 			{"server", sid},
 			{"chat", to_hex(cid)},
 			{"error", error_to_object(err)}};
-		notify(json::serialize(json::object{{"type", "chat state changed"}, {"data", event}}));
+		notify(event_type::state_change, json::serialize(json::object{{"type", "chat"}, {"data", event}}));
 	}
 
 	void on_message(server_id sid, chat_id cid, message msg) {
@@ -91,7 +103,7 @@ public:
 			{"server", sid},
 			{"chat", to_hex(cid)},
 			{"message", message_to_object(msg)}};
-		notify(json::serialize(json::object{{"type", "chat state changed"}, {"data", event}}));
+		notify(event_type::state_change, json::serialize(json::object{{"type", "chat"}, {"data", event}}));
 	}
 
 	void handle_event(std::unique_ptr<event_system::event_base> ev) override {
@@ -170,20 +182,34 @@ public:
 			};
 	}
 
+	std::vector<chat_entry> get_chats(std::optional<message_search> s) const {
+		std::vector<chat_entry> ret;
+		for(auto const& c : connections()) {
+			for(auto const& c_id : c->channel_ids()) {
+				channel& ch = c->get(c_id);
+				ret.push_back(chat_entry{ch.name(), ch.id()});
+				if(s) {
+					ret.back().messages = ch.messages(*s);
+				}
+			}
+		}
+		return ret;
+	}
+
 public:
 	std::mutex mutex;
-	std::function<void(std::string)> const notify;
+	std::function<void(event_type, std::string)> const notify;
 	bool channel_init{false};
 };
 
-json_manager::json_manager(std::function<void(std::string)> func)
+json_manager::json_manager(event_callback func)
 : loop_(std::make_unique<event_system::single_thread_event_loop>())
 , impl_(std::make_unique<impl>(*loop_, std::move(func)))
 {
 	LOG_TRACE("json_manager ctor %", this);
 }
 
-json_manager::json_manager(network::context& context, std::function<void(std::string)> func, std::string path)
+json_manager::json_manager(network::context& context, event_callback func, std::string path)
 : loop_(std::make_unique<event_system::single_thread_event_loop>())
 , impl_(std::make_unique<impl>(*loop_, context, std::move(func), std::move(path)))
 {
@@ -245,12 +271,8 @@ std::string json_manager::disconnect() {
 	});
 }
 
-std::string json_manager::get_contacts(std::string_view const& arg) const {
+std::string json_manager::get_contacts(std::string_view const&) const {
 	return call([&]{
-		if(!arg.empty()) {
-			LOG_WARN("json_manager::get_contacts not implement for non-empty argument");
-			return error_to_json(make_error(errc::not_implemented));
-		}
 		auto contacts = impl_->contacts().enumerate();
 		json::array json_c;
 		for(auto& v : contacts) {
@@ -288,19 +310,41 @@ std::string json_manager::add_contact(std::string_view const& arg) {
 	});
 }
 
-std::string json_manager::get_chats(std::string_view const&) const {
+std::string json_manager::get_chats(std::string_view const& arg) const {
 	return call([&]{
+		std::optional<message_search> s;
+
+		if(!arg.empty()) {
+			json::object args = json::parse(arg).as_object();
+			auto msg_arg = extract_opt<json::object>(args, "message");
+			int msg_count = msg_arg ? extract_opt<int>(*msg_arg, "count").value_or(1) : 1;
+			bool message_order = msg_arg ? extract_opt<std::string>(*msg_arg, "order").value_or("descending") == "ascending" : false;
+
+			if(msg_arg) {
+				s.emplace(
+					static_cast<std::size_t>(msg_count),
+					message_order ? sync::record_order::seq_ascending : sync::record_order::seq_descending);
+			}
+		}
+
 		// first load channels so that we have all the info we need to enumerate them
 		impl_->load_channels();
 
-		json::array arr;
-		for(auto const& c : impl_->connections()) {
-			for(auto const& c_id : c->channel_ids()) {
-				channel& ch = c->get(c_id);
-				arr.push_back(json::object{{"name", ch.name()}, {"id", to_hex(ch.id())}});
-			}
+		auto list = impl_->get_chats(s);
+		if(s) {
+			std::stable_sort(list.begin(), list.end(), chats_sort);
 		}
-		return json::serialize(json::object{{"data", arr}});
+
+		json::array ret;
+		for(auto&& v : list) {
+			json::array arr;
+			for(auto&& m : v.messages) {
+				arr.push_back(impl_->message_to_object(m));
+			}
+			ret.push_back(json::object{{"name", v.name}, {"id", to_hex(v.id)}, {"messages", arr}});
+
+		}
+		return json::serialize(json::object{{"data", ret}});
 	});
 }
 

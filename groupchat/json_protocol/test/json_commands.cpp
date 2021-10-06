@@ -47,7 +47,16 @@ std::string json_get_chats_result(std::vector<json_chat> list) {
 			res += ", ";
 		}
 		first = false;
-		res += print(R"({"name": "%", "id": "%"})", e.name, e.id);
+		res += print(R"({"name": "%", "id": "%", "messages": [)", e.name, e.id);
+		bool m_first = true;
+		for(auto m : e.messages) {
+			if(!m_first) {
+				res += ", ";
+			}
+			m_first = false;
+			res += json_message_to_string(m);
+		}
+		res += "]}";
 	}
 	res += R"(]})";
 	return res;
@@ -76,6 +85,24 @@ json_create_chat_result::json_create_chat_result(std::string str)
 	}());
 }
 
+std::vector<json_chat> list_chats(std::string str) {
+	std::vector<json_chat> res;
+	CAPTURE(str);
+	CHECK_NOTHROW([&]{
+		auto obj = json::parse(str).as_object();
+		auto arr = extract<json::array>(obj, "data");
+		for(auto it = arr.begin(); it != arr.end(); ++it) {
+			auto obj = it->as_object();
+			res.push_back(json_chat{
+				extract<std::string>(obj, "name"),
+				extract<std::string>(obj, "id")});
+			auto msgs = extract<json::array>(obj, "messages");
+			res.back().messages = list_plain_messages(msgs);
+		}
+	}());
+	return res;
+}
+
 std::string json_get_chat_members_result(std::vector<json_chat_member> list) {
 	std::string res = R"({ "data" : [)";
 	bool first = true;
@@ -102,6 +129,11 @@ std::string json_join_chat_result(std::string id) {
 	return print(R"({ "id" : "%"})", id);
 }
 
+std::string json_message_to_string(json_message const& m) {
+	return print(R"({"seq": %, "id": "%", "message": "%", "sender": { "id": "%" }})"
+			, m.seq, m.id, m.message, m.sender_kid.in_hex());
+}
+
 std::string json_get_messages_result(std::vector<json_message> list) {
 	std::string res = R"({ "data" : [)";
 	bool first = true;
@@ -110,8 +142,7 @@ std::string json_get_messages_result(std::vector<json_message> list) {
 			res += ", ";
 		}
 		first = false;
-		res += print(R"({"seq": %, "id": "%", "message": "%", "sender": { "id": "%" }})"
-			, e.seq, e.id, e.message, e.sender_kid.in_hex());
+		res += json_message_to_string(e);
 	}
 	res += R"(]})";
 	return res;
@@ -121,12 +152,9 @@ std::string json_get_messages(std::string id) {
 	return print(R"({ "id": "%"})", id);
 }
 
-std::vector<json_message> list_messages(std::string str) {
+std::vector<json_message> list_plain_messages(json::array const& msg_arr) {
 	std::vector<json_message> res;
-	CAPTURE(str);
 	CHECK_NOTHROW([&]{
-		auto obj = json::parse(str).as_object();
-		auto msg_arr = extract<json::array>(obj, "data");
 		for(auto it = msg_arr.begin(); it != msg_arr.end(); ++it) {
 			auto obj = it->as_object();
 			res.push_back(json_message{
@@ -135,6 +163,17 @@ std::vector<json_message> list_messages(std::string str) {
 				extract<std::string>(obj, "message"),
 				crypto::public_key_id{extract<std::string>(extract<json::object>(obj, "sender"), "id")}});
 		}
+	}());
+	return res;
+}
+
+std::vector<json_message> list_messages(std::string str) {
+	std::vector<json_message> res;
+	CAPTURE(str);
+	CHECK_NOTHROW([&]{
+		auto obj = json::parse(str).as_object();
+		auto msg_arr = extract<json::array>(obj, "data");
+		res = list_plain_messages(msg_arr);
 	}());
 	return res;
 }

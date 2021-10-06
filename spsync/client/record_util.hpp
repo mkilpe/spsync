@@ -16,7 +16,7 @@ std::optional<util::metadata> extract_single_object_meta(encryption_key_storage 
 plain_user_change_data encrypt_last_key_for_users(users const& us, crypto_context& cc);
 
 enum class record_order {
-	seq_accending,
+	seq_ascending,
 	seq_descending
 };
 
