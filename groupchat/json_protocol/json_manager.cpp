@@ -321,9 +321,9 @@ std::string json_manager::get_chats(std::string_view const& arg) const {
 			bool message_order = msg_arg ? extract_opt<std::string>(*msg_arg, "order").value_or("descending") == "ascending" : false;
 
 			if(msg_arg) {
-				s.emplace(
-					static_cast<std::size_t>(msg_count),
-					message_order ? sync::record_order::seq_ascending : sync::record_order::seq_descending);
+				s = message_search{
+						static_cast<std::size_t>(msg_count),
+						message_order ? sync::record_order::seq_ascending : sync::record_order::seq_descending};
 			}
 		}
 
