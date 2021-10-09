@@ -30,5 +30,20 @@ out of sync:
   3. recreate the records with correct previous tag/last seen seq for non-conflicting records
   4. try to commit again
 
+---------------------
+
+* signing [1d]
+  * allow to sign
+  * check on receive if we have key
+  * client interface to check if record was signed and authentic (if we don't have the key, it is not checked)
+  * optional server side check of the signature?
+* msg server [5d]
+  * separate server to send messages to other users
+  * stored in database and acked when received
+  * server connects to the server of receiver to transport the message
+* side channel [2d]
+  * use storage connection to send broadcast message to all online members (msg not saved on server side)
+  * client side interface to send and receive such messages
+  * message encrypted using storage encryption key?
 
 
