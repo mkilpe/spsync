@@ -148,8 +148,24 @@ std::string json_get_messages_result(std::vector<json_message> list) {
 	return res;
 }
 
-std::string json_get_messages(std::string id) {
-	return print(R"({ "id": "%"})", id);
+std::string json_get_messages(std::string id, std::optional<int> max, std::optional<bool> descending) {
+	std::string res = print(R"({ "id": "%")", id);
+	if(max) {
+		res += print(R"(, "count": %)", *max);
+	}
+	if(descending) {
+		res += print(R"(, "order": "%")", *descending ? "descending" : "ascending");
+	}
+	res += "}";
+	return res;
+}
+
+static json_message plain_message(json::object const& obj) {
+	return json_message{
+				extract<int>(obj, "seq"),
+				extract<std::string>(obj, "id"),
+				extract<std::string>(obj, "message"),
+				crypto::public_key_id{extract<std::string>(extract<json::object>(obj, "sender"), "id")}};
 }
 
 std::vector<json_message> list_plain_messages(json::array const& msg_arr) {
@@ -157,11 +173,7 @@ std::vector<json_message> list_plain_messages(json::array const& msg_arr) {
 	CHECK_NOTHROW([&]{
 		for(auto it = msg_arr.begin(); it != msg_arr.end(); ++it) {
 			auto obj = it->as_object();
-			res.push_back(json_message{
-				extract<int>(obj, "seq"),
-				extract<std::string>(obj, "id"),
-				extract<std::string>(obj, "message"),
-				crypto::public_key_id{extract<std::string>(extract<json::object>(obj, "sender"), "id")}});
+			res.push_back(plain_message(obj));
 		}
 	}());
 	return res;
@@ -182,7 +194,8 @@ json_send_message_result::json_send_message_result(std::string str)
 {
 	CHECK_NOTHROW([&]{
 		auto obj = json::parse(str).as_object();
-		id = extract<std::string>(obj, "id");
+		message = plain_message(obj);
+		id = message.id;
 	}());
 }
 

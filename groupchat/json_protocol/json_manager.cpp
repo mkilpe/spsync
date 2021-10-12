@@ -70,8 +70,10 @@ public:
 	void on_disconnect(server_id sid, error err) {
 		json::object event{
 			{"connection", "offline"},
-			{"server", sid},
-			{"error", error_to_object(err)}};
+			{"server", sid}};
+		if(err) {
+			event["error"] = error_to_object(err);
+		}
 		notify(event_type::state_change, json::serialize(json::object{{"type", "connection"}, {"data", event}}));
 	}
 
@@ -79,8 +81,10 @@ public:
 		json::object event{
 			{"action", "create"},
 			{"server", sid},
-			{"chat", to_hex(cid)},
-			{"error", error_to_object(err)}};
+			{"chat", to_hex(cid)}};
+		if(err) {
+			event["error"] = error_to_object(err);
+		}
 		notify(event_type::state_change, json::serialize(json::object{{"type", "chat"}, {"data", event}}));
 	}
 
@@ -91,8 +95,10 @@ public:
 		json::object event{
 			{"action", "join"},
 			{"server", sid},
-			{"chat", to_hex(cid)},
-			{"error", error_to_object(err)}};
+			{"chat", to_hex(cid)}};
+		if(err) {
+			event["error"] = error_to_object(err);
+		}
 		notify(event_type::state_change, json::serialize(json::object{{"type", "chat"}, {"data", event}}));
 	}
 
@@ -467,6 +473,12 @@ std::string json_manager::get_messages(std::string_view const& arg) const {
 		json::object obj = json::parse(arg).as_object();
 		chat_id cid = from_hex(extract<std::string>(obj, "id"));
 
+		message_search ms_option;
+
+		ms_option.max_count = extract_opt<int>(obj, "count").value_or(0);
+		ms_option.order = (extract_opt<std::string>(obj, "order").value_or("descending") == "descending")
+			? sync::record_order::seq_descending : sync::record_order::seq_ascending;
+
 		auto hp = impl_->channel_ids().find_server(cid);
 		if(!hp) {
 			return error_to_json(make_error(errc::no_such_data, "could not find chat"));
@@ -476,7 +488,7 @@ std::string json_manager::get_messages(std::string_view const& arg) const {
 		auto& channel = conn->get(cid);
 
 		json::array m_arr;
-		for(auto m : channel.messages()) {
+		for(auto m : channel.messages(ms_option)) {
 			m_arr.push_back(impl_->message_to_object(m));
 		}
 		return json::serialize(json::object{{"data", m_arr}});
@@ -497,8 +509,8 @@ std::string json_manager::send_message(std::string_view const& arg) {
 		auto conn = impl_->load(*hp);
 		auto& channel = conn->get(cid);
 
-		auto mid = channel.send_message(message);
-		return json::serialize(json::object{{"id", mid.to_hex()}});
+		auto msg = channel.send_message(message);
+		return json::serialize(impl_->message_to_object(msg));
 	});
 }
 

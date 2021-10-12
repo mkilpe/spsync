@@ -113,6 +113,10 @@ TEST_CASE("json_manager_test", "[system]") {
 		{
 			json_send_message_result res = manager1.send_message(json_send_message(id, "test message"));
 			REQUIRE(!res.id.empty());
+			CHECK(res.message.id == res.id);
+			CHECK(res.message.seq == 0);
+			CHECK(res.message.message == "test message");
+			CHECK(res.message.sender_kid == net_context.key_id(0));
 
 			//note: oneself not considered as contact
 			WAIT_CHECK_JSON(manager1.get_messages(json_get_messages(id))
@@ -405,6 +409,46 @@ TEST_CASE("json_manager chat order test", "[system]") {
 		CHECK(chats[2].id == cid3);
 		CHECK(chats[2].messages.size() == 0);
 	}
+}
+
+
+TEST_CASE("json_manager message order test", "[system]") {
+	sync::test::test_context net_context;
+	net_context.add_client(1);
+
+	sync::test::test_server server(net_context.server_context());
+	server.run();
+	std::this_thread::sleep_for(1s);
+
+ 	json_test_manager manager(net_context, 0, remove_db);
+
+	CHECK_JSON(manager.create_account(json_create_account("test")), json_create_account_result("test"));
+	CHECK_JSON(manager.get_account(), json_get_account_result("test"));
+
+	json_create_chat_result cc_res = manager.create_chat(json_create_chat("test chat", {}));
+	REQUIRE(!cc_res.result.id.empty());
+	std::string cid = cc_res.result.id;
+
+	std::vector<json_message> messages;
+	for(int i = 0; i != 10; ++i) {
+		std::string m = print("%", i);
+		json_send_message_result res = manager.send_message(json_send_message(cid, m));
+		REQUIRE(!res.id.empty());
+		messages.push_back(json_message{i+2, res.id, m, net_context.key_id(0)});
+	}
+
+	WAIT_CHECK_JSON(manager.get_messages(json_get_messages(cid))
+		, json_get_messages_result(messages), 10s);
+
+	WAIT_CHECK_JSON(manager.get_messages(json_get_messages(cid, 100))
+		, json_get_messages_result(messages), 10s);
+
+	WAIT_CHECK_JSON(manager.get_messages(json_get_messages(cid, 100, true))
+		, json_get_messages_result(messages), 10s);
+
+	WAIT_CHECK_JSON(manager.get_messages(json_get_messages(cid, 100, false))
+		, json_get_messages_result(messages), 10s);
+
 }
 
 }

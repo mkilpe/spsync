@@ -28,13 +28,14 @@ struct json_message {
 };
 std::string json_message_to_string(json_message const& m);
 std::string json_get_messages_result(std::vector<json_message>);
-std::string json_get_messages(std::string);
+std::string json_get_messages(std::string, std::optional<int> max = std::nullopt, std::optional<bool> descending = std::nullopt);
 std::vector<json_message> list_plain_messages(json::array const&);
 std::vector<json_message> list_messages(std::string);
 
 struct json_send_message_result {
 	json_send_message_result(std::string);
 	std::string id;
+	json_message message;
 };
 std::string json_send_message(std::string, std::string);
 
