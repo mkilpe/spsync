@@ -81,14 +81,14 @@ void channel::create_initial_record() {
 	send_user_change(std::move(initial), std::move(header));
 }
 
-message_id channel::send_message(std::string const& msg) {
+message channel::send_message(std::string const& msg) {
 	auto my_key = my_private_key(ccontext_.context.private_data()); //notice this is hack, see message.hpp
 	message_data chat_msg{msg, clock_type::now(), user_id{my_key.id()}};
 	sync::metadata header;
 	header.insert(groupchat_message_id, chat_msg);
 	auto msg_id = sync::util::create_object_id();
 	send_data_change(msg_id, std::move(header));
-	return msg_id;
+	return message{msg, chat_msg.sender, msg_id, chat_msg.sender_time};
 }
 
 std::deque<message> channel::messages(message_search ms) const {

@@ -22,7 +22,7 @@ public:
 	void set_data(std::string name, users members);
 
 	void create_initial_record();
-	message_id send_message(std::string const& message);
+	message send_message(std::string const& message);
 	std::deque<message> messages(message_search = {}) const;
 
 	chat_id id() const;
