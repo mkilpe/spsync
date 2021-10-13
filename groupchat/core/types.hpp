@@ -17,6 +17,9 @@ namespace securepath::groupchat {
 using clock_type = std::chrono::system_clock;
 using time_point = std::chrono::time_point<clock_type>;
 
+/// index for messages
+using index_type = std::int64_t;
+
 /// handle for chat
 using chat_id = octet_vector;
 

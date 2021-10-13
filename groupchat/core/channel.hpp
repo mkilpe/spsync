@@ -3,6 +3,7 @@
 
 #include "chat_conn_context.hpp"
 #include "message.hpp"
+#include "message_storage.hpp"
 
 #include <spsync/client/client_sync.hpp>
 
@@ -27,6 +28,8 @@ public:
 
 	chat_id id() const;
 private:
+	channel(chat_conn_context& context, chat_id const&, database::connection_ptr);
+
 	void on_data_change(sync::record_handle, std::deque<sync::single_data_change>) override;
 	void on_user_change(sync::record_handle, sync::user_change) override;
 
@@ -34,6 +37,7 @@ private:
 	chat_conn_context& ccontext_;
 	chat_id const chat_id_;
 	users initial_members_;
+	message_storage messages_;
 };
 
 }

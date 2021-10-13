@@ -11,7 +11,6 @@
 * support signing records
 
 = client
-* provide client level interface that does decrypting on the fly
 * better interface to handle pending/in sync and error cases on client level
 
 = general
@@ -31,6 +30,17 @@ out of sync:
   4. try to commit again
 
 ---------------------
+* get_messages chunking [??]
+  * mapping from record(s) to a message
+  * need way to order committed and pending records
+  * chunking based on index
+  * notice that record order can change due to records from server
+
+* correct member change notifications
+* change members for existing storage
+  * how to get the encryption key for the new member
+    * use msg server (below)
+    * try to find the key from the member change before processing all the records
 
 * signing [1d]
   * allow to sign
@@ -41,9 +51,11 @@ out of sync:
   * separate server to send messages to other users
   * stored in database and acked when received
   * server connects to the server of receiver to transport the message
+* push notification [2d]
+  * server side impl
+  * required client/protocol support
 * side channel [2d]
   * use storage connection to send broadcast message to all online members (msg not saved on server side)
   * client side interface to send and receive such messages
   * message encrypted using storage encryption key?
-
 

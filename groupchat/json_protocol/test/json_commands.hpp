@@ -21,14 +21,18 @@ std::string json_add_contact(json_contact);
 std::string json_add_contact_result(json_contact);
 
 struct json_message {
-	int seq;
+	std::int64_t index;
 	std::string id;
 	std::string message;
 	crypto::public_key_id sender_kid;
+
+	auto operator<=>(json_message const&) const = default;
 };
+
 std::string json_message_to_string(json_message const& m);
 std::string json_get_messages_result(std::vector<json_message>);
 std::string json_get_messages(std::string, std::optional<int> max = std::nullopt, std::optional<bool> descending = std::nullopt);
+std::string json_get_messages_chuck(std::string, std::int64_t start, std::size_t count, std::optional<bool> descending = std::nullopt);
 std::vector<json_message> list_plain_messages(json::array const&);
 std::vector<json_message> list_messages(std::string);
 

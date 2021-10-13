@@ -20,10 +20,17 @@ static database::connection_ptr open_db(chat_conn_context& context, chat_id cons
 }
 
 channel::channel(chat_conn_context& context, chat_id const& cid)
-: client_sync(context.callback.event_loop(), open_db(context, cid))
+: channel(context, cid, open_db(context, cid))
+{
+}
+
+channel::channel(chat_conn_context& context, chat_id const& cid, database::connection_ptr db)
+: client_sync(context.callback.event_loop(), db)
 , ccontext_(context)
 , chat_id_(cid)
+, messages_(db)
 {
+	//t: check messages database is in sync with record storage
 }
 
 channel::~channel() {
@@ -44,8 +51,11 @@ void channel::on_data_change(sync::record_handle rec, std::deque<sync::single_da
 	for(auto const& c : changes) {
 		auto opt = c.header.metadata().find<message_data>(groupchat_message_id);
 		if(opt) {
-			message m{opt->message, opt->sender, c.data.id, opt->sender_time, c.seq};
-			ccontext_.callback.emit<events::on_message>(ccontext_.sid, chat_id_, m);
+			// insert to message storage
+			auto change = messages_.insert(c.data.id, *opt, msg_state::in_sync);
+
+			// notify higher level
+			ccontext_.callback.emit<events::on_message>(ccontext_.sid, chat_id_, *opt, change);
 		} else {
 			LOG_WARN("invalid record, no groupchat message found");
 		}
@@ -88,26 +98,14 @@ message channel::send_message(std::string const& msg) {
 	header.insert(groupchat_message_id, chat_msg);
 	auto msg_id = sync::util::create_object_id();
 	send_data_change(msg_id, std::move(header));
-	return message{msg, chat_msg.sender, msg_id, chat_msg.sender_time};
+
+	//t: we need to make sure this insert happens before the on_data_change callback for the same message
+	auto change = messages_.insert(msg_id, chat_msg, msg_state::pending);
+	return message{msg, chat_msg.sender, msg_id, chat_msg.sender_time, change.new_index, change.state};
 }
 
 std::deque<message> channel::messages(message_search ms) const {
-	std::deque<message> ret;
-
-	sync::search_data_records rs{crypto_context()};
-	rs.ordering(ms.order);
-	auto list = rs.get(ms.max_count);
-
-	for(auto const& e : list) {
-		auto opt = e.header.metadata().find<message_data>(groupchat_message_id);
-		if(opt) {
-			ret.push_back(message{opt->message, opt->sender, e.data.id, opt->sender_time, e.seq});
-		} else {
-			LOG_WARN("no groupchat data in the record");
-		}
-	}
-
-	return ret;
+	return messages_.get(ms);
 }
 
 chat_id channel::id() const {

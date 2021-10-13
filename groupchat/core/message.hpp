@@ -10,17 +10,29 @@
 
 namespace securepath::groupchat {
 
+enum class msg_state {
+	pending,
+	in_sync
+};
+
 struct message {
 	std::string data;
 	user_id sender_id;
 	message_id mid;
-	time_point time;
-	sync::util::sequence_number seq;
+	time_point sender_time;
+	index_type index;
+	msg_state state;
+};
+
+enum class msg_order {
+	index_ascending,
+	index_descending
 };
 
 struct message_search {
+	int64_t start_index = 0; //0 means beginning for ascending and end for descending
 	std::size_t max_count = 0;
-	sync::record_order order{sync::record_order::seq_descending};
+	msg_order order{msg_order::index_descending};
 	//t: add here what ever search criteria wanted
 };
 

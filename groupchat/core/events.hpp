@@ -23,7 +23,7 @@ struct on_join {
 };
 
 struct on_message {
-	typedef void type(server_id, chat_id, message);
+	typedef void type(server_id, chat_id, message_data, msg_change);
 };
 
 }

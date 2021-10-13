@@ -114,16 +114,16 @@ TEST_CASE("json_manager_test", "[system]") {
 			json_send_message_result res = manager1.send_message(json_send_message(id, "test message"));
 			REQUIRE(!res.id.empty());
 			CHECK(res.message.id == res.id);
-			CHECK(res.message.seq == 0);
+			CHECK(res.message.index == 1);
 			CHECK(res.message.message == "test message");
 			CHECK(res.message.sender_kid == net_context.key_id(0));
 
 			//note: oneself not considered as contact
 			WAIT_CHECK_JSON(manager1.get_messages(json_get_messages(id))
-				, json_get_messages_result({{2, res.id, "test message", net_context.key_id(0)}}), 2s);
+				, json_get_messages_result({{1, res.id, "test message", net_context.key_id(0)}}), 2s);
 
 			WAIT_CHECK_JSON(manager2.get_messages(json_get_messages(id))
-				, json_get_messages_result({{2, res.id, "test message", net_context.key_id(0)}}), 2s);
+				, json_get_messages_result({{1, res.id, "test message", net_context.key_id(0)}}), 2s);
 
 			WAIT_CHECK(manager1.has_message_event(id, res.id), 2s);
 			WAIT_CHECK(manager2.has_message_event(id, res.id), 2s);
@@ -133,10 +133,10 @@ TEST_CASE("json_manager_test", "[system]") {
 			REQUIRE(!res.id.empty());
 
 			WAIT_CHECK_JSON(manager2.get_messages(json_get_messages(id))
-				, json_get_messages_result({{3, res.id, "other message", net_context.key_id(1)}}), 2s);
+				, json_get_messages_result({{2, res.id, "other message", net_context.key_id(1)}}), 2s);
 
 			WAIT_CHECK_JSON(manager1.get_messages(json_get_messages(id))
-				, json_get_messages_result({{3, res.id, "other message", net_context.key_id(1)}}), 2s);
+				, json_get_messages_result({{2, res.id, "other message", net_context.key_id(1)}}), 2s);
 		}
 	}
 	{ //qr code
@@ -256,8 +256,8 @@ TEST_CASE("json_manager chat order test", "[system]") {
 		json_send_message_result res = manager.send_message(json_send_message(cid1, "1"));
 		REQUIRE(!res.id.empty());
 		WAIT_CHECK_JSON(manager.get_messages(json_get_messages(cid1))
-			, json_get_messages_result({{2, res.id, "1", net_context.key_id(0)}}), 2s);
-		messages.push_back(json_message{2, res.id, "1", net_context.key_id(0)});
+			, json_get_messages_result({{1, res.id, "1", net_context.key_id(0)}}), 2s);
+		messages.push_back(json_message{1, res.id, "1", net_context.key_id(0)});
 	}
 
 
@@ -278,7 +278,7 @@ TEST_CASE("json_manager chat order test", "[system]") {
 		std::string m = print("%", i+2);
 		json_send_message_result res = manager.send_message(json_send_message(cid1, m));
 		REQUIRE(!res.id.empty());
-		messages.push_back(json_message{i+3, res.id, m, net_context.key_id(0)});
+		messages.push_back(json_message{i+2, res.id, m, net_context.key_id(0)});
 	}
 
 	WAIT_CHECK_JSON(manager.get_messages(json_get_messages(cid1))
@@ -355,7 +355,7 @@ TEST_CASE("json_manager chat order test", "[system]") {
 		json_send_message_result res = manager.send_message(json_send_message(cid2, "1"));
 		REQUIRE(!res.id.empty());
 		WAIT_CHECK_JSON(manager.get_messages(json_get_messages(cid2))
-			, json_get_messages_result({{2, res.id, "1", net_context.key_id(0)}}), 2s);
+			, json_get_messages_result({{1, res.id, "1", net_context.key_id(0)}}), 2s);
 	}
 	{
 		CHECK_JSON(manager.get_chats(""), json_get_chats_result({
@@ -384,8 +384,8 @@ TEST_CASE("json_manager chat order test", "[system]") {
 		json_send_message_result res = manager.send_message(json_send_message(cid1, "a"));
 		REQUIRE(!res.id.empty());
 		WAIT_CHECK_JSON(manager.get_messages(json_get_messages(cid1))
-			, json_get_messages_result({{11, res.id, "a", net_context.key_id(0)}}), 2s);
-		messages.push_back(json_message{11, res.id, "a", net_context.key_id(0)});
+			, json_get_messages_result({{10, res.id, "a", net_context.key_id(0)}}), 2s);
+		messages.push_back(json_message{10, res.id, "a", net_context.key_id(0)});
 	}
 	{
 		auto chats = list_chats(manager.get_chats(R"({"message": {"order": "descending"}})"));
@@ -434,7 +434,7 @@ TEST_CASE("json_manager message order test", "[system]") {
 		std::string m = print("%", i);
 		json_send_message_result res = manager.send_message(json_send_message(cid, m));
 		REQUIRE(!res.id.empty());
-		messages.push_back(json_message{i+2, res.id, m, net_context.key_id(0)});
+		messages.push_back(json_message{i+1, res.id, m, net_context.key_id(0)});
 	}
 
 	WAIT_CHECK_JSON(manager.get_messages(json_get_messages(cid))
@@ -449,6 +449,59 @@ TEST_CASE("json_manager message order test", "[system]") {
 	WAIT_CHECK_JSON(manager.get_messages(json_get_messages(cid, 100, false))
 		, json_get_messages_result(messages), 10s);
 
+
+	for(int i = 10; i != 69; ++i) {
+		std::string m = print("%", i);
+		json_send_message_result res = manager.send_message(json_send_message(cid, m));
+		REQUIRE(!res.id.empty());
+		messages.push_back(json_message{i+1, res.id, m, net_context.key_id(0)});
+	}
+	WAIT_CHECK_JSON(manager.get_messages(json_get_messages(cid))
+		, json_get_messages_result(messages), 10s);
+
+	manager.disconnect();
+	WAIT_CHECK(manager.has_disconnect_event(), 2s);
+
+	for(int i = 69; i != 81; ++i) {
+		std::string m = print("%", i);
+		json_send_message_result res = manager.send_message(json_send_message(cid, m));
+		REQUIRE(!res.id.empty());
+		messages.push_back(json_message{i+1, res.id, m, net_context.key_id(0)});
+	}
+
+	SECTION("desc chunking") {
+		int total_amount = messages.size();
+		std::size_t chuck_size = GENERATE(2, 12, 33);
+		while(total_amount > 0) {
+			auto list = list_messages(manager.get_messages(json_get_messages_chuck(cid, total_amount, chuck_size)));
+			REQUIRE(list.size() <= total_amount);
+			REQUIRE((list.size() == total_amount || list.size() == chuck_size));
+			for(int i = 0; i != list.size(); ++i) {
+				auto v = total_amount-i;
+				REQUIRE(list[i].message == std::to_string(v-1));
+				REQUIRE(list[i].index == v);
+				CHECK(list[i] == messages[v-1]);
+			}
+			total_amount -= list.size();
+		}
+	}
+
+	SECTION("asc chunking") {
+		int total_amount = messages.size();
+		std::size_t chuck_size = GENERATE(2, 12, 33);
+		while(total_amount > 0) {
+			auto list = list_messages(manager.get_messages(json_get_messages_chuck(cid, messages.size()-total_amount+1, chuck_size, false)));
+			REQUIRE(list.size() <= total_amount);
+			REQUIRE((list.size() == total_amount || list.size() == chuck_size));
+			for(int i = 0; i != list.size(); ++i) {
+				auto v = messages.size()-total_amount+i;
+				REQUIRE(list[i].message == std::to_string(v));
+				REQUIRE(list[i].index == v+1);
+				CHECK(list[i] == messages[v]);
+			}
+			total_amount -= list.size();
+		}
+	}
 }
 
 }

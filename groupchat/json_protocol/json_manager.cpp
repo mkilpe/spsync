@@ -36,7 +36,7 @@ struct chat_entry {
 bool chats_sort(chat_entry const& e1, chat_entry const& e2) {
 	if(e1.messages.empty()) { return false; }
 	if(e2.messages.empty()) { return true;  }
-	return e1.messages[0].time >= e2.messages[0].time;
+	return e1.messages[0].sender_time >= e2.messages[0].sender_time;
 }
 
 struct json_manager::impl
@@ -102,13 +102,22 @@ public:
 		notify(event_type::state_change, json::serialize(json::object{{"type", "chat"}, {"data", event}}));
 	}
 
-	void on_message(server_id sid, chat_id cid, message msg) {
+	void on_message(server_id sid, chat_id cid, message_data md, msg_change change) {
 		LOG_TRACE("json_manager::on_message [sid=%, cid=%]", sid, to_hex(cid));
+		json::object message{
+			{"message", md.message},
+			{"date", time_to_string(md.sender_time)},
+			{"index", change.new_index},
+			{"oldindex", change.old_index},
+			{"state", change.state == msg_state::in_sync ? "in_sync" : "pending"},
+			{"id", change.id.to_hex()},
+			{"sender", sender_to_object(md.sender)}};
+
 		json::object event{
 			{"action", "message"},
 			{"server", sid},
 			{"chat", to_hex(cid)},
-			{"message", message_to_object(msg)}};
+			{"message", message}};
 		notify(event_type::state_change, json::serialize(json::object{{"type", "chat"}, {"data", event}}));
 	}
 
@@ -172,20 +181,23 @@ public:
 		}
 	}
 
-	json::object message_to_object(message const& m) {
-		auto user_id = m.sender_id;
-		auto opt_contact = contacts().find(user_id);
+	json::object sender_to_object(user_id const& uid) {
+		auto opt_contact = contacts().find(uid);
 
 		return json::object{
+				{"name", opt_contact ? opt_contact->name() : uid.public_key_id().in_hex()},
+				{"id", uid.public_key_id().in_hex()},
+				{"contact", static_cast<bool>(opt_contact)}};
+	}
+
+	json::object message_to_object(message const& m) {
+		//t: indicate if the message was sent by us
+		return json::object{
 			{"message", m.data},
-			{"date", time_to_string(m.time)},
-			{"seq", m.seq.value},
+			{"date", time_to_string(m.sender_time)},
+			{"index", m.index},
 			{"id", m.mid.to_hex()},
-			{"sender", json::object{
-				{"name", opt_contact ? opt_contact->name() : user_id.public_key_id().in_hex()},
-				{"id", user_id.public_key_id().in_hex()},
-				{"contact", static_cast<bool>(opt_contact)}}}
-			};
+			{"sender", sender_to_object(m.sender_id)}};
 	}
 
 	std::vector<chat_entry> get_chats(std::optional<message_search> s) const {
@@ -328,8 +340,9 @@ std::string json_manager::get_chats(std::string_view const& arg) const {
 
 			if(msg_arg) {
 				s = message_search{
+						0,
 						static_cast<std::size_t>(msg_count),
-						message_order ? sync::record_order::seq_ascending : sync::record_order::seq_descending};
+						message_order ? msg_order::index_ascending : msg_order::index_descending};
 			}
 		}
 
@@ -475,9 +488,10 @@ std::string json_manager::get_messages(std::string_view const& arg) const {
 
 		message_search ms_option;
 
+		ms_option.start_index = extract_opt<int>(obj, "start").value_or(0);
 		ms_option.max_count = extract_opt<int>(obj, "count").value_or(0);
 		ms_option.order = (extract_opt<std::string>(obj, "order").value_or("descending") == "descending")
-			? sync::record_order::seq_descending : sync::record_order::seq_ascending;
+			? msg_order::index_descending : msg_order::index_ascending;
 
 		auto hp = impl_->channel_ids().find_server(cid);
 		if(!hp) {

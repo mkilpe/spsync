@@ -130,8 +130,8 @@ std::string json_join_chat_result(std::string id) {
 }
 
 std::string json_message_to_string(json_message const& m) {
-	return print(R"({"seq": %, "id": "%", "message": "%", "sender": { "id": "%" }})"
-			, m.seq, m.id, m.message, m.sender_kid.in_hex());
+	return print(R"({"index": %, "id": "%", "message": "%", "sender": { "id": "%" }})"
+			, m.index, m.id, m.message, m.sender_kid.in_hex());
 }
 
 std::string json_get_messages_result(std::vector<json_message> list) {
@@ -160,9 +160,18 @@ std::string json_get_messages(std::string id, std::optional<int> max, std::optio
 	return res;
 }
 
+std::string json_get_messages_chuck(std::string id, std::int64_t start, std::size_t count, std::optional<bool> descending) {
+	std::string res = print(R"({ "id": "%", "start": %, "count": %)", id, start, count);
+	if(descending) {
+		res += print(R"(, "order": "%")", *descending ? "descending" : "ascending");
+	}
+	res += "}";
+	return res;
+}
+
 static json_message plain_message(json::object const& obj) {
 	return json_message{
-				extract<int>(obj, "seq"),
+				extract<std::int64_t>(obj, "index"),
 				extract<std::string>(obj, "id"),
 				extract<std::string>(obj, "message"),
 				crypto::public_key_id{extract<std::string>(extract<json::object>(obj, "sender"), "id")}};
