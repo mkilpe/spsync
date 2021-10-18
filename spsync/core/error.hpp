@@ -7,9 +7,11 @@ namespace securepath::sync {
 
 enum class errc {
 	no_encryption_key_set = 0x1000,
+	no_encryption_key_found,
 	invalid_record_chain_state,
 	constraint_violation,
 	invalid_record_state,
+	not_authentic,
 	end_of_list
 };
 

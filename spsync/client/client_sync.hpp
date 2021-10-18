@@ -20,7 +20,7 @@ namespace securepath::sync {
 class client_sync : public key_value_cache {
 public:
 
-	client_sync(event_system::event_loop& loop, database::connection_ptr);
+	client_sync(network::context&, event_system::event_loop& loop, database::connection_ptr);
 	~client_sync();
 
 	void init(storage_id const& sid, network_connection& conn);

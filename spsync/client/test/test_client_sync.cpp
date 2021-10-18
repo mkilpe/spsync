@@ -16,7 +16,7 @@ namespace {
 class test_client : public client_sync, public event_system::event_handler {
 public:
 	test_client(event_system::event_loop& loop, network::context& context, std::string const& dbname)
-	: client_sync(loop, create_test_database(dbname))
+	: client_sync(context, loop, create_test_database(dbname))
 	, event_handler(loop)
 	, net(context, *this)
 	{}

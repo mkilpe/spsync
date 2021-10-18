@@ -46,6 +46,36 @@ plain_user_change_data encrypt_last_key_for_users(users const& us, crypto_contex
 	return ret;
 }
 
+error extract_single_data_changes(encryption_key_storage const& keys, record_handle rec, std::deque<single_data_change>& res) {
+	error err;
+
+	auto record = rec->record();
+	auto obj_rec = record.deserialise_to<sync::data_change_record>();
+
+	auto key = keys.find(obj_rec.encryption_key());
+	if(key) {
+		sync::data_change_record_verifier ver(*key, obj_rec, record.auth());
+		if(ver.is_authentic()) {
+			for(auto const& h : ver.headers()) {
+				res.push_back(
+					single_data_change{
+						h.data,
+						h.header,
+						rec->block_id().sequence,
+						rec->internal_id()});
+			}
+		} else {
+			LOG_WARN("message not authentic");
+			err = make_error(errc::not_authentic);
+		}
+	} else {
+		LOG_WARN("could not find key to decrypt message (seq=%)", obj_rec.encryption_key());
+		err = make_error(errc::no_encryption_key_found);
+	}
+
+	return err;
+}
+
 search_data_records::search_data_records(crypto_context& cc)
 : cc_(cc)
 {

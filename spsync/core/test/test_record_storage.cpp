@@ -344,10 +344,15 @@ TEST_CASE("record_storage pending commits", "[unit]") {
 	auto const tag_of_second_pending = creator.last_tag;
 
 	//still get the first pending
-	CHECK(storage.find_first_pending_commit());
-	CHECK(storage.find_first_pending_commit()->tag() == tag_of_first_pending);
+	auto fpending = storage.find_first_pending_commit();
+	REQUIRE(fpending);
+	CHECK(fpending->tag() == tag_of_first_pending);
 	CHECK(storage.last_block().sequence == initial_seq);
 	CHECK(storage.last_block(true).sequence == creator.last_server_seq);
+
+	auto second_pending = storage.find_next_pending_commit(fpending);
+	REQUIRE(second_pending);
+	CHECK(second_pending->tag() == tag_of_second_pending);
 
 	auto record = creator.test_data_change();
 	record.set_sequence_and_parent_hash(sequence_number{2}, initial_hash);

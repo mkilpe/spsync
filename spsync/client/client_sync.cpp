@@ -22,11 +22,14 @@ namespace {
 
 struct client_sync::impl : engine_output {
 
-	impl(client_sync* parent, event_system::event_loop& loop, database::connection_ptr db)
+	impl(client_sync* parent, network::context& cc, event_system::event_loop& loop, database::connection_ptr db)
 	: engine_output(loop)
 	, parent(parent)
 	, db(db)
 	, progress(loop)
+	, storage(db)
+	, enc_keys(db)
+	, crypto(cc.public_keys(), cc.private_data(), enc_keys, storage)
 	{
 		if(!db->has_table("members")) {
 			std::string prepare_str =
@@ -43,16 +46,8 @@ struct client_sync::impl : engine_output {
 	}
 
 	void init(storage_id const& sid, network_connection& conn) {
-		storage = std::make_unique<record_storage>(db);
-		enc_keys = std::make_unique<encryption_key_storage>(db);
-		crypto = std::make_unique<sync::crypto_context>(
-			conn.context().public_keys(),
-			conn.context().private_data(),
-			*enc_keys,
-			*storage);
-
-		storage_connection sconn{conn.create_storage_connection(sid, *storage, progress)};
-		engine = std::make_unique<sync_engine>(event_loop(), sconn.input(), *crypto, sync_engine_config{});
+		storage_connection sconn{conn.create_storage_connection(sid, storage, progress)};
+		engine = std::make_unique<sync_engine>(event_loop(), sconn.input(), crypto, sync_engine_config{});
 		engine->set_output(this);
 
 		//after this the events will be received
@@ -61,45 +56,28 @@ struct client_sync::impl : engine_output {
 
 	record_handle create_initial_record(users us, metadata mdata) {
 		assert(engine);
-		assert(enc_keys);
-		enc_keys->create_key();
+		enc_keys.create_key();
 		update_members(us);
-		return engine->sync_user_change(encrypt_last_key_for_users(us, *crypto), std::move(mdata));
+		return engine->sync_user_change(encrypt_last_key_for_users(us, crypto), std::move(mdata));
 	}
 
 
 	void on_object_data_changed(record_handle rec) override {
 		assert(engine);
 
-		auto record = rec->record();
-		auto obj_rec = record.deserialise_to<sync::data_change_record>();
+		std::deque<single_data_change> res;
+		error err = extract_single_data_changes(enc_keys, rec, res);
 
-		auto key = enc_keys->find(obj_rec.encryption_key());
-		if(key) {
-			sync::data_change_record_verifier ver(*key, obj_rec, record.auth());
-			if(ver.is_authentic()) {
-				std::deque<single_data_change> res;
-				for(auto const& h : ver.headers()) {
-					res.push_back(
-						single_data_change{
-							h.data,
-							h.header,
-							record.sequence(),
-							rec->internal_id()});
-				}
-				if(!res.empty()) {
-					parent->on_data_change(rec, std::move(res));
-				}
-			} else {
-				LOG_WARN("message not authentic");
-			}
-		} else {
-			LOG_WARN("could not find key to decrypt message (seq=%)", obj_rec.encryption_key());
+		//t: how to handle errors here?
+
+		if(!err && !res.empty()) {
+			parent->on_data_change(rec, std::move(res));
 		}
 	}
 
 	//todo: handle return correct for higher level notification
 	users process_user_change(plain_user_change_data const& change) {
+		LOG_TRACE("process_user_change [users=%]", change.access());
 		users delta;
 		auto us = change.access();
 		database::transaction trans{*db};
@@ -116,10 +94,13 @@ struct client_sync::impl : engine_output {
 				member_status status;
 				auto k = find_member(v.user, status);
 				if(k && v.access == util::access_type::no_access) {
+					LOG_TRACE("process_user_change remove [user=%]", v.user);
 					remove_member(v.user);
 				} else if(!k) {
+					LOG_TRACE("process_user_change create [user=%]", v.user);
 					create_member(v.user, member_status::member);
 				} else {
+					LOG_TRACE("process_user_change set [user=%]", v.user);
 					set_member_status(v.user, member_status::member);
 				}
 			}
@@ -133,7 +114,7 @@ struct client_sync::impl : engine_output {
 		auto record = rec->record();
 		auto user_rec = record.deserialise_to<sync::user_change_record>();
 
-		auto key = enc_keys->find(user_rec.encryption_key());
+		auto key = enc_keys.find(user_rec.encryption_key());
 		if(key) {
 			sync::user_change_record_verifier ver(*key, user_rec, record.auth());
 			if(ver.is_authentic()) {
@@ -190,7 +171,7 @@ struct client_sync::impl : engine_output {
 	}
 
 	void update_members(users const& us) {
-		if(us.mode() != users_change_mode::delta) {
+		if(us.mode() == users_change_mode::delta) {
 			for(auto v : us.access()) {
 				member_status status;
 				if(find_member(v.user, status)) {
@@ -218,7 +199,7 @@ struct client_sync::impl : engine_output {
 			throw make_error(securepath::errc::invalid_data, "users change is not in delta mode");
 		}
 		update_members(us);
-		engine->sync_user_change(encrypt_last_key_for_users(us, *crypto), metadata{});
+		engine->sync_user_change(encrypt_last_key_for_users(us, crypto), metadata{});
 	}
 
 public:
@@ -227,15 +208,15 @@ public:
 
 	dummy_progress progress;
 
-	std::unique_ptr<record_storage> storage;
-	std::unique_ptr<encryption_key_storage> enc_keys;
-	std::unique_ptr<sync::crypto_context> crypto;
+	record_storage storage;
+	encryption_key_storage enc_keys;
+	sync::crypto_context crypto;
 
 	std::unique_ptr<sync_engine> engine;
 };
 
-client_sync::client_sync(event_system::event_loop& loop, database::connection_ptr db)
-: impl_(std::make_unique<impl>(this, loop, db))
+client_sync::client_sync(network::context& context, event_system::event_loop& loop, database::connection_ptr db)
+: impl_(std::make_unique<impl>(this, context, loop, db))
 {
 	add_backend(std::make_shared<key_value_database>(db, "storage_metadata", 0));
 }
@@ -253,13 +234,17 @@ void client_sync::stop_handler() {
 }
 
 record_handle client_sync::send_data_change(object_id oid, metadata mdata, record_data_handle dhandle) {
-	assert(impl_->engine);
+	if(!impl_->engine) {
+		throw make_error(securepath::errc::invalid_state, "client sync engine not initialised yet");
+	}
 	return impl_->engine->sync_object_change(std::move(oid), std::move(mdata), dhandle);
 }
 
 record_handle client_sync::send_user_change(users us, metadata mdata) {
-	assert(impl_->engine);
-	if(!impl_->storage->last_block().is_valid()) {
+	if(!impl_->engine) {
+		throw make_error(securepath::errc::invalid_state, "client sync engine not initialised yet");
+	}
+	if(!impl_->storage.last_block().is_valid()) {
 		return impl_->create_initial_record(std::move(us), std::move(mdata));
 	} else {
 		impl_->update_members(us);
@@ -313,8 +298,7 @@ void client_sync::apply(users const& us) {
 }
 
 sync::crypto_context& client_sync::crypto_context() const {
-	assert(impl_->crypto);
-	return *impl_->crypto;
+	return impl_->crypto;
 }
 
 }

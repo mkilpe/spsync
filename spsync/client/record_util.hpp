@@ -12,8 +12,9 @@
 
 namespace securepath::sync {
 
-std::optional<util::metadata> extract_single_object_meta(encryption_key_storage const& keys, record_handle h);
+std::optional<util::metadata> extract_single_object_meta(encryption_key_storage const&, record_handle);
 plain_user_change_data encrypt_last_key_for_users(users const& us, crypto_context& cc);
+error extract_single_data_changes(encryption_key_storage const&, record_handle, std::deque<single_data_change>&);
 
 enum class record_order {
 	seq_ascending,

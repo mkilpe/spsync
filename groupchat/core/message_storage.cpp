@@ -1,6 +1,17 @@
 #include "message_storage.hpp"
 
+#include <securepath/serialisation/sequence.hpp>
+#include <spsync/client/record_util.hpp>
+
 namespace securepath::groupchat {
+
+/*
+	We are mapping record storage structure to messages structure.
+	Single record can have multiple changes, and hence multiple messages
+	can have the same record sequence number (and internal id) but
+	the assigned key (index) is unique and fully ordered.
+
+*/
 
 message_storage::message_storage(database::connection_ptr db)
 : db_(db)
@@ -11,7 +22,8 @@ message_storage::message_storage(database::connection_ptr db)
 			"CREATE TABLE sync_msg("
 				"key INTEGER PRIMARY KEY,"
 				"id BLOB UNIQUE,"
-				"data BLOB);";
+				"data BLOB,"
+				"seq INTEGER);";
 		db->prepare(prepare_str).execute();
 	}
 	if(!db->has_table("sync_pending_msg")) {
@@ -20,7 +32,8 @@ message_storage::message_storage(database::connection_ptr db)
 			"CREATE TABLE sync_pending_msg("
 				"key INTEGER PRIMARY KEY,"
 				"id BLOB UNIQUE,"
-				"data BLOB);";
+				"data BLOB,"
+				"iid INTEGER);";
 		db->prepare(prepare_str).execute();
 	}
 
@@ -32,24 +45,30 @@ message_storage::message_storage(database::connection_ptr db)
 	LOG_TRACE("message_storage, max sync key = %", sync_max_index_);
 }
 
-msg_change message_storage::insert(message_id const& id, message_data const& md, msg_state state) {
+msg_change message_storage::insert(message_id const& id, msg_data const& md, msg_state state) {
+	LOG_TRACE("message_storage::insert [id=%, md.seq=%, md.iid=%, state=%]", id, md.seq, md.iid, int(state));
+
 	std::string prep;
 	std::int64_t index_base = 0;
 	std::int64_t old_index = 0;
 
-	std::unique_lock l{mutex_};
 	database::transaction t{*db_};
 
 	if(state == msg_state::in_sync) {
 		old_index = update_pending(id);
-		prep = "INSERT INTO sync_msg(id, data) VALUES(:id, :data)";
+		prep = "INSERT INTO sync_msg(id, data, seq) VALUES(:id, :data, :seq)";
 	} else {
-		prep = "INSERT INTO sync_pending_msg(id, data) VALUES(:id, :data)";
+		prep = "INSERT INTO sync_pending_msg(id, data, iid) VALUES(:id, :data, :iid)";
 		index_base = sync_max_index_;
 	}
 	auto q = db_->prepare(prep);
 	q.bind(":id", id.value());
 	q.bind(":data", serialisation::asn_der_serialise(md));
+	if(state == msg_state::in_sync) {
+		q.bind(":seq", md.seq.value);
+	} else {
+		q.bind(":iid", md.iid);
+	}
 	q.execute();
 
 	if(state == msg_state::in_sync)  {
@@ -115,7 +134,7 @@ void message_storage::get_in_sync(message_search s, std::deque<message>& ret) co
 	for(; res; res.next()) {
 		std::int64_t index = res.value<std::int64_t>(0).value();
 		octet_vector id = res.value<octet_vector>(1).value();
-		message_data md = serialisation::asn_der_deserialise<message_data>(res.value<octet_vector>(2).value());
+		auto md = serialisation::asn_der_deserialise<msg_data>(res.value<octet_vector>(2).value());
 		ret.push_back(message{md.message, user_id{md.sender}, message_id{id}, md.sender_time, index, msg_state::in_sync});
 	}
 }
@@ -129,14 +148,13 @@ void message_storage::get_pending(message_search s, std::deque<message>& ret) co
 	for(; res; res.next()) {
 		std::int64_t index = res.value<std::int64_t>(0).value();
 		octet_vector id = res.value<octet_vector>(1).value();
-		message_data md = serialisation::asn_der_deserialise<message_data>(res.value<octet_vector>(2).value());
+		auto md = serialisation::asn_der_deserialise<msg_data>(res.value<octet_vector>(2).value());
 		ret.push_back(message{md.message, user_id{md.sender}, message_id{id}, md.sender_time, sync_max_index_+index, msg_state::pending});
 	}
 }
 
 std::deque<message> message_storage::get(message_search s) const {
 	std::deque<message> ret;
-	std::unique_lock l{mutex_};
 
 	if(s.order == msg_order::index_ascending) {
 		// see if the start index is in the sync messages
@@ -162,6 +180,54 @@ std::deque<message> message_storage::get(message_search s) const {
 		}
 	}
 	return ret;
+}
+
+sync::sequence_number message_storage::latest_sequence() const {
+	auto q = db_->prepare("SELECT max(seq) FROM sync_msg;");
+	auto res = q.execute();
+	return sync::sequence_number{res ? res.value<std::uint64_t>(0).value_or(0) : 0};
+}
+
+static void handle_messages(message_storage& messages, std::deque<sync::single_data_change> const& changes, msg_state state) {
+	for(auto const& c : changes) {
+		// check the previous oid for data record to ensure compatibility in the later versions when we do use it
+		if(c.data.previous_oid_record_tag.empty()) {
+			auto opt = c.header.metadata().find<message_data>(groupchat_message_id);
+			if(opt) {
+				// insert to message storage
+				msg_data data{*opt, c.internal_id, c.seq};
+				messages.insert(c.data.id, data, state);
+			}
+		}
+	}
+}
+
+void sync_message_storage(message_storage& messages, sync::record_storage const& records, sync::encryption_key_storage const& keys) {
+	auto m_last = messages.latest_sequence();
+	auto r_last = records.last_block().sequence;
+
+	LOG_TRACE("sync_message_storage [m_last=%, r_last=%]", m_last, r_last);
+
+	++m_last; // the m_last seq we already have
+	for(; m_last <= r_last; ++m_last) {
+		auto handle = records.find(m_last);
+		if(handle && handle->type() == sync::record_type_tag::data_change_record_tag) {
+			std::deque<sync::single_data_change> res;
+			error err = extract_single_data_changes(keys, handle, res);
+			if(!err) {
+				handle_messages(messages, res, msg_state::in_sync);
+			}
+		}
+	}
+	for(auto h = records.find_first_pending_commit(); h; h = records.find_next_pending_commit(h)) {
+		if(h->type() == sync::record_type_tag::data_change_record_tag) {
+			std::deque<sync::single_data_change> res;
+			error err = extract_single_data_changes(keys, h, res);
+			if(!err) {
+				handle_messages(messages, res, msg_state::pending);
+			}
+		}
+	}
 }
 
 }

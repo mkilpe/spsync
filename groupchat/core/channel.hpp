@@ -34,10 +34,12 @@ private:
 	void on_user_change(sync::record_handle, sync::user_change) override;
 
 private:
+	mutable std::mutex mutex_;
 	chat_conn_context& ccontext_;
 	chat_id const chat_id_;
 	users initial_members_;
 	message_storage messages_;
+	database::connection_ptr db_;
 };
 
 }

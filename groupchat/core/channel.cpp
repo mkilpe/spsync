@@ -25,12 +25,15 @@ channel::channel(chat_conn_context& context, chat_id const& cid)
 }
 
 channel::channel(chat_conn_context& context, chat_id const& cid, database::connection_ptr db)
-: client_sync(context.callback.event_loop(), db)
+: client_sync(context.context, context.callback.event_loop(), db)
 , ccontext_(context)
 , chat_id_(cid)
 , messages_(db)
+, db_(db)
 {
-	//t: check messages database is in sync with record storage
+	// make sure we are in sync with record storage and messages storage in case the application
+	// was interrupted in between updating the messages storage
+	sync_message_storage(messages_, crypto_context().records(), crypto_context().enc_keys());
 }
 
 channel::~channel() {
@@ -43,21 +46,32 @@ std::string channel::name() const {
 
 void channel::set_data(std::string name, users members) {
 	insert(gc_name_tag, name);
+
+	std::unique_lock l{mutex_};
 	initial_members_ = members;
 }
 
 void channel::on_data_change(sync::record_handle rec, std::deque<sync::single_data_change> changes) {
 	LOG_TRACE("on_object_data_changed [count=%]", changes.size());
-	for(auto const& c : changes) {
-		auto opt = c.header.metadata().find<message_data>(groupchat_message_id);
-		if(opt) {
-			// insert to message storage
-			auto change = messages_.insert(c.data.id, *opt, msg_state::in_sync);
 
-			// notify higher level
-			ccontext_.callback.emit<events::on_message>(ccontext_.sid, chat_id_, *opt, change);
+	std::unique_lock l{mutex_};
+	database::transaction t{*db_};
+
+	for(auto const& c : changes) {
+		// check the previous oid for data record to ensure compatibility in the later versions when we do use it
+		if(c.data.previous_oid_record_tag.empty()) {
+			auto opt = c.header.metadata().find<message_data>(groupchat_message_id);
+			if(opt) {
+				// insert to message storage
+				msg_data data{*opt, c.internal_id, c.seq};
+				auto change = messages_.insert(c.data.id, data, msg_state::in_sync);
+				// notify higher level
+				ccontext_.callback.emit<events::on_message>(ccontext_.sid, chat_id_, *opt, change);
+			} else {
+				LOG_WARN("invalid record, no groupchat message found");
+			}
 		} else {
-			LOG_WARN("invalid record, no groupchat message found");
+			LOG_WARN("data record with parent? (using old version of client?)");
 		}
 	}
 }
@@ -85,6 +99,7 @@ void channel::create_initial_record() {
 	auto my_key = my_private_key(ccontext_.context.private_data()); //notice this is hack, see message.hpp
 	header.insert(groupchat_creator_id, user_id{my_key.id()});
 
+	std::unique_lock l{mutex_};
 	sync::users initial = initial_members_;
 	// always add ourself
 	initial.add(sync::util::user_access{own_key->id(), sync::util::access_type::user_management_access});
@@ -97,14 +112,19 @@ message channel::send_message(std::string const& msg) {
 	sync::metadata header;
 	header.insert(groupchat_message_id, chat_msg);
 	auto msg_id = sync::util::create_object_id();
-	send_data_change(msg_id, std::move(header));
 
-	//t: we need to make sure this insert happens before the on_data_change callback for the same message
-	auto change = messages_.insert(msg_id, chat_msg, msg_state::pending);
+	// lock mutex for send_data_change too to make sure the insert after it is always done before events come in
+	std::unique_lock l{mutex_};
+	auto handle = send_data_change(msg_id, std::move(header));
+
+	msg_data data{chat_msg, handle->internal_id()};
+	auto change = messages_.insert(msg_id, data, msg_state::pending);
+
 	return message{msg, chat_msg.sender, msg_id, chat_msg.sender_time, change.new_index, change.state};
 }
 
 std::deque<message> channel::messages(message_search ms) const {
+	std::unique_lock l{mutex_};
 	return messages_.get(ms);
 }
 

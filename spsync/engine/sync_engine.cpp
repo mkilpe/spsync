@@ -38,7 +38,6 @@ public:
 		if(output) {
 			auto tag = h->type();
 			if(tag == user_change_record_tag) {
-				extract_encryption_key(h->record());
 				output->emit<engine_events::on_user_changed>(h);
 			} else if(tag == data_change_record_tag) {
 				output->emit<engine_events::on_object_data_changed>(h);
@@ -259,12 +258,12 @@ public:
 				auto enc_key = crypto.enc_keys().find(rec.encryption_key());
 				if(!enc_key) {
 					LWARN("could not find encryption key for pending commit (key=%)", rec.encryption_key());
-					throw error(errc::constraint_violation, "could not find encryption key for pending commit");
+					throw error(errc::no_encryption_key_found, "could not find encryption key for pending commit");
 				}
 
 				record_verifier<std::decay_t<decltype(rec)>> ver(*enc_key, rec, record.auth());
 				if(!ver.is_authentic()) {
-					throw make_error(errc::constraint_violation, "failed to authenticate record");
+					throw make_error(errc::not_authentic, "failed to authenticate record");
 				}
 
 				return chain_block{update_record(*enc_key, ver)};

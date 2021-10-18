@@ -429,6 +429,8 @@ TEST_CASE("json_manager message order test", "[system]") {
 	REQUIRE(!cc_res.result.id.empty());
 	std::string cid = cc_res.result.id;
 
+	WAIT_CHECK(manager.has_create_event(cid), 2s);
+
 	std::vector<json_message> messages;
 	for(int i = 0; i != 10; ++i) {
 		std::string m = print("%", i);

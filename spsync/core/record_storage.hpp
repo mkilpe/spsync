@@ -58,6 +58,9 @@ public:
 	/// find the first record that is waiting to be committed
 	record_handle find_first_pending_commit() const;
 
+	/// find next pending commit after the given record (must be pending commit)
+	record_handle find_next_pending_commit(record_handle) const;
+
 
 	// -- per object operations --
 

@@ -390,9 +390,18 @@ record_handle record_storage::find_tag(octet_vector const& tag) const {
 
 record_handle record_storage::find_first_pending_commit() const {
 	auto q = impl_->db->prepare(
-		"SELECT key, tag, seq, hash, parent_hash, state FROM record WHERE state = :state;"
-		" ORDER BY seq ASC, key ASC LIMIT 1");
+		"SELECT key, tag, seq, hash, parent_hash, state FROM record WHERE state = :state"
+		" ORDER BY key ASC LIMIT 1");
 	q.bind(":state", static_cast<std::int64_t>(record_state::pending_commit));
+	return impl_->load_record(q.execute());
+}
+
+record_handle record_storage::find_next_pending_commit(record_handle h) const {
+	auto q = impl_->db->prepare(
+		"SELECT key, tag, seq, hash, parent_hash, state FROM record WHERE state = :state AND key > :key"
+		" ORDER BY key ASC LIMIT 1");
+	q.bind(":state", static_cast<std::int64_t>(record_state::pending_commit));
+	q.bind(":key", h->internal_id());
 	return impl_->load_record(q.execute());
 }
 
