@@ -195,7 +195,7 @@ static void handle_messages(message_storage& messages, std::deque<sync::single_d
 			auto opt = c.header.metadata().find<message_data>(groupchat_message_id);
 			if(opt) {
 				// insert to message storage
-				msg_data data{*opt, c.internal_id, c.seq};
+				msg_data data{*opt, c.signer.value_or(crypto::public_key_id{}), c.internal_id, c.seq};
 				messages.insert(c.data.id, data, state);
 			}
 		}

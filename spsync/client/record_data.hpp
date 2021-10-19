@@ -15,11 +15,17 @@ struct single_data_change {
 
 	//unique id to look up the record from record storage
 	record_internal_id internal_id;
+
+	//if the record is signed, this contains the public key id that was used to sign it
+	std::optional<crypto::public_key_id> signer;
 };
 
 struct user_change {
 	users members;
 	util::metadata metadata;
+
+	//if the record is signed, this contains the public key id that was used to sign it
+	std::optional<crypto::public_key_id> signer;
 };
 
 }

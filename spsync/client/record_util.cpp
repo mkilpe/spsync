@@ -62,7 +62,8 @@ error extract_single_data_changes(encryption_key_storage const& keys, record_han
 						h.data,
 						h.header,
 						rec->block_id().sequence,
-						rec->internal_id()});
+						rec->internal_id(),
+						record.auth().signature_issuer()});
 			}
 		} else {
 			LOG_WARN("message not authentic");

@@ -1,7 +1,11 @@
 #ifndef SPSYNC_UTIL_CONTENT_AUTH_HEADER
 #define SPSYNC_UTIL_CONTENT_AUTH_HEADER
 
+#include <securepath/crypto/error.hpp>
 #include <securepath/crypto/signature.hpp>
+#include <securepath/crypto/private_key.hpp>
+#include <securepath/crypto/public_key_access.hpp>
+
 #include <securepath/serialisation/types.hpp>
 
 namespace securepath::sync::util {
@@ -11,23 +15,24 @@ namespace securepath::sync::util {
  */
 class content_auth {
 public:
-	explicit content_auth(octet_vector tag = {})
-	: gcm_tag_(std::move(tag))
-	{}
+	explicit content_auth(octet_vector tag = {});
 
 	/// Returns the AES GCM tag that protects the content
-	octet_vector tag() const { return gcm_tag_; }
+	octet_vector tag() const;
 
-	bool operator==(content_auth const& auth) const {
-		return gcm_tag_ == auth.gcm_tag_ &&
-			bool(signature_) == bool(auth.signature_) &&
-			(!signature_ || *signature_ == *auth.signature_) &&
-			trailing_data_ == auth.trailing_data_;
-	}
+	/// Sign the tag
+	void sign(crypto::private_key const& key);
 
-	bool operator!=(content_auth const& auth) {
-		return !(*this == auth);
-	}
+	/// check if the signature is present
+	bool has_signature() const;
+
+	std::optional<crypto::public_key_id> signature_issuer() const;
+
+	/// verify the signature
+	error verify(crypto::public_key_access const&) const;
+
+	bool operator==(content_auth const& auth) const;
+	bool operator!=(content_auth const& auth) const;
 
 	template<typename Ar>
 	void serialise(Ar& ar) {

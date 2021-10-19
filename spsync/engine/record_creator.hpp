@@ -17,7 +17,7 @@ namespace securepath::sync {
 class record_creator_base {
 public:
 	/// construct to create the record_base which is common to all records and initialise encryption+authentication
-	record_creator_base(encryption_key const& key, chain_block_id last_seen);
+	record_creator_base(encryption_key const& key, chain_block_id last_seen, std::optional<crypto::private_key> = std::nullopt);
 
 	/// Returns authentication tag for the record, this can be called only once after constructing the record has been done
 	util::content_auth authentication_tag();
@@ -25,6 +25,7 @@ public:
 protected:
 	record_base base_;
 	crypto::auth_stream_cipher_ptr encryptor_;
+	std::optional<crypto::private_key> signer_;
 };
 
 /**

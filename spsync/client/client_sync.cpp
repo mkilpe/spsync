@@ -22,7 +22,7 @@ namespace {
 
 struct client_sync::impl : engine_output {
 
-	impl(client_sync* parent, network::context& cc, event_system::event_loop& loop, database::connection_ptr db)
+	impl(client_sync* parent, network::context& cc, event_system::event_loop& loop, database::connection_ptr db, sync_engine_config config)
 	: engine_output(loop)
 	, parent(parent)
 	, db(db)
@@ -30,6 +30,7 @@ struct client_sync::impl : engine_output {
 	, storage(db)
 	, enc_keys(db)
 	, crypto(cc.public_keys(), cc.private_data(), enc_keys, storage)
+	, config(std::move(config))
 	{
 		if(!db->has_table("members")) {
 			std::string prepare_str =
@@ -47,7 +48,7 @@ struct client_sync::impl : engine_output {
 
 	void init(storage_id const& sid, network_connection& conn) {
 		storage_connection sconn{conn.create_storage_connection(sid, storage, progress)};
-		engine = std::make_unique<sync_engine>(event_loop(), sconn.input(), crypto, sync_engine_config{});
+		engine = std::make_unique<sync_engine>(event_loop(), sconn.input(), crypto, config);
 		engine->set_output(this);
 
 		//after this the events will be received
@@ -119,7 +120,11 @@ struct client_sync::impl : engine_output {
 			sync::user_change_record_verifier ver(*key, user_rec, record.auth());
 			if(ver.is_authentic()) {
 				process_user_change(ver.data());
-				parent->on_user_change(rec, user_change{ver.data().access(), ver.header().metadata()});
+				parent->on_user_change(rec,
+					user_change{
+						ver.data().access(),
+						ver.header().metadata(),
+						record.auth().signature_issuer()});
 			} else {
 				LOG_WARN("message not authentic");
 			}
@@ -213,10 +218,12 @@ public:
 	sync::crypto_context crypto;
 
 	std::unique_ptr<sync_engine> engine;
+
+	sync_engine_config config;
 };
 
-client_sync::client_sync(network::context& context, event_system::event_loop& loop, database::connection_ptr db)
-: impl_(std::make_unique<impl>(this, context, loop, db))
+client_sync::client_sync(network::context& context, event_system::event_loop& loop, database::connection_ptr db, sync_engine_config config)
+: impl_(std::make_unique<impl>(this, context, loop, db, std::move(config)))
 {
 	add_backend(std::make_shared<key_value_database>(db, "storage_metadata", 0));
 }

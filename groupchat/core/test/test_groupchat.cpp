@@ -53,7 +53,7 @@ public:
 
 	}
 	/// called when chat message received
-	void on_message(server_id, chat_id id, message_data md, msg_change change) {
+	void on_message(server_id, chat_id id, msg_data md, msg_change change) {
 	}
 
 

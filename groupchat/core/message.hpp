@@ -40,12 +40,10 @@ struct message_data {
 	std::string message;
 	time_point sender_time;
 
-	user_id sender; //t: this is hack, need to implement signing of records
-
 	template<typename Ar>
 	void serialise(Ar& ar) {
 		serialisation::sequence<Ar> seq(ar);
-		seq & message & sender_time & sender;
+		seq & message & sender_time;
 	}
 };
 

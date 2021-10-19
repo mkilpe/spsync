@@ -22,7 +22,7 @@ storage::storage(protocol::storage_id id, storage_config config)
 
 	auto db_conn = database::sqlite::create_sqlite_connection(db);
 	//t: read from db
-	chain_sync_config sync_config{sync_mode::require_all_seen, to_hex(id_)};
+	chain_sync_config sync_config{sync_mode::require_all_seen, auth_mode::only_tag, to_hex(id_)};
 
 	sync_ = std::make_unique<chain_sync>(db_conn, sync_config);
 }

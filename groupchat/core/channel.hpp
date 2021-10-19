@@ -40,6 +40,7 @@ private:
 	users initial_members_;
 	message_storage messages_;
 	database::connection_ptr db_;
+	crypto::public_key_id const my_key_id_;
 };
 
 }

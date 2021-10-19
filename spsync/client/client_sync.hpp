@@ -6,6 +6,7 @@
 #include <spsync/core/crypto_context.hpp>
 #include <spsync/core/record_interface.hpp>
 #include <spsync/comm/net_connection.hpp>
+#include <spsync/engine/sync_engine_config.hpp>
 
 #include <securepath/common/key_value_cache.hpp>
 #include <securepath/database/connection.hpp>
@@ -20,7 +21,7 @@ namespace securepath::sync {
 class client_sync : public key_value_cache {
 public:
 
-	client_sync(network::context&, event_system::event_loop& loop, database::connection_ptr);
+	client_sync(network::context&, event_system::event_loop& loop, database::connection_ptr, sync_engine_config = {});
 	~client_sync();
 
 	void init(storage_id const& sid, network_connection& conn);

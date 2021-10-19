@@ -8,16 +8,21 @@
 
 namespace securepath::sync {
 
-record_creator_base::record_creator_base(encryption_key const& key, chain_block_id last_seen)
+record_creator_base::record_creator_base(encryption_key const& key, chain_block_id last_seen, std::optional<crypto::private_key> signer)
 : base_(std::move(last_seen), crypto::random_octet_vector(crypto::aes_gcm_iv_size()), key.key_seq)
 , encryptor_(crypto::create_aes_gcm_stream_encryptor(key.key, base_.iv()))
+, signer_(signer)
 {
 	// authenticate the base first
 	encryptor_->process_auth(serialisation::asn_der_serialise(base_));
 }
 
 util::content_auth record_creator_base::authentication_tag() {
-	return util::content_auth{encryptor_->tag()};
+	auto auth = util::content_auth{encryptor_->tag()};
+	if(signer_) {
+		auth.sign(*signer_);
+	}
+	return auth;
 }
 
 

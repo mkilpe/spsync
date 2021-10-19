@@ -52,7 +52,7 @@ void cli_groupchat::on_join(server_id sid, chat_id cid, error) {
 	win_.add_message(0, to_wstring(s));
 }
 
-void cli_groupchat::on_message(server_id, chat_id, message_data md, msg_change change) {
+void cli_groupchat::on_message(server_id, chat_id, msg_data md, msg_change change) {
 	//auto s = print("%> %", m.sender_nick, m.data);
 	//win_.add_message(0, to_wstring(s));
 }

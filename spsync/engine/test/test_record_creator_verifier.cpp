@@ -27,9 +27,11 @@ using namespace securepath::test;
 
 // (1)
 TEST_CASE("data_change_record_creator single", "[unit]") {
+	std::optional<crypto::private_key> signer = GENERATE(std::nullopt, crypto::generate_rsa_private_key(1024));
+
 	encryption_key key{1, random_octet_vector(crypto::aes_gcm_key_size())};
 	octet_vector prevhash = to_octet_vector("test tag");
-	data_change_record_creator creator(key, chain_block_id{sequence_number{1}, prevhash});
+	data_change_record_creator creator(key, chain_block_id{sequence_number{1}, prevhash}, signer);
 
 	object_id oid{to_octet_vector("test id")};
 	record_tag prev_oid_tag{to_octet_vector("prev oid test tag")};
@@ -41,6 +43,15 @@ TEST_CASE("data_change_record_creator single", "[unit]") {
 	auth_record<data_change_record> rec = creator.result();
 	CHECK(rec.record.last_seen_block().sequence == sequence_number{1});
 	CHECK(rec.record.last_seen_block().hash == prevhash);
+
+	if(signer) {
+		crypto::public_key_cache keys;
+		keys.insert(signer->public_key());
+		CHECK(rec.auth.has_signature());
+		CHECK(!rec.auth.verify(keys));
+	} else {
+		CHECK(!rec.auth.has_signature());
+	}
 
 	// verify authenticity and decrypt
 	data_change_record_verifier ver(key, rec.record, rec.auth);

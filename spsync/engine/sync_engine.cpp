@@ -167,6 +167,8 @@ public:
 			}
 		} else {
 			LWARN("Record is not authentic [block id = %, tag = %]", id, to_hex(record.tag()));
+			//q: save the invalid record or not?
+			//records.create(record, record_state::invalid);
 		}
 	}
 
@@ -187,7 +189,7 @@ public:
 					verify_block(*enc_key, record, id, rec);
 				} else {
 					LINFO("Failed to extract encryption key from first record");
-					//t: how to handle?
+					records.create(record, record_state::pending_sync);
 				}
 			} else {
 				LINFO("No valid key for record [block id = %, tag = %, key id = %]", id, to_hex(record.tag()), rec.encryption_key());
@@ -197,11 +199,16 @@ public:
 		}
 	}
 
+	bool is_structurally_valid(chain_block const& record) const {
+		// check we have signature if such is required
+		return config.auth_mode != auth_mode::sign_records || record.auth().has_signature();
+	}
+
 	void handle_incoming_record(chain_block const& record) {
 		chain_block_id id{record.id()};
 		LINFO("received record block [block id = %, tag = %]", id, to_hex(record.tag()));
 
-		if(id.is_valid()) {
+		if(id.is_valid() && is_structurally_valid(record)) {
 			auto handle = records.find_tag(record.tag());
 			if(!handle) {
 				record.deserialise_record([&](auto const& rec) {
@@ -218,7 +225,13 @@ public:
 	auth_record<data_change_record> update_record(encryption_key const& key, data_change_record_verifier& ver) const {
 		auto last_block = records.last_block();
 		LINFO("updating last block to %", last_block);
-		data_change_record_creator creator(key, last_block);
+
+		std::optional<crypto::private_key> signer;
+		if(config.auth_mode == auth_mode::sign_records) {
+			signer = my_private_key(crypto.private_data());
+		}
+
+		data_change_record_creator creator(key, last_block, signer);
 		for(auto const& r : ver.headers()) {
 			//f: conflict handling
 			if(!r.data.previous_oid_record_tag.empty()) {
@@ -234,7 +247,13 @@ public:
 	auth_record<user_change_record> update_record(encryption_key const& key, user_change_record_verifier& ver) const {
 		auto last_block = records.last_block();
 		LINFO("updating last block to %", last_block);
-		user_change_record_creator creator(key, last_block);
+
+		std::optional<crypto::private_key> signer;
+		if(config.auth_mode == auth_mode::sign_records) {
+			signer = my_private_key(crypto.private_data());
+		}
+
+		user_change_record_creator creator(key, last_block, signer);
 		creator.set_data(ver.header(), ver.data());
 		return creator.result();
 	}
@@ -242,7 +261,13 @@ public:
 	auth_record<segment_record> update_record(encryption_key const& key, segment_record_verifier& ver) const {
 		auto last_block = records.last_block();
 		LINFO("updating last block to %", last_block);
-		segment_record_creator creator(key, last_block);
+
+		std::optional<crypto::private_key> signer;
+		if(config.auth_mode == auth_mode::sign_records) {
+			signer = my_private_key(crypto.private_data());
+		}
+
+		segment_record_creator creator(key, last_block, signer);
 		//f: implement
 		return creator.result();
 	}
@@ -477,7 +502,11 @@ record_handle sync_engine::sync_object_change(object_id oid, metadata mdata, rec
 
 	record_tag last_oid_tag = last_oid_record ? last_oid_record->tag() : record_tag{};
 
-	data_change_record_creator creator(impl_->crypto.enc_keys().current_key(), last_block);
+	std::optional<crypto::private_key> signer;
+	if(impl_->config.auth_mode == auth_mode::sign_records) {
+		signer = my_private_key(impl_->crypto.private_data());
+	}
+	data_change_record_creator creator(impl_->crypto.enc_keys().current_key(), last_block, signer);
 	creator.add_change(std::move(oid), last_oid_tag, std::move(mdata));
 
 	record_handle h = impl_->records.create(creator.result());
@@ -494,7 +523,11 @@ record_handle sync_engine::sync_user_change(plain_user_change_data change_data, 
 
 	auto last_block = impl_->records.last_block(true); //q: no 'true' for non-require all modes?
 
-	user_change_record_creator creator(impl_->crypto.enc_keys().current_key(), last_block);
+	std::optional<crypto::private_key> signer;
+	if(impl_->config.auth_mode == auth_mode::sign_records) {
+		signer = my_private_key(impl_->crypto.private_data());
+	}
+	user_change_record_creator creator(impl_->crypto.enc_keys().current_key(), last_block, signer);
 	creator.set_change(std::move(change_data), std::move(mdata));
 
 	record_handle h = impl_->records.create(creator.result());
@@ -513,7 +546,11 @@ record_handle sync_engine::sync_segment_end(metadata mdata) {
 		throw error(errc::invalid_record_chain_state, "Can't find last record, segment cannot be first record");
 	}
 
-	segment_record_creator creator(impl_->crypto.enc_keys().current_key(), last_block);
+	std::optional<crypto::private_key> signer;
+	if(impl_->config.auth_mode == auth_mode::sign_records) {
+		signer = my_private_key(impl_->crypto.private_data());
+	}
+	segment_record_creator creator(impl_->crypto.enc_keys().current_key(), last_block, signer);
 
 	//needs the start, end sequences and the record tags
 	//creator.add_change(std::move(mdata));

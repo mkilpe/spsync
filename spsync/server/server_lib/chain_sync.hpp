@@ -13,12 +13,14 @@
 namespace securepath::sync {
 
 // t: check and update user access when handling records
+// t: check signature
 
 /**
  * Configuration for server side block chain
  */
 struct chain_sync_config {
 	sync_mode mode{sync_mode::require_all_seen};
+	sync::auth_mode	auth_mode{sync::auth_mode::only_tag};
 	/// this is id for the repository, it is only used for logging to help trace/debug things if set
 	std::string log_id;
 	/// maximum records returned for one call

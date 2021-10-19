@@ -102,7 +102,7 @@ public:
 		notify(event_type::state_change, json::serialize(json::object{{"type", "chat"}, {"data", event}}));
 	}
 
-	void on_message(server_id sid, chat_id cid, message_data md, msg_change change) {
+	void on_message(server_id sid, chat_id cid, msg_data md, msg_change change) {
 		LOG_TRACE("json_manager::on_message [sid=%, cid=%]", sid, to_hex(cid));
 		json::object message{
 			{"message", md.message},

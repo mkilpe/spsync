@@ -25,11 +25,16 @@ channel::channel(chat_conn_context& context, chat_id const& cid)
 }
 
 channel::channel(chat_conn_context& context, chat_id const& cid, database::connection_ptr db)
-: client_sync(context.context, context.callback.event_loop(), db)
+: client_sync(
+	context.context,
+	context.callback.event_loop(),
+	db,
+	sync::sync_engine_config{.auth_mode=sync::auth_mode::sign_records, .log_id=to_hex(cid)})
 , ccontext_(context)
 , chat_id_(cid)
 , messages_(db)
 , db_(db)
+, my_key_id_(my_private_key(context.context.private_data()).id())
 {
 	// make sure we are in sync with record storage and messages storage in case the application
 	// was interrupted in between updating the messages storage
@@ -63,10 +68,10 @@ void channel::on_data_change(sync::record_handle rec, std::deque<sync::single_da
 			auto opt = c.header.metadata().find<message_data>(groupchat_message_id);
 			if(opt) {
 				// insert to message storage
-				msg_data data{*opt, c.internal_id, c.seq};
+				msg_data data{*opt, c.signer.value_or(crypto::public_key_id{}), c.internal_id, c.seq};
 				auto change = messages_.insert(c.data.id, data, msg_state::in_sync);
 				// notify higher level
-				ccontext_.callback.emit<events::on_message>(ccontext_.sid, chat_id_, *opt, change);
+				ccontext_.callback.emit<events::on_message>(ccontext_.sid, chat_id_, data, change);
 			} else {
 				LOG_WARN("invalid record, no groupchat message found");
 			}
@@ -78,11 +83,10 @@ void channel::on_data_change(sync::record_handle rec, std::deque<sync::single_da
 
 void channel::on_user_change(sync::record_handle rec, sync::user_change usc) {
 	if(rec->block_id().sequence == sync::sequence_number{1}) {
-		auto opt = usc.metadata.find<user_id>(groupchat_creator_id);
-		if(opt) {
+		if(usc.signer) {
 			// check if we created the chat or not
 			auto my_key = my_private_key(ccontext_.context.private_data());
-			if(opt->public_key_id() != my_key.id()) {
+			if(usc.signer != my_key.id()) {
 				ccontext_.callback.emit<events::on_join>(ccontext_.sid, chat_id_, error{});
 			}
 		}
@@ -96,9 +100,6 @@ void channel::create_initial_record() {
 	sync::metadata header;
 	header.insert(groupchat_name_id, find<std::string>(gc_name_tag).value_or(to_hex(chat_id_)));
 
-	auto my_key = my_private_key(ccontext_.context.private_data()); //notice this is hack, see message.hpp
-	header.insert(groupchat_creator_id, user_id{my_key.id()});
-
 	std::unique_lock l{mutex_};
 	sync::users initial = initial_members_;
 	// always add ourself
@@ -107,8 +108,7 @@ void channel::create_initial_record() {
 }
 
 message channel::send_message(std::string const& msg) {
-	auto my_key = my_private_key(ccontext_.context.private_data()); //notice this is hack, see message.hpp
-	message_data chat_msg{msg, clock_type::now(), user_id{my_key.id()}};
+	message_data chat_msg{msg, clock_type::now()};
 	sync::metadata header;
 	header.insert(groupchat_message_id, chat_msg);
 	auto msg_id = sync::util::create_object_id();
@@ -117,10 +117,16 @@ message channel::send_message(std::string const& msg) {
 	std::unique_lock l{mutex_};
 	auto handle = send_data_change(msg_id, std::move(header));
 
-	msg_data data{chat_msg, handle->internal_id()};
+	msg_data data{chat_msg, my_key_id_, handle->internal_id()};
 	auto change = messages_.insert(msg_id, data, msg_state::pending);
 
-	return message{msg, chat_msg.sender, msg_id, chat_msg.sender_time, change.new_index, change.state};
+	return message{
+		msg,
+		my_key_id_,
+		msg_id,
+		chat_msg.sender_time,
+		change.new_index,
+		change.state};
 }
 
 std::deque<message> channel::messages(message_search ms) const {

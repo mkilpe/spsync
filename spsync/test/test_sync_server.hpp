@@ -67,7 +67,7 @@ private:
  */
 class test_sync_server_client_context {
 public:
-	test_sync_server_client_context(int n, sync_mode mode);
+	test_sync_server_client_context(int n, sync_mode mode, auth_mode = auth_mode::only_tag);
 
 	crypto::private_key user_key{crypto::generate_rsa_private_key(1024)};
 	util::user_id user{user_key.id()};
@@ -125,6 +125,7 @@ struct test_sync_context {
 
 public:
 	sync_mode mode;
+	auth_mode amode;
 	test_sync_server server;
 	std::deque<std::unique_ptr<test_sync_server_client_context>> clients;
 };

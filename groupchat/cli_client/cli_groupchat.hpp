@@ -22,7 +22,7 @@ public:
 	/// called when chat joined or it failed
 	void on_join(server_id, chat_id, error);
 	/// called when chat message received
-	void on_message(server_id, chat_id, message_data, msg_change);
+	void on_message(server_id, chat_id, msg_data, msg_change);
 
 	void handle_event(std::unique_ptr<event_system::event_base> ev) override;
 

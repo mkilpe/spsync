@@ -2,10 +2,10 @@
 #define SPSYNC_ENGINE_SYNC_ENGINE_HEADER
 
 #include "interface.hpp"
+#include "sync_engine_config.hpp"
 #include <spsync/comm/interface.hpp>
 #include <spsync/core/crypto_context.hpp>
 #include <spsync/core/progress.hpp>
-#include <spsync/core/sync_mode.hpp>
 
 #include <memory>
 
@@ -13,15 +13,6 @@ namespace securepath::sync {
 
 class encryption_key_storage;
 
-/**
- * The configuration for the sync engine
- */
-struct sync_engine_config {
-	/// sync mode, this has to match the mode set on the server
-	sync_mode mode{sync_mode::require_all_seen};
-	/// this is id for the repository, it is only used for logging to help trace/debug things if set
-	std::string log_id;
-};
 
 /**
  * The engine to synchronise records and record data

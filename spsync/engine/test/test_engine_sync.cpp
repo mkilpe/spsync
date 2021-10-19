@@ -41,7 +41,9 @@ TEST_CASE("engine sync single client", "[unit]") {
 
 // (2) two clients, one commits records (allow all mode)
 TEST_CASE("engine sync two clients with one committing", "[unit]") {
-	test::test_sync_context context(chain_sync_config{sync_mode::allow_all});
+	auth_mode amode = GENERATE(auth_mode::only_tag, auth_mode::sign_records);
+
+	test::test_sync_context context(chain_sync_config{sync_mode::allow_all, amode});
 	context.add_client(true, 2);
 	context.create_initial_record();
 	context.handle_events();

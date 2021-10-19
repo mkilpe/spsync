@@ -98,9 +98,9 @@ record_storage& test_sync_server_client::records() const {
 	return storage_;
 }
 
-test_sync_server_client_context::test_sync_server_client_context(int n, sync_mode mode)
+test_sync_server_client_context::test_sync_server_client_context(int n, sync_mode mode, auth_mode amode)
 : database{create_test_database("test_sync_server_client_" + std::to_string(n) + ".db")}
-, engine_config{mode, std::to_string(n)}
+, engine_config{mode, amode, std::to_string(n)}
 {
 	// own public key needs to be in the public key access that is given to the sync engine
 	pkeys.insert(user_key.public_key());
@@ -115,6 +115,7 @@ test_sync_server::test_sync_server(chain_sync_config config)
 
 test_sync_context::test_sync_context(chain_sync_config config)
 : mode(config.mode)
+, amode(config.auth_mode)
 , server(config)
 {
 }

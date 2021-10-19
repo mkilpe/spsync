@@ -16,9 +16,9 @@ struct msg_change {
 struct msg_data {
 	msg_data() = default;
 
-	msg_data(message_data const& d, sync::record_internal_id iid, sync::sequence_number seq = {})
+	msg_data(message_data const& d, user_id sender, sync::record_internal_id iid, sync::sequence_number seq = {})
 	: message(d.message)
-	, sender(d.sender)
+	, sender(std::move(sender))
 	, sender_time(d.sender_time)
 	, receiver_time(clock_type::now())
 	, iid(iid)
