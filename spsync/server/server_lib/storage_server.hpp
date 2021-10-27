@@ -27,6 +27,7 @@ public:
 	void close();
 private:
 	class impl;
+	// encrypted_server requires this to be shared_ptr
 	std::shared_ptr<impl> impl_;
 };
 

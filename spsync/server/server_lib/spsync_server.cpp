@@ -1,5 +1,6 @@
 #include "spsync_server.hpp"
 
+#include <securepath/server_common/key_check.hpp>
 #include <securepath/network/encryption/handshake/pk_handshake.hpp>
 
 namespace securepath::sync {
@@ -49,27 +50,7 @@ void spsync_server::close() {
 }
 
 void spsync_server::check_key() {
-	LOG_INFO("checking private key and certificate chain...");
-	auto my_key = private_data().my_private_key();
-	if(!my_key) {
-		LOG_WARN("no private key found for the server");
-		throw make_error(securepath::errc::invalid_state, "no private key found for the server");
-	}
-
-	// currently the keys and certs does not need to be in the general accesses for those, the my_certificate_chain is used (see below)
-	/*auto chain = crypto::create_certificate_chain(my_key->public_key(), keys(), certs());
-	if(!chain) {
-		LOG_WARN("no certificate chain found for the server");
-		throw make_error(securepath::errc::invalid_state, "no certificate chain found for the server");
-	}
-	LOG_INFO("found certificate chain: %", *chain);*/
-
-	auto my_chain = private_data().my_certificate_chain();
-	if(!my_chain) {
-		LOG_WARN("no certificate chain set for the server");
-		throw make_error(securepath::errc::invalid_state, "no certificate chain set for the server");
-	}
-	LOG_INFO("own certificate chain set to %", *my_chain);
+	server_common::check_server_key(construct_context());
 }
 
 }

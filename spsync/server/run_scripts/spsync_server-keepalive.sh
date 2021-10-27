@@ -5,7 +5,7 @@ while [ -x "./spsync_server" ] ; do
 	pid=$!
 	echo $pid > "./spsync_server.pid"
 	wait $pid
-	timestamp=$(date +%s)
+	timestamp=$(date '+%F %T')
 	ret=$?
 	echo "spsync_server exited with ${ret} [pid=${pid}, time=${timestamp}]" >> "./exit.log"
 	sleep 10

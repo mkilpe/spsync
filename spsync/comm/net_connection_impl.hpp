@@ -37,13 +37,13 @@ struct network_connection_impl : network::encrypted_connection {
 
 	void on_connected() override {
 		LOG_TRACE("storage network connection connected, sending client_hello...");
+		hello_done = false;
 		deser.clear();
 		send(protocol::client_hello{});
 	}
 
 	void on_disconnected(securepath::error const& error) override {
 		LOG_INFO("storage network connection disconnected: %", error);
-		hello_done = false;
 		handler.emit<events::on_disconnect>(error);
 		for(auto&& v : attached_comms) {
 			v.second->on_disconnected(error);

@@ -16,7 +16,8 @@ namespace securepath::sync {
 encryption_key_storage::encryption_key_storage(database::connection_ptr conn)
 : db_(conn)
 {
-	if(!db_->prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='encryption_key_storage';").execute()) {
+	auto q = db_->prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='encryption_key_storage';");
+	if(!q.execute()) {
 		db_->prepare("CREATE TABLE encryption_key_storage(seq INTEGER PRIMARY KEY, key BLOB);").execute();
 	}
 }

@@ -37,7 +37,6 @@ private:
 	storage_server_context& context_;
 	crypto::public_key_id id_;
 	std::map<protocol::storage_id, std::shared_ptr<storage>> syncs_;
-	bool hello_done_{};
 };
 
 }
