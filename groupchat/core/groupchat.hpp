@@ -25,17 +25,6 @@ struct groupchat_config {
 	std::string db() const { return path.empty() ? "gc_client.db" : path + "/gc_client.db"; };
 };
 
-struct account_info {
-	host_port server;
-	std::string name;
-	crypto::public_key_id key_id;
-};
-
-struct channel_id {
-	server_id sid;
-	chat_id cid;
-};
-
 /**
  * Simple group chat interface to send and receive messages using spsync as backend
  */
@@ -44,6 +33,12 @@ public:
 	groupchat(event_system::event_handler& callback, groupchat_config);
 	groupchat(event_system::event_handler& callback, network::context& context, groupchat_config);
 	~groupchat();
+
+	/// connect all existing chat connections and packet server connection
+	void connect();
+
+	/// disconnect
+	void disconnect();
 
 	/// Returns associated account information if account exists
 	std::optional<gc::account_info> account_info() const;
@@ -58,6 +53,9 @@ public:
 	std::shared_ptr<chat_connection> load(host_port const& server);
 	std::shared_ptr<chat_connection> find(server_id) const;
 	std::vector<std::shared_ptr<chat_connection>> connections() const;
+
+	/// add contact to contact_list and send contacting packet
+	void add_contact(crypto::public_key_id const& id, std::string const& name, host_port const& server);
 
 	/// return contacts
 	contact_list& contacts();

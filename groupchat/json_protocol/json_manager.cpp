@@ -12,6 +12,7 @@
 
 #include <infrastructure/key_client_lib/unknown_user_key_client.hpp>
 #include <infrastructure/key_server/server_lib/defaults.hpp>
+#include <infrastructure/packet_transport/protocol/ports.hpp>
 
 #include <securepath/event_system/event_loop.hpp>
 #include <securepath/log/backend/backend.hpp>
@@ -121,6 +122,19 @@ public:
 		notify(event_type::state_change, json::serialize(json::object{{"type", "chat"}, {"data", event}}));
 	}
 
+	void on_contacting(crypto::public_key_id sender, std::string name) {
+		LOG_TRACE("json_manager::on_contacting [kid=%, name=%]", sender, name);
+		json::object event{
+			{"action", "contacting"},
+			{"sender", json::object
+				{
+					{"keyid", sender.in_hex()},
+					{"name", name}
+				}}
+			};
+		notify(event_type::request, json::serialize(json::object{{"type", "contact"}, {"data", event}}));
+	}
+
 	void handle_event(std::unique_ptr<event_system::event_base> ev) override {
 		dispatch( *ev
 			, event_dest<events::on_connect>(&impl::on_connect)
@@ -128,21 +142,9 @@ public:
 			, event_dest<events::on_create>(&impl::on_create)
 			, event_dest<events::on_change_user>(&impl::on_change_user)
 			, event_dest<events::on_join>(&impl::on_join)
-			, event_dest<events::on_message>(&impl::on_message) );
+			, event_dest<events::on_message>(&impl::on_message)
+			, event_dest<events::on_contacting>(&impl::on_contacting) );
 	}
-
-	std::optional<crypto::public_key> query_key(host_port const& server, crypto::public_key_id const& key_id) {
-		auto key = context().public_keys().find(key_id);
-		if(!key) {
-			//t: non-blocking
-			key_client::unknown_user_key_client client{context()};
-			client.connect(server.host, server.port);
-			client.wait_for_connection();
-			key = client.find_key(key_id);
-		}
-		return key;
-	}
-
 
 	host_port extract_host_port(json::object const& obj, std::string const& default_host, uint16_t default_port) {
 		auto opt_server = extract_opt<json::object>(obj, "server");
@@ -166,18 +168,6 @@ public:
 			return extract_host_port(obj, info->server.host, sync::default_key_server_port);
 		} else {
 			return extract_host_port(obj, "gc.securepath.fi", sync::default_key_server_port);
-		}
-	}
-
-	void load_channels() {
-		bool load = false;
-		{
-			std::unique_lock l{mutex};
-			load = !channel_init;
-			channel_init = true;
-		}
-		if(load) {
-			groupchat::load_channels();
 		}
 	}
 
@@ -215,9 +205,7 @@ public:
 	}
 
 public:
-	std::mutex mutex;
 	std::function<void(event_type, std::string)> const notify;
-	bool channel_init{false};
 };
 
 json_manager::json_manager(event_callback func)
@@ -272,19 +260,14 @@ std::string json_manager::create_account(std::string_view const& arg) {
 
 std::string json_manager::connect() {
 	return call([&]{
-		impl_->load_channels();
-		for(auto&& v : impl_->connections()) {
-			v->connect();
-		}
+		impl_->connect();
 		return std::string("{}");
 	});
 }
 
 std::string json_manager::disconnect() {
 	return call([&]{
-		for(auto&& v : impl_->connections()) {
-			v->disconnect();
-		}
+		impl_->disconnect();
 		return std::string("{}");
 	});
 }
@@ -295,7 +278,10 @@ std::string json_manager::get_contacts(std::string_view const&) const {
 		json::array json_c;
 		for(auto& v : contacts) {
 			std::string key_id = v->id().public_key_id().in_hex();
-			json_c.push_back(json::object{{"name", v->name()}, {"id", key_id}});
+			json_c.push_back(json::object{
+				{"name", v->name()},
+				{"id", key_id},
+				{"request", v->state() == contact_state::request} });
 		}
 		json::object ret{{"data", json_c}};
 		return json::serialize(ret);
@@ -310,21 +296,15 @@ std::string json_manager::add_contact(std::string_view const& arg) {
 
 		crypto::public_key_id key_id{key_id_string};
 
-		if(impl_->contacts().find(key_id)) {
-			LOG_INFO("Already have contact with key id %", key_id.in_hex());
-			return error_to_json(make_error(errc::invalid_state, "Contact with given key id already exists"));
+		auto contact = impl_->contacts().find(key_id);
+		if(contact) {
+			contact->set_name(name);
+			contact->set_state(contact_state::complete);
+		} else {
+			impl_->add_contact(key_id, name, impl_->extract_key_host_port(obj));
 		}
-
-		auto opt_key = impl_->query_key(impl_->extract_key_host_port(obj), key_id);
-		if(!opt_key) {
-			LOG_INFO("No public key found when adding contact [name=%, key_id=%]", name, key_id.in_hex());
-			return error_to_json(make_error(crypto::errc::no_such_key, "Could not find requested public key for contact"));
-		}
-		impl_->context().public_keys().insert(*opt_key);
-		auto contact = impl_->contacts().add(user_id{key_id});
-		contact->set_name(name);
 		auto kid = key_id.in_hex();
-		return json::serialize(json::object{{"name", name}, {"id", kid}});
+		return json::serialize(json::object{{"name", name}, {"id", kid}, {"request", false}});
 	});
 }
 

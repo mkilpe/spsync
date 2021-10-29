@@ -11,6 +11,7 @@
 #include <cstdint>
 #include <memory>
 #include <string>
+#include <tuple>
 
 namespace securepath::groupchat {
 
@@ -59,6 +60,17 @@ struct host_port {
 		serialisation::sequence<Ar> seq(ar);
 		seq & host & port;
 	}
+};
+
+struct account_info {
+	host_port server;
+	std::string name;
+	crypto::public_key_id key_id;
+};
+
+struct channel_id {
+	server_id sid;
+	chat_id cid;
 };
 
 }

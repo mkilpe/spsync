@@ -15,8 +15,26 @@ std::string contact::name() const {
 	return v ? *v : id_.public_key_id().in_hex();
 }
 
+host_port contact::server() const {
+	auto v = find<host_port>("server");
+	return v ? *v : host_port{};
+}
+
+contact_state contact::state() const {
+	auto v = find<int>("state");
+	return v ? contact_state(*v) : contact_state::complete;
+}
+
 void contact::set_name(std::string const& name) {
 	insert("name", name);
+}
+
+void contact::set_server(host_port const& server) {
+	insert("server", server);
+}
+
+void contact::set_state(contact_state state) {
+	insert("state", int(state));
 }
 
 }

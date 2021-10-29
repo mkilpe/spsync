@@ -46,29 +46,41 @@ TEST_CASE("json_manager_test", "[system]") {
 		CHECK_JSON(manager.get_account(), json_get_account_result("some"));
 	}
 	{ // contacts
-		json_test_manager manager(net_context, 0, keep_db);
-		CHECK_JSON(manager.get_account(), json_get_account_result("test"));
+		json_test_manager manager1(net_context, 0, keep_db);
+		json_test_manager manager2(net_context, 1, keep_db);
+		CHECK_JSON(manager1.get_account(), json_get_account_result("test"));
 
-		CHECK_EQUAL_JSON(manager.connect(), "{}");
-		CHECK_EQUAL_JSON(manager.disconnect(), "{}");
+		CHECK_EQUAL_JSON(manager1.connect(), "{}");
+		CHECK_EQUAL_JSON(manager1.disconnect(), "{}");
 
-		CHECK_JSON(manager.get_contacts(""), json_get_contacts_result({}));
+		CHECK_EQUAL_JSON(manager1.connect(), "{}");
+		CHECK_EQUAL_JSON(manager2.connect(), "{}");
 
-		CHECK_JSON(manager.add_contact(json_add_contact({"my contact", net_context.key_id(1)}))
+		//WAIT_CHECK(manager1.has_connect_event(), 2s); //what to do with packet server connect?
+		//WAIT_CHECK(manager2.has_connect_event(), 2s);
+
+		CHECK_JSON(manager1.get_contacts(""), json_get_contacts_result({}));
+
+		CHECK_JSON(manager1.add_contact(json_add_contact({"my test contact", net_context.key_id(1)}))
+			, json_add_contact_result({"my test contact", net_context.key_id(1)}));
+		CHECK_JSON(manager1.get_contacts(""), json_get_contacts_result({json_contact{"my test contact", net_context.key_id(1)}}));
+
+		WAIT_CHECK(manager2.has_contacting_event(net_context.key_id(0), "test"), 2s);
+		CHECK_JSON(manager2.get_contacts(""), json_get_contacts_result({json_contact{"test", net_context.key_id(0), true}}));
+
+		// change already existing contact
+		CHECK_JSON(manager1.add_contact(json_add_contact({"my contact", net_context.key_id(1)}))
 			, json_add_contact_result({"my contact", net_context.key_id(1)}));
-		CHECK_JSON(manager.get_contacts(""), json_get_contacts_result({json_contact{"my contact", net_context.key_id(1)}}));
-
-		CHECK_JSON(manager.add_contact(json_add_contact({"my contact", net_context.key_id(1)})), R"({ "error" : {}})");
 
 		//try to create chat without having member as contact (we don't have the key yet)
-		CHECK_JSON(manager.create_chat(
+		CHECK_JSON(manager1.create_chat(
 			json_create_chat("test chat", {net_context.key_id(1), net_context.key_id(2)})), R"({ "error" : {}})");
 
 		//add third as contact too so we can create chat later on (this causes the client to download the key)
-		CHECK_JSON(manager.add_contact(json_add_contact({"my other contact", net_context.key_id(2)}))
+		CHECK_JSON(manager1.add_contact(json_add_contact({"my other contact", net_context.key_id(2)}))
 			, json_add_contact_result({"my other contact", net_context.key_id(2)}));
 
-		WAIT_CHECK(manager.has_connect_event(), 2s);
+		WAIT_CHECK(manager1.has_connect_event(), 2s);
 	}
 
 	//chat id

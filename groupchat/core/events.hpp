@@ -1,5 +1,8 @@
 #pragma once
 
+#include "message_storage.hpp"
+#include "types.hpp"
+
 namespace securepath::groupchat::events {
 
 struct on_connect {
@@ -24,6 +27,14 @@ struct on_join {
 
 struct on_message {
 	typedef void type(server_id, chat_id, msg_data, msg_change);
+};
+
+struct on_contacting {
+	typedef void type(crypto::public_key_id sender, std::string name);
+};
+
+struct on_invitation {
+	typedef void type(chat_id);
 };
 
 }

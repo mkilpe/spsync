@@ -35,7 +35,7 @@ bool spsync_server::init() {
 
 int spsync_server::run_and_wait() {
 	LOG_INFO("Starting spsync server (%, %)", params_.key_params.create_endpoint(), params_.storage_params.create_endpoint());
-	int ret = unknown_user_key_server::run();
+	int ret = unknown_user_key_server::run(4, 2);
 	if(!ret) {
 		storage_server_.start();
 		unknown_user_key_server::wait();

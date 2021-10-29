@@ -105,6 +105,15 @@ struct json_test_manager : json_manager {
 				 })", cid, mid));
 	}
 
+	bool has_contacting_event(crypto::public_key_id kid, std::string name) const {
+		return contains_event(event_type::request, print(R"(
+				{"type": "contact",
+				 "data":
+				 	{ "action": "contacting",
+				 	  "sender": {"keyid": "%", "name": "%"} }
+				 })", kid.in_hex(), name));
+	}
+
 	mutable std::mutex mutex;
 	std::deque<std::pair<event_type, std::string>> events;
 };

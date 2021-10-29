@@ -36,7 +36,7 @@ std::string json_add_contact(json_contact c) {
 
 std::string json_add_contact_result(json_contact c) {
 	auto kid_str = c.kid.in_hex();
-	return print(R"({ "name" : "%", "id": "%"})", c.name, kid_str);
+	return print(R"({ "name" : "%", "id": "%", "request": %})", c.name, kid_str, c.request ? "true" : "false");
 }
 
 std::string json_get_chats_result(std::vector<json_chat> list) {

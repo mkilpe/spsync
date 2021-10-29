@@ -6,6 +6,11 @@
 
 namespace securepath::groupchat {
 
+enum class contact_state {
+	request,
+	complete
+};
+
 /// GC contact
 class contact : public key_value_cache {
 public:
@@ -13,9 +18,16 @@ public:
 
 	/// user id of the member
 	user_id id() const;
+	/// Name of the contact
 	std::string name() const;
+	/// Key server of the contact
+	host_port server() const;
+	/// State of the contact
+	contact_state state() const;
 
 	void set_name(std::string const& name);
+	void set_server(host_port const& server);
+	void set_state(contact_state);
 
 private:
 	user_id id_;

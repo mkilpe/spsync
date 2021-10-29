@@ -15,6 +15,7 @@ std::string json_create_account_result(std::string name);
 struct json_contact {
 	std::string name;
 	crypto::public_key_id kid;
+	bool request{};
 };
 std::string json_get_contacts_result(std::vector<json_contact>);
 std::string json_add_contact(json_contact);

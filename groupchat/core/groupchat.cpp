@@ -1,5 +1,6 @@
 #include "groupchat.hpp"
 #include "channel.hpp"
+#include "contact_connection.hpp"
 
 #include <spsync/comm/net_connection.hpp>
 #include <spsync/core/encryption_key_storage.hpp>
@@ -47,10 +48,10 @@ struct groupchat::impl
 	, database(open_gc_client_database(this->conf))
 	, callback(callb)
 	, channels(database)
-	, contacts(database)
+	, cconn(context, callback, database)
 	{
-		network::enable_client_dh_handshake(this->context);
-		network::enable_client_pk_handshake(this->context);
+		network::enable_client_dh_handshake(context);
+		network::enable_client_pk_handshake(context);
 
 		if(!c) {
 			run();
@@ -70,6 +71,7 @@ struct groupchat::impl
 		info.key_id = my_private_key(context.private_data()).id();
 		info.name = gc_info->find<std::string>("name").value_or(info.key_id.in_hex());
 		info.server = gc_info->find<host_port>("server").value_or(host_port{});
+		cconn.set_account_info(info);
 	}
 
 	bool init_crypto() {
@@ -104,10 +106,11 @@ struct groupchat::impl
 	}
 
 	void handle_event(std::unique_ptr<event_system::event_base> ev) override {
-		/*
-		this is going to be needed later on when developing communication means between contacts
-		dispatch( *ev
-				, event_dest<sync::events::on_connect>(&impl::on_connect) );*/
+	/*	dispatch( *ev
+				, event_dest<transport_packet::events::on_connect>(&impl::pclient_on_connect)
+				, event_dest<transport_packet::events::on_connect>(&impl::pclient_on_disconnect)
+				, event_dest<transport_packet::events::on_connect>(&impl::pclient_on_packet)
+				, event_dest<transport_packet::events::on_connect>(&impl::pclient_on_error) );*/
 	}
 
 	void register_my_key(std::string_view server) {
@@ -141,9 +144,9 @@ struct groupchat::impl
 	std::map<host_port, server_id> hp_map;
 
 	channel_list channels;
-	contact_list contacts;
-
 	std::map<server_id, std::shared_ptr<chat_connection>> connections;
+
+	contact_connection cconn;
 };
 
 bool groupchat::check_account_exists(groupchat_config const& conf) const {
@@ -179,6 +182,23 @@ groupchat::groupchat(event_system::event_handler& callback, network::context& co
 
 groupchat::~groupchat()
 {
+}
+
+void groupchat::connect() {
+	impl_->cconn.connect();
+	if(impl_->connections.empty()) {
+		load_channels();
+	}
+	for(auto&& v : impl_->connections) {
+			v.second->connect();
+	}
+}
+
+void groupchat::disconnect() {
+	for(auto&& v : impl_->connections) {
+		v.second->disconnect();
+	}
+	impl_->cconn.close();
 }
 
 std::optional<gc::account_info> groupchat::account_info() const {
@@ -241,9 +261,13 @@ std::vector<std::shared_ptr<chat_connection>> groupchat::connections() const {
 	return ret;
 }
 
+void groupchat::add_contact(crypto::public_key_id const& id, std::string const& name, host_port const& server) {
+	impl_->cconn.add_contact(id, name, server);
+}
+
 contact_list& groupchat::contacts() {
 	assert(impl_);
-	return impl_->contacts;
+	return impl_->cconn.contacts();
 }
 
 channel_list& groupchat::channel_ids() {
