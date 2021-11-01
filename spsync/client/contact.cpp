@@ -26,7 +26,7 @@ contact_state contact::state() const {
 }
 
 std::optional<octet_vector> contact::contacting_data() const {
-	return find<octet_vector>("contacting_data");
+	return find("contacting_data");
 }
 
 void contact::set_name(std::string const& name) {
