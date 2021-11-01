@@ -122,16 +122,16 @@ public:
 		notify(event_type::state_change, json::serialize(json::object{{"type", "chat"}, {"data", event}}));
 	}
 
-	void on_contacting(crypto::public_key_id sender, std::string name) {
-		LOG_TRACE("json_manager::on_contacting [kid=%, name=%]", sender, name);
+	void on_contacting(crypto::public_key_id sender, std::string name, std::string message) {
+		LOG_TRACE("json_manager::on_contacting [kid=%, name=%, msg=%]", sender, name, message);
 		json::object event{
 			{"action", "contacting"},
 			{"sender", json::object
 				{
 					{"keyid", sender.in_hex()},
 					{"name", name}
-				}}
-			};
+				}},
+			{"message", message}};
 		notify(event_type::request, json::serialize(json::object{{"type", "contact"}, {"data", event}}));
 	}
 
@@ -151,6 +151,20 @@ public:
 		auto opt_host = opt_server ? extract_opt<std::string>(*opt_server, "host") : std::nullopt;
 		auto opt_port = opt_server ? extract_opt<int>(*opt_server, "port") : std::nullopt;
 		return host_port{opt_host.value_or(default_host), static_cast<std::uint16_t>(opt_port.value_or(default_port))};
+	}
+
+	gc_servers extract_gc_servers(json::object const& obj) {
+		auto opt_server = extract_opt<json::object>(obj, "server");
+		auto opt_host = opt_server ? extract_opt<std::string>(*opt_server, "host") : std::nullopt;
+		auto opt_keyport = opt_server ? extract_opt<int>(*opt_server, "keyport") : std::nullopt;
+		auto opt_syncport = opt_server ? extract_opt<int>(*opt_server, "syncport") : std::nullopt;
+		auto opt_packetport = opt_server ? extract_opt<int>(*opt_server, "packetport") : std::nullopt;
+		return gc_servers{
+			opt_host.value_or("gc.securepath.fi"),
+			static_cast<std::uint16_t>(opt_keyport.value_or(sync::default_key_server_port)),
+			static_cast<std::uint16_t>(opt_syncport.value_or(sync::default_storage_server_port)),
+			static_cast<std::uint16_t>(opt_packetport.value_or(packet_transport::default_packet_server_port))
+		};
 	}
 
 	host_port extract_storage_host_port(json::object const& obj) {
@@ -234,7 +248,7 @@ std::string json_manager::get_account() const {
 			json::object user{{"name", acc->name}};
 			json::object ret{
 				{"user", user},
-				{"id", acc->key_id.in_hex()},
+				{"id", acc->me.id().public_key_id().in_hex()},
 				{"server", server_to_object(acc->server)}};
 			return json::serialize(ret);
 		} else {
@@ -252,7 +266,7 @@ std::string json_manager::create_account(std::string_view const& arg) {
 			return error_to_json(make_error(errc::invalid_state, "account already exists"));
 		} else {
 			json::object obj = json::parse(arg).as_object();
-			impl_->create_account(impl_->extract_storage_host_port(obj), extract<std::string>(obj, "name"));
+			impl_->create_account(impl_->extract_gc_servers(obj), extract<std::string>(obj, "name"));
 			return get_account();
 		}
 	});
@@ -281,7 +295,7 @@ std::string json_manager::get_contacts(std::string_view const&) const {
 			json_c.push_back(json::object{
 				{"name", v->name()},
 				{"id", key_id},
-				{"request", v->state() == contact_state::request} });
+				{"request", v->state() == sync::client::contact_state::request} });
 		}
 		json::object ret{{"data", json_c}};
 		return json::serialize(ret);
@@ -292,6 +306,7 @@ std::string json_manager::add_contact(std::string_view const& arg) {
 	return call([&]{
 		json::object obj = json::parse(arg).as_object();
 		auto name = extract<std::string>(obj, "name");
+		auto message = extract_opt<std::string>(obj, "message");
 		auto key_id_string = extract<std::string>(obj, "id");
 
 		crypto::public_key_id key_id{key_id_string};
@@ -299,9 +314,10 @@ std::string json_manager::add_contact(std::string_view const& arg) {
 		auto contact = impl_->contacts().find(key_id);
 		if(contact) {
 			contact->set_name(name);
-			contact->set_state(contact_state::complete);
+			contact->set_state(sync::client::contact_state::complete);
 		} else {
-			impl_->add_contact(key_id, name, impl_->extract_key_host_port(obj));
+			user receiver{key_id, impl_->extract_key_host_port(obj)};
+			impl_->add_contact(receiver, name, message.value_or(""));
 		}
 		auto kid = key_id.in_hex();
 		return json::serialize(json::object{{"name", name}, {"id", kid}, {"request", false}});

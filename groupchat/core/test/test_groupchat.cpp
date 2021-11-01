@@ -86,7 +86,7 @@ TEST_CASE("groupchat_test", "[system]") {
 
 	chat_id cid;
 
-	host_port hp{"127.0.0.1", sync::default_storage_server_port};
+	gc_servers hp{"127.0.0.1", sync::default_key_server_port, sync::default_storage_server_port, packet_transport::default_packet_server_port};
 	event_system::single_thread_event_loop loop;
 	{
 		test_groupchat client(net_context.client_context(0), loop);
@@ -97,11 +97,11 @@ TEST_CASE("groupchat_test", "[system]") {
 
 		auto info = client.account_info();
 		REQUIRE(info);
-		CHECK(info->server == hp);
+		CHECK(info->server == hp.sync_server());
 		CHECK(info->name == "test");
-		CHECK(info->key_id.is_valid());
+		CHECK(info->me.is_valid());
 
-		auto conn = client.load(hp);
+		auto conn = client.load(hp.sync_server());
 
 		conn->connect();
 		{
@@ -125,9 +125,9 @@ TEST_CASE("groupchat_test", "[system]") {
 
 		auto info = client.account_info();
 		REQUIRE(info);
-		CHECK(info->server == hp);
+		CHECK(info->server == hp.sync_server());
 		CHECK(info->name == "test");
-		CHECK(info->key_id.is_valid());
+		CHECK(info->me.is_valid());
 		CHECK(client.channel_ids().find_server(cid));
 
 		auto ids = client.load_channels();

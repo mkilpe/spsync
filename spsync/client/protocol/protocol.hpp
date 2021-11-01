@@ -4,27 +4,32 @@
 
 #include <securepath/util/typelist.hpp>
 
-
-namespace securepath::groupchat::protocol {
+namespace securepath::sync::client::protocol {
 inline namespace v1 {
 
 std::uint16_t const current_version{1};
 
 struct contacting {
-	contacting(std::string name = {}, host_port server = {})
-	: sender_name(std::move(name))
-	, sender_key_server(std::move(server))
+	contacting() = default;
+	contacting(std::string tag, host_port server, octet_vector data)
+	: tag(std::move(tag))
+	, sender_server(std::move(server))
+	, data(std::move(data))
 	{}
 
 	std::uint16_t version{current_version};
-	std::string sender_name;
-	host_port sender_key_server;
+	/// tag that can be used to identify which kind of contacting data is here
+	std::string tag;
+	/// Sender key server information, so that we can query the public key
+	host_port sender_server;
+	/// Arbitrary data associated with the contacting
+	octet_vector data;
 	serialisation::trailing_data trailing;
 
 	template<typename Ar>
 	void serialise(Ar& ar) {
 		serialisation::sequence<Ar> seq(ar);
-		seq & version & sender_name & sender_key_server & trailing;
+		seq & version & tag & sender_server & data & trailing;
 	}
 };
 

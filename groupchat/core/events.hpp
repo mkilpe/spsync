@@ -30,7 +30,7 @@ struct on_message {
 };
 
 struct on_contacting {
-	typedef void type(crypto::public_key_id sender, std::string name);
+	typedef void type(crypto::public_key_id sender, std::string name, std::string message);
 };
 
 struct on_invitation {

@@ -3,9 +3,9 @@
 #include "message.hpp"
 #include "channel.hpp"
 #include "chat_connection.hpp"
-#include "contact_list.hpp"
 #include "types.hpp"
 
+#include <spsync/client/contact_list.hpp>
 #include <spsync/core/users.hpp>
 #include <spsync/util/object_id.hpp>
 #include <securepath/event_system/event_loop.hpp>
@@ -17,6 +17,8 @@
 
 namespace securepath::groupchat {
 namespace gc = groupchat;
+
+using sync::client::contact_list;
 
 /// Configuration for the group chat
 struct groupchat_config {
@@ -44,7 +46,7 @@ public:
 	std::optional<gc::account_info> account_info() const;
 
 	/// Try to create account (create key, register key to the server)
-	void create_account(host_port const& server, std::string const& name);
+	void create_account(gc_servers const&, std::string const& name);
 
 	/// Load and connect to existing channels
 	std::deque<channel_id> load_channels();
@@ -55,7 +57,7 @@ public:
 	std::vector<std::shared_ptr<chat_connection>> connections() const;
 
 	/// add contact to contact_list and send contacting packet
-	void add_contact(crypto::public_key_id const& id, std::string const& name, host_port const& server);
+	void add_contact(user receiver, std::string name, std::string message);
 
 	/// return contacts
 	contact_list& contacts();

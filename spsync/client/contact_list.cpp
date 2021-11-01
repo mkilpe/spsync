@@ -2,7 +2,7 @@
 
 #include <securepath/common/key_value_database.hpp>
 
-namespace securepath::groupchat {
+namespace securepath::sync::client {
 
 contact_list::contact_list(database::connection_ptr db)
 : db_(db)

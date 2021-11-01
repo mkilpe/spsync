@@ -3,7 +3,7 @@
 #include "contact.hpp"
 #include <securepath/database/connection.hpp>
 
-namespace securepath::groupchat {
+namespace securepath::sync::client {
 
 /// GC contact list
 class contact_list {

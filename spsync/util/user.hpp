@@ -1,10 +1,13 @@
 #ifndef SPSYNC_UTIL_USER_HEADER
 #define SPSYNC_UTIL_USER_HEADER
 
+#include "metadata.hpp"
+
 #include <securepath/crypto/public_key_id.hpp>
-#include <securepath/util/octet_vector.hpp>
 #include <securepath/serialisation/decls.hpp>
 #include <securepath/serialisation/sequence.hpp>
+#include <securepath/util/host_port.hpp>
+#include <securepath/util/types.hpp>
 
 #include <iosfwd>
 
@@ -42,6 +45,29 @@ bool operator<(user_id const& left, user_id const& right);
 
 std::ostream& operator<<(std::ostream&, user_id const&);
 
+class user : public metadata {
+public:
+	user() = default;
+	user(user_id id, host_port hp);
+
+	/// Returns true if this user is valid
+	bool is_valid() const;
+
+	user_id id() const;
+	host_port key_server() const;
+
+	template<typename Ar>
+	void serialise(Ar& ar) {
+		serialisation::sequence<Ar> seq(ar);
+		seq & id_ & key_server_ & static_cast<metadata&>(*this) & trailing_data_;
+	}
+
+private:
+	user_id id_;
+	/// what server the key belongs to
+	host_port key_server_;
+	serialisation::trailing_data trailing_data_;
+};
 
 /// User access type to storage
 enum class access_type {

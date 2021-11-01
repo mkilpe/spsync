@@ -11,12 +11,12 @@
 #include <spsync/test/test_server_runner.hpp>
 
 
-namespace securepath::sync::test {
+namespace securepath::sync::client::test {
 namespace {
 class test_client : public client_sync, public event_system::event_handler {
 public:
 	test_client(event_system::event_loop& loop, network::context& context, std::string const& dbname)
-	: client_sync(context, loop, create_test_database(dbname))
+	: client_sync(context, loop, sync::test::create_test_database(dbname))
 	, event_handler(loop)
 	, net(context, *this)
 	{}
@@ -123,13 +123,13 @@ bool check_member_status(test_client const& c, crypto::public_key_id const& uid,
 
 TEST_CASE("client_sync", "[unit]") {
 	event_system::single_thread_event_loop single_thread_event_loop;
-	test_context net_context;
+	sync::test::test_context net_context;
 
 	net_context.add_client(4);
 	net_context.add_client_keys_for_server();
 	net_context.share_client_keys();
 
-	test_server server(net_context.server_context());
+	sync::test::test_server server(net_context.server_context());
 	server.run();
 	std::this_thread::sleep_for(1s);
 

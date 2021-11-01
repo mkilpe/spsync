@@ -36,6 +36,24 @@ std::ostream& operator<<(std::ostream& out, user_id const& id) {
 	return out << id.public_key_id();
 }
 
+user::user(user_id id, host_port hp)
+: id_(std::move(id))
+, key_server_(std::move(hp))
+{
+}
+
+bool user::is_valid() const {
+	return id_.is_valid();
+}
+
+user_id user::id() const {
+	return id_;
+}
+
+host_port user::key_server() const {
+	return key_server_;
+}
+
 serialisation::serialiser& serialise(serialisation::serialiser& s, access_type const& v) {
 	return securepath::serialisation::serialise(s, v);
 }
