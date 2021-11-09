@@ -5,6 +5,9 @@
 #include <groupchat/core/groupchat.hpp>
 #include <groupchat/core/events.hpp>
 #include <groupchat/core/version.hpp>
+#include <spsync/client/events.hpp>
+#include <spsync/client/request.hpp>
+#include <spsync/client/protocol/contact.hpp>
 #include <spsync/core/types.hpp>
 #include <spsync/core/version.hpp>
 #include <spsync/util/object_id.hpp>
@@ -122,17 +125,13 @@ public:
 		notify(event_type::state_change, json::serialize(json::object{{"type", "chat"}, {"data", event}}));
 	}
 
-	void on_contacting(crypto::public_key_id sender, std::string name, std::string message) {
-		LOG_TRACE("json_manager::on_contacting [kid=%, name=%, msg=%]", sender, name, message);
-		json::object event{
-			{"action", "contacting"},
-			{"sender", json::object
-				{
-					{"keyid", sender.in_hex()},
-					{"name", name}
-				}},
-			{"message", message}};
-		notify(event_type::request, json::serialize(json::object{{"type", "contact"}, {"data", event}}));
+	void on_contacting(sync::client::request const& req
+		, std::string const& name
+		, std::string const& message)
+	{
+		LOG_TRACE("json_manager::on_contacting [kid=%, name=%, msg=%]", req.sender, name, message);
+		notify(event_type::request, json::serialize(json::object{{"type", "contact"}
+			, {"data", contacting_to_object(req, name, message)}}));
 	}
 
 	void handle_event(std::unique_ptr<event_system::event_base> ev) override {
@@ -143,7 +142,7 @@ public:
 			, event_dest<events::on_change_user>(&impl::on_change_user)
 			, event_dest<events::on_join>(&impl::on_join)
 			, event_dest<events::on_message>(&impl::on_message)
-			, event_dest<events::on_contacting>(&impl::on_contacting) );
+			, event_dest<sync::client::events::on_contacting>(&impl::on_contacting) );
 	}
 
 	host_port extract_host_port(json::object const& obj, std::string const& default_host, uint16_t default_port) {
@@ -178,8 +177,7 @@ public:
 	host_port extract_key_host_port(json::object const& obj) {
 		auto info = account_info();
 		if(info) {
-			//t: also parameterise the key server port for own account
-			return extract_host_port(obj, info->server.host, sync::default_key_server_port);
+			return extract_host_port(obj, info->me.key_server().host, info->me.key_server().port);
 		} else {
 			return extract_host_port(obj, "gc.securepath.fi", sync::default_key_server_port);
 		}
@@ -295,7 +293,7 @@ std::string json_manager::get_contacts(std::string_view const&) const {
 			json_c.push_back(json::object{
 				{"name", v->name()},
 				{"id", key_id},
-				{"request", v->state() == sync::client::contact_state::request} });
+				{"complete", v->state() == sync::client::contact_state::complete} });
 		}
 		json::object ret{{"data", json_c}};
 		return json::serialize(ret);
@@ -310,17 +308,16 @@ std::string json_manager::add_contact(std::string_view const& arg) {
 		auto key_id_string = extract<std::string>(obj, "id");
 
 		crypto::public_key_id key_id{key_id_string};
-
 		auto contact = impl_->contacts().find(key_id);
-		if(contact) {
+
+		if(contact && contact->state() == sync::client::contact_state::complete) {
 			contact->set_name(name);
-			contact->set_state(sync::client::contact_state::complete);
 		} else {
 			user receiver{key_id, impl_->extract_key_host_port(obj)};
-			impl_->add_contact(receiver, name, message.value_or(""));
+			impl_->request_handler().add_contact(receiver, name, message.value_or(""));
 		}
-		auto kid = key_id.in_hex();
-		return json::serialize(json::object{{"name", name}, {"id", kid}, {"request", false}});
+
+		return json::serialize(json::object{{"name", name}, {"id", key_id.in_hex()}});
 	});
 }
 
@@ -565,6 +562,48 @@ std::string json_manager::get_version() const {
 			{"license", "<todo>"}};
 
 		return json::serialize(info);
+	});
+}
+
+std::string json_manager::get_requests(std::string_view const&) const {
+	return call([&]{
+		json::array arr;
+		auto list = impl_->requests().enumerate();
+		for(auto&& v : list) {
+			if(v.tag == sync::client::contact_tag) {
+				auto data = serialisation::asn_der_deserialise<sync::client::protocol::contact_data>(v.data);
+				arr.push_back(contacting_to_object(v, data.name, data.message));
+			}
+		}
+		return json::serialize(json::object{{"data", arr}});
+	});
+}
+
+std::string json_manager::request_action(std::string_view const& arg) {
+	return call([&]{
+		json::object obj = json::parse(arg).as_object();
+		std::string action = extract<std::string>(obj, "action");
+		auto id = extract<sync::client::request_id>(obj, "requestid");
+
+		json::object result;
+
+		auto& rh = impl_->request_handler();
+		if(action == "add_contact") {
+			auto contact = rh.accept_contact_request(id);
+			result = json::object{{"name", contact->name()}, {"id", contact->id().public_key_id().in_hex()}};
+		} else if(action == "remove") {
+			rh.remove_request(id);
+		} else if(action == "ban") {
+			auto req = impl_->requests().find(id);
+			if(!req) {
+				throw make_error(securepath::errc::no_such_data, "no such contact request");
+			}
+			impl_->requests().ban_sender(req->sender.id().public_key_id());
+			rh.remove_request(id);
+		} else if(action == "retry") {
+			rh.try_evaluate_request(id);
+		}
+		return json::serialize(result);
 	});
 }
 

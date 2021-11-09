@@ -54,6 +54,10 @@ host_port user::key_server() const {
 	return key_server_;
 }
 
+std::ostream& operator<<(std::ostream& out, user const& u) {
+	return out << "user={" << u.id() << ", " << u.key_server() << "}";
+}
+
 serialisation::serialiser& serialise(serialisation::serialiser& s, access_type const& v) {
 	return securepath::serialisation::serialise(s, v);
 }

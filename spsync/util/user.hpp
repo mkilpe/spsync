@@ -39,6 +39,7 @@ private:
 	serialisation::trailing_data trailing_data_;
 };
 
+
 bool operator==(user_id const& left, user_id const& right);
 bool operator!=(user_id const& left, user_id const& right);
 bool operator<(user_id const& left, user_id const& right);
@@ -68,6 +69,8 @@ private:
 	host_port key_server_;
 	serialisation::trailing_data trailing_data_;
 };
+
+std::ostream& operator<<(std::ostream&, user const&);
 
 /// User access type to storage
 enum class access_type {

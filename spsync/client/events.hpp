@@ -1,9 +1,11 @@
 #pragma once
 
 #include "types.hpp"
+#include "request.hpp"
 
 namespace securepath::sync::client::events {
 
+/////
 struct on_connect {
 	typedef void type();
 };
@@ -12,12 +14,12 @@ struct on_disconnect {
 	typedef void type(error);
 };
 
-struct on_contacting {
-	typedef void type(crypto::public_key_id sender, std::string tag, octet_vector data);
+struct on_request {
+	typedef void type(request);
 };
 
-struct on_invitation {
-	typedef void type();
+struct on_contacting {
+	typedef void type(request, std::string name, std::string message);
 };
 
 }

@@ -17,4 +17,15 @@ using time_point = std::chrono::time_point<clock_type>;
 using user_id = sync::util::user_id;
 using user = sync::util::user;
 
+std::string const contact_tag{"contacting_v1"};
+
+using request_id = std::int64_t;
+
+struct account_info {
+	user me;
+	std::string name;
+	host_port server; //home sync server
+	host_port packet_server;
+};
+
 }

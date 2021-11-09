@@ -1,6 +1,7 @@
 #ifndef GROUPCHAT_CORE_TYPES_HEADER
 #define GROUPCHAT_CORE_TYPES_HEADER
 
+#include <spsync/client/types.hpp>
 #include <spsync/core/users.hpp>
 #include <spsync/util/object_id.hpp>
 
@@ -49,28 +50,9 @@ std::string const groupchat_name_id{"gc_name_v1"};
 // tag used for contacting packets
 std::string const groupchat_contacting_tag{"gc_contacting_v1"};
 
-struct account_info {
-	user me;
-	std::string name;
-	host_port server; //home sync server
-	host_port packet_server;
-};
-
 struct channel_id {
 	server_id sid;
 	chat_id cid;
-};
-
-struct gc_contacting_data {
-	std::string name;
-	std::string message;
-	serialisation::trailing_data trailing;
-
-	template<typename Ar>
-	void serialise(Ar& ar) {
-		serialisation::sequence<Ar> seq(ar);
-		seq & name & message & trailing;
-	}
 };
 
 struct gc_servers {
@@ -83,6 +65,8 @@ struct gc_servers {
 	host_port sync_server() const { return host_port{host, sync_server_port}; }
 	host_port packet_server() const { return host_port{host, packet_server_port}; }
 };
+
+using sync::client::account_info;
 
 }
 

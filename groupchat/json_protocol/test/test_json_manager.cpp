@@ -61,15 +61,17 @@ TEST_CASE("json_manager_test", "[system]") {
 
 		CHECK_JSON(manager1.get_contacts(""), json_get_contacts_result({}));
 
-		CHECK_JSON(manager1.add_contact(json_add_contact({"my test contact", net_context.key_id(1)}))
+		CHECK_JSON(manager1.add_contact(json_add_contact({"my test contact", net_context.key_id(1)}, "test msg"))
 			, json_add_contact_result({"my test contact", net_context.key_id(1)}));
 		CHECK_JSON(manager1.get_contacts(""), json_get_contacts_result({json_contact{"my test contact", net_context.key_id(1)}}));
 
-		WAIT_CHECK(manager2.has_contacting_event(net_context.key_id(0), "test"), 2s);
-		CHECK_JSON(manager2.get_contacts(""), json_get_contacts_result({json_contact{"test", net_context.key_id(0), true}}));
+		WAIT_CHECK(manager2.has_contacting_event(net_context.key_id(0), "test", "test msg"), 2s);
+
+		manager2.add_contact(json_add_contact({"test", net_context.key_id(0)}, "test msg"));
+		CHECK_JSON(manager2.get_contacts(""), json_get_contacts_result({json_contact{"test", net_context.key_id(0)}}));
 
 		// change already existing contact
-		CHECK_JSON(manager1.add_contact(json_add_contact({"my contact", net_context.key_id(1)}))
+		CHECK_JSON(manager1.add_contact(json_add_contact({"my contact", net_context.key_id(1)}, "test"))
 			, json_add_contact_result({"my contact", net_context.key_id(1)}));
 
 		//try to create chat without having member as contact (we don't have the key yet)
@@ -77,7 +79,7 @@ TEST_CASE("json_manager_test", "[system]") {
 			json_create_chat("test chat", {net_context.key_id(1), net_context.key_id(2)})), R"({ "error" : {}})");
 
 		//add third as contact too so we can create chat later on (this causes the client to download the key)
-		CHECK_JSON(manager1.add_contact(json_add_contact({"my other contact", net_context.key_id(2)}))
+		CHECK_JSON(manager1.add_contact(json_add_contact({"my other contact", net_context.key_id(2)}, ""))
 			, json_add_contact_result({"my other contact", net_context.key_id(2)}));
 
 		WAIT_CHECK(manager1.has_connect_event(), 2s);
@@ -518,5 +520,50 @@ TEST_CASE("json_manager message order test", "[system]") {
 	}
 }
 
+
+TEST_CASE("json_manager requests test", "[system]") {
+
+	sync::test::test_context net_context;
+	net_context.add_client(2);
+
+	sync::test::test_server server(net_context.server_context());
+	server.run();
+	std::this_thread::sleep_for(1s);
+
+	{
+		json_test_manager manager1(net_context, 0, remove_db);
+		json_test_manager manager2(net_context, 1, remove_db);
+		CHECK_JSON(manager1.create_account(json_create_account("test1")), json_create_account_result("test1"));
+		CHECK_JSON(manager2.create_account(json_create_account("test2")), json_create_account_result("test2"));
+
+		CHECK_EQUAL_JSON(manager1.connect(), "{}");
+		CHECK_EQUAL_JSON(manager2.connect(), "{}");
+
+		CHECK_JSON(manager1.add_contact(json_add_contact({"my test contact", net_context.key_id(1)}, "msg1"))
+			, json_add_contact_result({"my test contact", net_context.key_id(1)}));
+		CHECK_JSON(manager1.get_contacts(""), json_get_contacts_result({json_contact{"my test contact", net_context.key_id(1)}}));
+
+		WAIT_CHECK(manager2.has_contacting_event("waiting_for_verification", net_context.key_id(0), "test1", "msg1"), 2s);
+		CHECK_JSON(manager2.get_contacts(""), json_get_contacts_result({}));
+		WAIT_CHECK(manager2.has_contacting_event("verification_succeeded", net_context.key_id(0), "test1", "msg1"), 2s);
+
+		CHECK_JSON(manager2.get_requests(""), json_get_requests_result({
+			json_contact_request{
+				1,
+				net_context.key_id(0),
+				"verification_succeeded",
+				"test1",
+				"msg1"
+			}}));
+
+		auto rlist = list_requests(manager2.get_requests(""));
+		REQUIRE(rlist.size() == 1);
+
+		CHECK_JSON(manager2.request_action(json_request_action(1, "add_contact"))
+			, json_add_contact_result({"test1", net_context.key_id(0)}));
+
+		CHECK_JSON(manager2.get_contacts(""), json_get_contacts_result({json_contact{"test1", net_context.key_id(0)}}));
+	}
 }
 
+}

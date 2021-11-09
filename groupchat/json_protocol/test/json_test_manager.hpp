@@ -42,6 +42,11 @@ struct json_test_manager : json_manager {
 		events.clear();
 	}
 
+	std::size_t events_size() const {
+		std::unique_lock l{mutex};
+		return events.size();
+	}
+
 	bool contains_event(event_type type, std::string exp) const {
 		std::unique_lock l{mutex};
 		for(auto&& v : events) {
@@ -105,13 +110,25 @@ struct json_test_manager : json_manager {
 				 })", cid, mid));
 	}
 
-	bool has_contacting_event(crypto::public_key_id kid, std::string name) const {
+	bool has_contacting_event(crypto::public_key_id kid, std::string name, std::string message) const {
 		return contains_event(event_type::request, print(R"(
 				{"type": "contact",
 				 "data":
 				 	{ "action": "contacting",
-				 	  "sender": {"keyid": "%", "name": "%"} }
-				 })", kid.in_hex(), name));
+				 	  "sender": {"keyid": "%", "name": "%"},
+				 	  "message": "%" }
+				 })", kid.in_hex(), name, message));
+	}
+
+	bool has_contacting_event(std::string state, crypto::public_key_id kid, std::string name, std::string message) const {
+		return contains_event(event_type::request, print(R"(
+				{"type": "contact",
+				 "data":
+				 	{ "action": "contacting",
+				 	  "state": "%",
+				 	  "sender": {"keyid": "%", "name": "%"},
+				 	  "message": "%" }
+				 })", state, kid.in_hex(), name, message));
 	}
 
 	mutable std::mutex mutex;

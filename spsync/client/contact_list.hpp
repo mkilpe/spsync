@@ -5,7 +5,7 @@
 
 namespace securepath::sync::client {
 
-/// GC contact list
+/// contact list
 class contact_list {
 public:
 	contact_list(database::connection_ptr);

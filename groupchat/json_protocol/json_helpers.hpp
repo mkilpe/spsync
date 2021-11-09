@@ -3,6 +3,7 @@
 #include "json.hpp"
 
 #include <groupchat/core/types.hpp>
+#include <spsync/client/request.hpp>
 #include <securepath/log/log.hpp>
 #include <securepath/util/error.hpp>
 #include <string_view>
@@ -26,6 +27,22 @@ inline json::object server_to_object(host_port const& server) {
 	return json::object{
 			{"host", server.host},
 			{"port", server.port}};
+}
+
+inline json::object contacting_to_object(sync::client::request const& req
+	, std::string const& name
+	, std::string const& message)
+{
+	return json::object{
+		{"action", "contacting"},
+		{"state", to_string(req.state)},
+		{"requestid", req.id},
+		{"sender", json::object
+			{
+				{"keyid", req.sender.id().public_key_id().in_hex()},
+				{"name", name}
+			}},
+		{"message", message}};
 }
 
 inline std::string call(auto Func) {

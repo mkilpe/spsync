@@ -54,7 +54,7 @@ std::unique_ptr<contact> contact_list::add(user_id const& uid) {
 	if(!uid.is_valid()) {
 		throw make_error(securepath::errc::invalid_data, "invalid user id");
 	}
-	auto q = db_->prepare("INSERT INTO contacts(key_id) VALUES(:id);");
+	auto q = db_->prepare("INSERT OR REPLACE INTO contacts(key_id) VALUES(:id);");
 	q.bind(":id", uid.public_key_id().data());
 	q.execute();
 	return find(uid);

@@ -7,7 +7,7 @@
 namespace securepath::sync::client {
 
 enum class contact_state {
-	request,
+	incomplete, //usually could not query the key yet
 	complete
 };
 
@@ -24,13 +24,10 @@ public:
 	host_port server() const;
 	/// State of the contact
 	contact_state state() const;
-	/// Get contacting data if any set
-	std::optional<octet_vector> contacting_data() const;
 
 	void set_name(std::string const& name);
 	void set_server(host_port const& server);
 	void set_state(contact_state);
-	void set_contacting_data(octet_vector const&);
 
 private:
 	user_id id_;

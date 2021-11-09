@@ -5,7 +5,9 @@
 #include "chat_connection.hpp"
 #include "types.hpp"
 
-#include <spsync/client/contact_list.hpp>
+#include <spsync/client/contact_handler.hpp>
+#include <spsync/client/request_storage.hpp>
+#include <spsync/client/types.hpp>
 #include <spsync/core/users.hpp>
 #include <spsync/util/object_id.hpp>
 #include <securepath/event_system/event_loop.hpp>
@@ -43,7 +45,7 @@ public:
 	void disconnect();
 
 	/// Returns associated account information if account exists
-	std::optional<gc::account_info> account_info() const;
+	std::optional<sync::client::account_info> account_info() const;
 
 	/// Try to create account (create key, register key to the server)
 	void create_account(gc_servers const&, std::string const& name);
@@ -56,11 +58,11 @@ public:
 	std::shared_ptr<chat_connection> find(server_id) const;
 	std::vector<std::shared_ptr<chat_connection>> connections() const;
 
-	/// add contact to contact_list and send contacting packet
-	void add_contact(user receiver, std::string name, std::string message);
-
 	/// return contacts
-	contact_list& contacts();
+	sync::client::contact_list& contacts();
+
+	/// return requests storage
+	sync::client::request_storage& requests();
 
 	/// return stored channel ids
 	channel_list& channel_ids();
@@ -68,6 +70,8 @@ public:
 	/// Attached network context
 	network::context& context();
 
+	/// Handler for contacts and requests
+	sync::client::contact_handler& request_handler();
 private:
 	bool check_account_exists(groupchat_config const&) const;
 

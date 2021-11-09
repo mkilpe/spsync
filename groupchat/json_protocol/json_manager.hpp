@@ -74,6 +74,12 @@ public:
 	/// get version and license information
 	std::string get_version() const;
 
+	/// get pending requests
+	std::string get_requests(std::string_view const&) const;
+
+	/// act on request
+	std::string request_action(std::string_view const&);
+
 	void close();
 private:
 	std::unique_ptr<event_system::event_loop> loop_;

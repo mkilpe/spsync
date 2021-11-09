@@ -2,7 +2,7 @@
 #include "channel.hpp"
 #include "events.hpp"
 
-#include <spsync/client/contact_connection.hpp>
+#include <spsync/client/contact_handler.hpp>
 #include <spsync/client/events.hpp>
 #include <spsync/comm/net_connection.hpp>
 #include <spsync/core/encryption_key_storage.hpp>
@@ -50,7 +50,7 @@ struct groupchat::impl
 	, database(open_gc_client_database(this->conf))
 	, callback(callb)
 	, channels(database)
-	, cconn(context, *this, database)
+	, cconn(context, callback, database)
 	{
 		network::enable_client_dh_handshake(context);
 		network::enable_client_pk_handshake(context);
@@ -74,7 +74,7 @@ struct groupchat::impl
 		info.name = gc_info->find<std::string>("name").value_or(info.me.id().public_key_id().in_hex());
 		info.server = gc_info->find<host_port>("server").value_or(host_port{});
 		info.packet_server = gc_info->find<host_port>("packet_server").value_or(host_port{});
-		cconn.set_own_id(info.me);
+		cconn.set_own_account(info);
 	}
 
 	bool init_crypto() {
@@ -109,32 +109,13 @@ struct groupchat::impl
 		info.name = name;
 		info.server = server.sync_server();
 		info.packet_server = server.packet_server();
-		cconn.set_own_id(info.me);
-	}
-
-	void on_contacting(crypto::public_key_id sender, std::string tag, octet_vector data) {
-		if(tag == groupchat_contacting_tag) {
-			try {
-				auto p = serialisation::asn_der_deserialise<gc_contacting_data>(data);
-				auto contact = cconn.contacts().find(sender);
-				if(contact) {
-					contact->set_name(p.name);
-					callback.emit<events::on_contacting>(sender, p.name, p.message);
-				} else {
-					LOG_WARN("no such contact?! [kid=%]", sender);
-				}
-			} catch(std::exception const& ex) {
-				LOG_WARN("exception while handling gc contacting data", ex.what());
-			}
-		} else {
-			LOG_WARN("unknown contacting tag, ignoring... [tag=%]", tag);
-			cconn.contacts().remove(sender);
-		}
+		cconn.set_own_account(info);
 	}
 
 	void handle_event(std::unique_ptr<event_system::event_base> ev) override {
-		dispatch( *ev
+		/*dispatch( *ev
 				, event_dest<sync::client::events::on_contacting>(&impl::on_contacting) );
+		*/
 	}
 
 	void register_my_key(host_port const& server) {
@@ -170,7 +151,7 @@ struct groupchat::impl
 	channel_list channels;
 	std::map<server_id, std::shared_ptr<chat_connection>> connections;
 
-	sync::client::contact_connection cconn;
+	sync::client::contact_handler cconn;
 };
 
 bool groupchat::check_account_exists(groupchat_config const& conf) const {
@@ -287,15 +268,14 @@ std::vector<std::shared_ptr<chat_connection>> groupchat::connections() const {
 	return ret;
 }
 
-void groupchat::add_contact(user receiver, std::string name, std::string message) {
-	gc_contacting_data p{impl_->info.name, std::move(message)};
-	auto contact = impl_->cconn.add_contact(receiver, groupchat_contacting_tag, serialisation::asn_der_serialise(p));
-	contact->set_name(name);
-}
-
-contact_list& groupchat::contacts() {
+sync::client::contact_list& groupchat::contacts() {
 	assert(impl_);
 	return impl_->cconn.contacts();
+}
+
+sync::client::request_storage& groupchat::requests() {
+	assert(impl_);
+	return impl_->cconn.requests();
 }
 
 channel_list& groupchat::channel_ids() {
@@ -306,6 +286,11 @@ channel_list& groupchat::channel_ids() {
 network::context& groupchat::context() {
 	assert(impl_);
 	return impl_->context;
+}
+
+sync::client::contact_handler& groupchat::request_handler() {
+	assert(impl_);
+	return impl_->cconn;
 }
 
 }

@@ -2,8 +2,10 @@
 
 namespace securepath::sync::test {
 
-database::connection_ptr create_test_database(std::string const& db_name) {
-	std::remove(db_name.c_str());
+database::connection_ptr create_test_database(std::string const& db_name, bool remove) {
+	if(remove) {
+		std::remove(db_name.c_str());
+	}
 	return database::sqlite::create_sqlite_connection(db_name);
 }
 

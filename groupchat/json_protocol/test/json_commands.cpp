@@ -30,13 +30,17 @@ std::string json_get_contacts_result(std::vector<json_contact> list) {
 	return res;
 }
 
-std::string json_add_contact(json_contact c) {
-	return print(R"({ "name" : "%", "id": "%"})", c.name, c.kid.in_hex());
+std::string json_add_contact(json_contact c, std::string message) {
+	if(message.empty()) {
+		return print(R"({ "name" : "%", "id": "%"})", c.name, c.kid.in_hex());
+	} else {
+		return print(R"({ "name" : "%", "id": "%", "message": "%"})", c.name, c.kid.in_hex(), message);
+	}
 }
 
 std::string json_add_contact_result(json_contact c) {
 	auto kid_str = c.kid.in_hex();
-	return print(R"({ "name" : "%", "id": "%", "request": %})", c.name, kid_str, c.request ? "true" : "false");
+	return print(R"({ "name" : "%", "id": "%"})", c.name, kid_str);
 }
 
 std::string json_get_chats_result(std::vector<json_chat> list) {
@@ -232,6 +236,53 @@ std::string json_handle_qr_code_join(std::string chat_id) {
 
 std::string json_handle_qr_code_join_result(std::string chat_id) {
 	return print(R"({"type":"join", "data": {"id" : "%"}})", chat_id);
+}
+
+static json::object contact_request_to_json(json_contact_request r) {
+	return json::object{
+		{"action", "contacting"},
+		{"state", r.state},
+		{"requestid", r.id},
+		{"sender", json::object
+			{
+				{"keyid", r.sender.in_hex()},
+				{"name", r.name}
+			}},
+		{"message", r.message}};
+}
+
+static json_contact_request plain_contact_request(json::object const& obj) {
+	return json_contact_request{
+				extract<std::int64_t>(obj, "requestid"),
+				crypto::public_key_id{extract<std::string>(extract<json::object>(obj, "sender"), "keyid")},
+				extract<std::string>(obj, "state"),
+				extract<std::string>(extract<json::object>(obj, "sender"), "name"),
+				extract<std::string>(obj, "message")};
+}
+
+std::string json_get_requests_result(std::vector<json_contact_request> list) {
+	json::array arr;
+	for(auto&& v : list) {
+		arr.push_back(contact_request_to_json(v));
+	}
+	return json::serialize(json::object{{"data", arr}});
+}
+
+std::string json_request_action(std::int64_t id, std::string action) {
+	return print(R"({"requestid": %, "action": "%"})", id, action);
+}
+
+std::vector<json_contact_request> list_requests(std::string str) {
+	std::vector<json_contact_request> res;
+	CAPTURE(str);
+	CHECK_NOTHROW([&]{
+		auto obj = json::parse(str).as_object();
+		auto arr = extract<json::array>(obj, "data");
+		for(auto it = arr.begin(); it != arr.end(); ++it) {
+			res.push_back(plain_contact_request(it->as_object()));
+		}
+	}());
+	return res;
 }
 
 }

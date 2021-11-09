@@ -15,10 +15,9 @@ std::string json_create_account_result(std::string name);
 struct json_contact {
 	std::string name;
 	crypto::public_key_id kid;
-	bool request{};
 };
 std::string json_get_contacts_result(std::vector<json_contact>);
-std::string json_add_contact(json_contact);
+std::string json_add_contact(json_contact, std::string = {});
 std::string json_add_contact_result(json_contact);
 
 struct json_message {
@@ -71,5 +70,16 @@ std::string json_handle_qr_code_user(json_contact);
 std::string json_handle_qr_code_user_result(json_contact);
 std::string json_handle_qr_code_join(std::string);
 std::string json_handle_qr_code_join_result(std::string);
+
+struct json_contact_request {
+	std::int64_t id{};
+	crypto::public_key_id sender;
+	std::string state;
+	std::string name;
+	std::string message;
+};
+std::string json_get_requests_result(std::vector<json_contact_request>);
+std::string json_request_action(std::int64_t id, std::string action);
+std::vector<json_contact_request> list_requests(std::string);
 
 }
