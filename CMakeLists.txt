@@ -10,6 +10,10 @@ endif()
 
 include("${sp_main_repository_path}/cmake.main")
 
+if(ANDROID)
+	message("-- Building for ${ANDROID_ABI}")
+endif()
+
 #find_package(Boost 1.75.0 REQUIRED)
 get_filename_component(my_root_directory ${CMAKE_CURRENT_LIST_FILE} DIRECTORY)
 #include_directories(${my_directory}/external/boost)
