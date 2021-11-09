@@ -1,6 +1,6 @@
 #pragma once
 
-#include "types.hpp"
+#include <spsync/client/types.hpp>
 
 #include <securepath/util/typelist.hpp>
 
