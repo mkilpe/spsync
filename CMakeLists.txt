@@ -37,6 +37,10 @@ add_library(gc_lib STATIC
 	$<TARGET_OBJECTS:spsync_protocol>
 	$<TARGET_OBJECTS:spsync_util>
 
+	$<TARGET_OBJECTS:packet_transport_client>
+	$<TARGET_OBJECTS:packet_transport_protocol>
+	$<TARGET_OBJECTS:key_client_lib>
+
 	$<TARGET_OBJECTS:client_common>
 	$<TARGET_OBJECTS:common>
 	$<TARGET_OBJECTS:crypto>

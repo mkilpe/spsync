@@ -23,14 +23,8 @@
 * update and check user access rights for storage when handling records
 * improve event handling (i.e. try to remove blocking mutexes with strands etc)
 * gather statistics
-
-out of sync:
-
-  1. bring us up-to-date with server state
-
-  2. see if there are conflicts and notify higher level if there are
-  3. recreate the records with correct previous tag/last seen seq for non-conflicting records
-  4. try to commit again
+* enforce max sizes for records and a like
+* check signature/sender
 
 ---------------------
 
@@ -41,13 +35,13 @@ out of sync:
     * try to find the key from the member change before processing all the records
 
 * signing [1d]
-  * allow to sign
-  * check on receive if we have key
+  + allow to sign
+  + check on receive if we have key
   * client interface to check if record was signed and authentic (if we don't have the key, it is not checked)
   * optional server side check of the signature?
 * msg server [5d]
-  * separate server to send messages to other users
-  * stored in database and acked when received
+  + separate server to send messages to other users
+  + stored in database and acked when received
   * server connects to the server of receiver to transport the message
 * push notification [2d]
   * server side impl
