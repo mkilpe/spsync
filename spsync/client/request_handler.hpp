@@ -18,7 +18,7 @@ public:
 	account_info own_account() const;
 
 	/// connect to the server
-	void connect(host_port const& server);
+	error connect(host_port const& server);
 
 	/// close connection
 	void close();

@@ -182,12 +182,12 @@ account_info request_handler::own_account() const {
 	return impl_->own_account;
 }
 
-void request_handler::connect(host_port const& server) {
+error request_handler::connect(host_port const& server) {
 	if(!impl_->own_account.me.is_valid()) {
 		LOG_WARN("own id not set for request_handler");
 		throw make_error(errc::constraint_violation, "own id not set");
 	}
-	impl_->client.connect(server.host);
+	return impl_->client.connect(server.host);
 }
 
 void request_handler::close() {

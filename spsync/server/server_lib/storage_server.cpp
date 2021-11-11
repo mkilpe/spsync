@@ -69,8 +69,12 @@ public:
 	virtual void on_received(octet_span s) override {
 		try {
 			deser_.handle(s, std::ref(*this));
+		} catch(error const& err) {
+			LOG_WARN("error while handling packet [err=%]", err);
+			terminate(err);
 		} catch(...) {
 			LOG_WARN("unknown exception while handling network packet");
+			terminate(make_error(protocol::errc::invalid_state));
 		}
 	}
 

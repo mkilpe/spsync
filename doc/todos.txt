@@ -25,6 +25,9 @@
 * gather statistics
 * enforce max sizes for records and a like
 * check signature/sender
+* separate public key storage for "own" and "foreign" keys
+  * allow only own keys to connect to packet server
+* allow to throttle connection speeds
 
 ---------------------
 

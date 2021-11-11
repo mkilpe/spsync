@@ -51,7 +51,18 @@ TEST_CASE("json_manager_test", "[system]") {
 		CHECK_JSON(manager1.get_account(), json_get_account_result("test"));
 
 		CHECK_EQUAL_JSON(manager1.connect(), "{}");
+		WAIT_CHECK(manager1.has_connect_event(), 2s);
+
+		// calling connect should work and emit the event again
+		CHECK_EQUAL_JSON(manager1.connect(), "{}");
+		WAIT_CHECK(manager1.has_connect_event(), 2s);
+
 		CHECK_EQUAL_JSON(manager1.disconnect(), "{}");
+		WAIT_CHECK(manager1.has_disconnect_event(), 2s);
+
+		// calling disconnect should work and emit the event again
+		CHECK_EQUAL_JSON(manager1.disconnect(), "{}");
+		WAIT_CHECK(manager1.has_disconnect_event(), 2s);
 
 		CHECK_EQUAL_JSON(manager1.connect(), "{}");
 		CHECK_EQUAL_JSON(manager2.connect(), "{}");

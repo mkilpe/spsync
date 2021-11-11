@@ -64,14 +64,14 @@ public:
 		stop_handler();
 	}
 
-	void on_connect(server_id sid) {
+	/*void on_connect(server_id sid) {
 		json::object event{
 			{"connection", "online"},
 			{"server", sid}};
 		notify(event_type::state_change, json::serialize(json::object{{"type", "connection"}, {"data", event}}));
-	}
+	}/*
 
-	void on_disconnect(server_id sid, error err) {
+	/*void on_disconnect(server_id sid, error err) {
 		json::object event{
 			{"connection", "offline"},
 			{"server", sid}};
@@ -79,7 +79,7 @@ public:
 			event["error"] = error_to_object(err);
 		}
 		notify(event_type::state_change, json::serialize(json::object{{"type", "connection"}, {"data", event}}));
-	}
+	}*/
 
 	void on_create(server_id sid, chat_id cid, error err) {
 		json::object event{
@@ -125,6 +125,21 @@ public:
 		notify(event_type::state_change, json::serialize(json::object{{"type", "chat"}, {"data", event}}));
 	}
 
+	void on_connect() {
+		json::object event{
+			{"connection", "online"}};
+		notify(event_type::state_change, json::serialize(json::object{{"type", "connection"}, {"data", event}}));
+	}
+
+	void on_disconnect(error err) {
+		json::object event{
+			{"connection", "offline"}};
+		if(err) {
+			event["error"] = error_to_object(err);
+		}
+		notify(event_type::state_change, json::serialize(json::object{{"type", "connection"}, {"data", event}}));
+	}
+
 	void on_contacting(sync::client::request const& req
 		, std::string const& name
 		, std::string const& message)
@@ -136,12 +151,14 @@ public:
 
 	void handle_event(std::unique_ptr<event_system::event_base> ev) override {
 		dispatch( *ev
-			, event_dest<events::on_connect>(&impl::on_connect)
-			, event_dest<events::on_disconnect>(&impl::on_disconnect)
+			//, event_dest<events::on_connect>(&impl::on_connect)
+			//, event_dest<events::on_disconnect>(&impl::on_disconnect)
 			, event_dest<events::on_create>(&impl::on_create)
 			, event_dest<events::on_change_user>(&impl::on_change_user)
 			, event_dest<events::on_join>(&impl::on_join)
 			, event_dest<events::on_message>(&impl::on_message)
+			, event_dest<sync::client::events::on_connect>(&impl::on_connect)
+			, event_dest<sync::client::events::on_disconnect>(&impl::on_disconnect)
 			, event_dest<sync::client::events::on_contacting>(&impl::on_contacting) );
 	}
 

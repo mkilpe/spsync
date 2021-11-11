@@ -15,6 +15,7 @@
 #include <securepath/database/sqlite/connection.hpp>
 #include <securepath/event_system/event_handler.hpp>
 #include <securepath/network/encrypted_net_base.hpp>
+#include <securepath/network/encryption/error.hpp>
 #include <securepath/network/encryption/handshake/dh_handshake.hpp>
 #include <securepath/network/encryption/handshake/pk_handshake.hpp>
 
@@ -191,7 +192,13 @@ groupchat::~groupchat()
 
 void groupchat::connect() {
 	assert(impl_);
-	impl_->cconn.connect(impl_->info.packet_server);
+	error err = impl_->cconn.connect(impl_->info.packet_server);
+	if(err) {
+		if(make_error_code(network::errc::already_connected) == err.code()) {
+			// connected already, emit event nevertheless
+			impl_->callback.emit<sync::client::events::on_connect>();
+		}
+	}
 	if(impl_->connections.empty()) {
 		load_channels();
 	}
