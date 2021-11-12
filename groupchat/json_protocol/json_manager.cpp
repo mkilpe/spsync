@@ -290,6 +290,18 @@ std::string json_manager::create_account(std::string_view const& arg) {
 	});
 }
 
+std::string json_manager::get_config(std::string_view const&) const {
+	return call([&]{
+		return "{}";
+	});
+}
+
+std::string json_manager::set_config(std::string_view const&) {
+	return call([&]{
+		return "{}";
+	});
+}
+
 std::string json_manager::connect() {
 	return call([&]{
 		impl_->connect();

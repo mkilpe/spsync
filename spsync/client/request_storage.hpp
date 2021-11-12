@@ -15,7 +15,7 @@ class request_storage {
 public:
 	request_storage(database::connection_ptr);
 
-	/// get all the pending requests
+	/// get all the pending requests, order of last change, newest first
 	std::deque<db_request> enumerate(std::optional<request_state> = std::nullopt) const;
 
 	/// find request with id

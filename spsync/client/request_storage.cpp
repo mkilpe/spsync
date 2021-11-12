@@ -32,6 +32,7 @@ std::deque<db_request> request_storage::enumerate(std::optional<request_state> s
 	if(state) {
 		qstr += " WHERE state = :state";
 	}
+	qstr += " ORDER BY time DESC";
 	auto q = db_->prepare(qstr);
 	if(state) {
 		q.bind(":state", static_cast<std::int64_t>(*state));

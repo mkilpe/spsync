@@ -35,6 +35,12 @@ public:
 	/// create account if not already exists, otherwise error
 	std::string create_account(std::string_view const&);
 
+	/// get configuration values for given argument or all if not specified
+	std::string get_config(std::string_view const&) const;
+
+	/// set configuration values
+	std::string set_config(std::string_view const&);
+
 	/// connect to the server and update existing chats
 	std::string connect();
 
