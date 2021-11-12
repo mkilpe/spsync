@@ -145,10 +145,10 @@ TEST_CASE("json_manager_test", "[system]") {
 
 			//note: oneself not considered as contact
 			WAIT_CHECK_JSON(manager1.get_messages(json_get_messages(id))
-				, json_get_messages_result({{1, res.id, "test message", net_context.key_id(0)}}), 2s);
+				, json_get_messages_result({{1, res.id, "test message", net_context.key_id(0), true}}), 2s);
 
 			WAIT_CHECK_JSON(manager2.get_messages(json_get_messages(id))
-				, json_get_messages_result({{1, res.id, "test message", net_context.key_id(0)}}), 2s);
+				, json_get_messages_result({{1, res.id, "test message", net_context.key_id(0), false}}), 2s);
 
 			WAIT_CHECK(manager1.has_message_event(id, res.id), 2s);
 			WAIT_CHECK(manager2.has_message_event(id, res.id), 2s);
@@ -158,10 +158,10 @@ TEST_CASE("json_manager_test", "[system]") {
 			REQUIRE(!res.id.empty());
 
 			WAIT_CHECK_JSON(manager2.get_messages(json_get_messages(id))
-				, json_get_messages_result({{2, res.id, "other message", net_context.key_id(1)}}), 2s);
+				, json_get_messages_result({{2, res.id, "other message", net_context.key_id(1), true}}), 2s);
 
 			WAIT_CHECK_JSON(manager1.get_messages(json_get_messages(id))
-				, json_get_messages_result({{2, res.id, "other message", net_context.key_id(1)}}), 2s);
+				, json_get_messages_result({{2, res.id, "other message", net_context.key_id(1), false}}), 2s);
 		}
 	}
 	{ //qr code
@@ -245,6 +245,14 @@ TEST_CASE("json_manager message test", "[system]") {
 		WAIT_CHECK(list_messages(clients[i]->get_messages(json_get_messages(chat_res.result.id))).size()
 			 == count*messages, 30s);
 	}
+
+	// check the 'me' status
+	for(int i = 0; i != count; ++i) {
+		auto list = list_messages(clients[i]->get_messages(json_get_messages(chat_res.result.id)));
+		for(auto v : list) {
+			CHECK(v.me == (net_context.key_id(i) == v.sender_kid));
+		}
+	}
 }
 
 TEST_CASE("json_manager chat order test", "[system]") {
@@ -281,8 +289,8 @@ TEST_CASE("json_manager chat order test", "[system]") {
 		json_send_message_result res = manager.send_message(json_send_message(cid1, "1"));
 		REQUIRE(!res.id.empty());
 		WAIT_CHECK_JSON(manager.get_messages(json_get_messages(cid1))
-			, json_get_messages_result({{1, res.id, "1", net_context.key_id(0)}}), 2s);
-		messages.push_back(json_message{1, res.id, "1", net_context.key_id(0)});
+			, json_get_messages_result({{1, res.id, "1", net_context.key_id(0), true}}), 2s);
+		messages.push_back(json_message{1, res.id, "1", net_context.key_id(0), true});
 	}
 
 
@@ -303,7 +311,7 @@ TEST_CASE("json_manager chat order test", "[system]") {
 		std::string m = print("%", i+2);
 		json_send_message_result res = manager.send_message(json_send_message(cid1, m));
 		REQUIRE(!res.id.empty());
-		messages.push_back(json_message{i+2, res.id, m, net_context.key_id(0)});
+		messages.push_back(json_message{i+2, res.id, m, net_context.key_id(0), true});
 	}
 
 	WAIT_CHECK_JSON(manager.get_messages(json_get_messages(cid1))
@@ -380,7 +388,7 @@ TEST_CASE("json_manager chat order test", "[system]") {
 		json_send_message_result res = manager.send_message(json_send_message(cid2, "1"));
 		REQUIRE(!res.id.empty());
 		WAIT_CHECK_JSON(manager.get_messages(json_get_messages(cid2))
-			, json_get_messages_result({{1, res.id, "1", net_context.key_id(0)}}), 2s);
+			, json_get_messages_result({{1, res.id, "1", net_context.key_id(0), true}}), 2s);
 	}
 	{
 		CHECK_JSON(manager.get_chats(""), json_get_chats_result({
@@ -409,7 +417,7 @@ TEST_CASE("json_manager chat order test", "[system]") {
 		json_send_message_result res = manager.send_message(json_send_message(cid1, "a"));
 		REQUIRE(!res.id.empty());
 		WAIT_CHECK_JSON(manager.get_messages(json_get_messages(cid1))
-			, json_get_messages_result({{10, res.id, "a", net_context.key_id(0)}}), 2s);
+			, json_get_messages_result({{10, res.id, "a", net_context.key_id(0), true}}), 2s);
 		messages.push_back(json_message{10, res.id, "a", net_context.key_id(0)});
 	}
 	{
@@ -461,7 +469,7 @@ TEST_CASE("json_manager message order test", "[system]") {
 		std::string m = print("%", i);
 		json_send_message_result res = manager.send_message(json_send_message(cid, m));
 		REQUIRE(!res.id.empty());
-		messages.push_back(json_message{i+1, res.id, m, net_context.key_id(0)});
+		messages.push_back(json_message{i+1, res.id, m, net_context.key_id(0), true});
 	}
 
 	WAIT_CHECK_JSON(manager.get_messages(json_get_messages(cid))
@@ -481,7 +489,7 @@ TEST_CASE("json_manager message order test", "[system]") {
 		std::string m = print("%", i);
 		json_send_message_result res = manager.send_message(json_send_message(cid, m));
 		REQUIRE(!res.id.empty());
-		messages.push_back(json_message{i+1, res.id, m, net_context.key_id(0)});
+		messages.push_back(json_message{i+1, res.id, m, net_context.key_id(0), true});
 	}
 	WAIT_CHECK_JSON(manager.get_messages(json_get_messages(cid))
 		, json_get_messages_result(messages), 10s);
@@ -493,7 +501,7 @@ TEST_CASE("json_manager message order test", "[system]") {
 		std::string m = print("%", i);
 		json_send_message_result res = manager.send_message(json_send_message(cid, m));
 		REQUIRE(!res.id.empty());
-		messages.push_back(json_message{i+1, res.id, m, net_context.key_id(0)});
+		messages.push_back(json_message{i+1, res.id, m, net_context.key_id(0), true});
 	}
 
 	SECTION("desc chunking") {

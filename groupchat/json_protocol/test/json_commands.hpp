@@ -25,6 +25,7 @@ struct json_message {
 	std::string id;
 	std::string message;
 	crypto::public_key_id sender_kid;
+	bool me{};
 
 	auto operator<=>(json_message const&) const = default;
 };

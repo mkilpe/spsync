@@ -69,7 +69,7 @@ public:
 			{"connection", "online"},
 			{"server", sid}};
 		notify(event_type::state_change, json::serialize(json::object{{"type", "connection"}, {"data", event}}));
-	}/*
+	}*/
 
 	/*void on_disconnect(server_id sid, error err) {
 		json::object event{
@@ -202,11 +202,14 @@ public:
 
 	json::object sender_to_object(user_id const& uid) {
 		auto opt_contact = contacts().find(uid);
+		auto info = account_info();
+		bool is_me = info && info->me.id().public_key_id() == uid.public_key_id();
 
 		return json::object{
 				{"name", opt_contact ? opt_contact->name() : uid.public_key_id().in_hex()},
 				{"id", uid.public_key_id().in_hex()},
-				{"contact", static_cast<bool>(opt_contact)}};
+				{"contact", static_cast<bool>(opt_contact)},
+				{"me", static_cast<bool>(is_me)}};
 	}
 
 	json::object message_to_object(message const& m) {
