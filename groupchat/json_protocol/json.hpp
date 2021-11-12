@@ -1,16 +1,15 @@
 #pragma once
 
-#undef BOOST_CURRENT_LOCATION
-#include <boost/json.hpp>
+#include <spsync/util/json.hpp>
 
 namespace securepath::groupchat::json_protocol::json {
 
-using boost::json::value;
-using boost::json::serialize;
-using boost::json::parse;
-using boost::json::value_to;
-using boost::json::array;
-using boost::json::object;
+using sync::util::json::value;
+using sync::util::json::serialize;
+using sync::util::json::parse;
+using sync::util::json::value_to;
+using sync::util::json::array;
+using sync::util::json::object;
 
 }
 

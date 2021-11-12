@@ -19,7 +19,7 @@ get_filename_component(my_root_directory ${CMAKE_CURRENT_LIST_FILE} DIRECTORY)
 #include_directories(${my_directory}/external/boost)
 include_directories(${my_root_directory}/external/json/include)
 
-#add_definitions(-DBOOST_JSON_STANDALONE)
+add_definitions(-DBOOST_JSON_STANDALONE)
 
 # actual projects
 add_subdirectory(spsync)
