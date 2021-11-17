@@ -26,6 +26,9 @@ public:
 	/// Get contacts
 	contact_list& contacts();
 
+	/// Send storage invitation
+	void send_storage_invitation(user receiver, std::string name, std::string message, storage_info);
+
 private:
 	void on_connect();
 	void on_disconnect(error err);

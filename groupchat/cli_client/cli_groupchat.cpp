@@ -61,7 +61,7 @@ void cli_groupchat::handle_event(std::unique_ptr<event_system::event_base> ev) {
 	dispatch( *ev
 			, event_dest<events::on_connect>(&cli_groupchat::on_connect)
 			, event_dest<events::on_disconnect>(&cli_groupchat::on_disconnect)
-			, event_dest<events::on_create>(&cli_groupchat::on_create)
+			, event_dest<events::on_init>(&cli_groupchat::on_create)
 			, event_dest<events::on_change_user>(&cli_groupchat::on_change_user)
 			, event_dest<events::on_join>(&cli_groupchat::on_join)
 			, event_dest<events::on_message>(&cli_groupchat::on_message) );

@@ -15,11 +15,12 @@ namespace securepath::sync {
 struct encryption_key {
 	util::sequence_number key_seq;
 	octet_vector key;
+	serialisation::trailing_data trailing_data;
 
 	template<typename Ar>
 	void serialise(Ar& ar) {
 		serialisation::sequence<Ar> seq(ar);
-		seq & key_seq & key;
+		seq & key_seq & key & trailing_data;
 	}
 };
 

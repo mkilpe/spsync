@@ -81,7 +81,8 @@ public:
 		notify(event_type::state_change, json::serialize(json::object{{"type", "connection"}, {"data", event}}));
 	}*/
 
-	void on_create(server_id sid, chat_id cid, error err) {
+	//t: see what should go about compared to on_create
+	void on_init(server_id sid, chat_id cid, error err) {
 		json::object event{
 			{"action", "create"},
 			{"server", sid},
@@ -153,7 +154,7 @@ public:
 		dispatch( *ev
 			//, event_dest<events::on_connect>(&impl::on_connect)
 			//, event_dest<events::on_disconnect>(&impl::on_disconnect)
-			, event_dest<events::on_create>(&impl::on_create)
+			, event_dest<events::on_init>(&impl::on_init)
 			, event_dest<events::on_change_user>(&impl::on_change_user)
 			, event_dest<events::on_join>(&impl::on_join)
 			, event_dest<events::on_message>(&impl::on_message)

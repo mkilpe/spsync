@@ -78,12 +78,19 @@ public:
 		requests.push_back(req);
 	}
 
+	void on_invitation(request req, storage_info, std::string name, std::string message) {
+		LOG_TRACE("invitation [name=%, message=%]", name, message);
+		std::unique_lock l{mutex};
+		requests.push_back(req);
+	}
+
 	void handle_event(std::unique_ptr<event_base> ev) override {
 		dispatch( *ev
 				, event_dest<events::on_connect>(&test_client::on_connect)
 				, event_dest<events::on_disconnect>(&test_client::on_disconnect)
 				, event_dest<events::on_request>(&test_client::on_request)
-				, event_dest<events::on_contacting>(&test_client::on_contacting) );
+				, event_dest<events::on_contacting>(&test_client::on_contacting)
+				, event_dest<events::on_invitation>(&test_client::on_invitation) );
 	}
 
 	void wait_for_connect() {
@@ -104,6 +111,19 @@ public:
 	bool has_contacting(request_state state, user sender, std::string name, std::string message) const {
 		protocol::contact_data data{name, message};
 		return has_request(state, sender, contact_tag, serialisation::asn_der_serialise(data));
+	}
+
+	bool has_storage_invitation(request_state state, user sender, std::string name, std::string message, storage_info info) const {
+		protocol::invitation_data data{
+				info.sid,
+				info.key_server,
+				info.sync_server,
+				info.chain_id,
+				info.enc_keys,
+				name,
+				message
+			};
+		return has_request(state, sender, invite_tag, serialisation::asn_der_serialise(data));
 	}
 
 	bool storage_has(request_state state, user sender, std::string tag, octet_vector data) {

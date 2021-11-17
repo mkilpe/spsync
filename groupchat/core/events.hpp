@@ -13,6 +13,10 @@ struct on_disconnect {
 	typedef void type(server_id, error);
 };
 
+struct on_init {
+	typedef void type(server_id, chat_id, error);
+};
+
 struct on_create {
 	typedef void type(server_id, chat_id, error);
 };

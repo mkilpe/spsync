@@ -66,7 +66,7 @@ struct chat_connection::impl
 				err = e;
 			}
 		}
-		ccontext.callback.emit<events::on_create>(ccontext.sid, cid, err);
+		ccontext.callback.emit<events::on_init>(ccontext.sid, cid, err);
 	}
 
 	void handle_event(std::unique_ptr<event_system::event_base> ev) override {

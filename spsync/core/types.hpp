@@ -21,6 +21,7 @@ using record_tag = octet_vector;
 using object_id = util::object_id;
 using sequence_number = util::sequence_number;
 using metadata = util::metadata;
+using storage_id = octet_vector;
 
 }
 

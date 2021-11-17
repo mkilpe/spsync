@@ -22,4 +22,8 @@ struct on_contacting {
 	typedef void type(request, std::string name, std::string message);
 };
 
+struct on_invitation {
+	typedef void type(request, storage_info, std::string name, std::string message);
+};
+
 }

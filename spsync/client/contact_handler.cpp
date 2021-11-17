@@ -57,6 +57,20 @@ contact_list& contact_handler::contacts() {
 	return contacts_;
 }
 
+void contact_handler::send_storage_invitation(user receiver, std::string name, std::string message, storage_info info) {
+	LOG_TRACE("sending storage invitation");
+	protocol::invitation_data data
+		{std::move(info.sid)
+		,std::move(info.key_server)
+		,std::move(info.sync_server)
+		,std::move(info.chain_id)
+		,std::move(info.enc_keys)
+		,std::move(name)
+		,std::move(message)};
+
+	send_request(std::move(receiver), invite_tag, serialisation::asn_der_serialise(data));
+}
+
 void contact_handler::on_connect() {
 	callback_.emit<events::on_connect>();
 }
@@ -76,6 +90,9 @@ void contact_handler::on_request(request const& req) {
 			} else {
 				LOG_INFO("contact request from user that is already a contact [user=%]", req.sender.id());
 			}
+		} else if(req.tag == invite_tag) {
+			auto data = serialisation::asn_der_deserialise<protocol::invitation_data>(req.data);
+			callback_.emit<events::on_invitation>(req, data.to_storage_info(), data.name, data.message);
 		} else {
 			callback_.emit<events::on_request>(req);
 		}

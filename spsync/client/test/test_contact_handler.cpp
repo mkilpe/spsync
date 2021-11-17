@@ -2,19 +2,6 @@
 
 namespace securepath::sync::client::test {
 
-/*
-/// Add contact and send packet
-	std::unique_ptr<contact> add_contact(user receiver, std::string name, std::string message);
-
-	/// Accept pending contact request
-	std::unique_ptr<contact> accept_contact_request(request_id);
-
-	/// Remove pending contact request
-	void remove_contact_request(request_id);
-
-	/// Get contacts
-	contact_list& contacts();
-*/
 
 TEST_CASE("contact_handler test", "[unit]") {
 	event_system::single_thread_event_loop single_thread_event_loop;
@@ -70,6 +57,16 @@ TEST_CASE("contact_handler test", "[unit]") {
 	c1.conn.add_contact(user2, "user2", "test message");
 	WAIT(c2.requests_size(), 2s);
 	CHECK(!c2.has_contacting(request_state::verification_succeeded, user1, "test", "test message"));
+
+	storage_info sinfo{
+		securepath::test::random_octet_vector(4),
+		local_key_server,
+		local_packet_server,
+		chain_block_id{sequence_number{1}, securepath::test::random_octet_vector(32)},
+		{encryption_key{sequence_number{1}, securepath::test::random_octet_vector(32)}} };
+
+	c1.conn.send_storage_invitation(user2, "test invite", "my storage", sinfo);
+	WAIT_CHECK(c2.has_storage_invitation(request_state::verification_succeeded, user1, "test invite", "my storage", sinfo), 2s);
 }
 
 }
