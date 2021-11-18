@@ -71,7 +71,7 @@ void channel::on_data_change(sync::record_handle rec, std::deque<sync::single_da
 				msg_data data{*opt, c.signer.value_or(crypto::public_key_id{}), c.internal_id, c.seq};
 				auto change = messages_.insert(c.data.id, data, msg_state::in_sync);
 				// notify higher level
-				ccontext_.callback.emit<events::on_message>(ccontext_.sid, chat_id_, data, change);
+				ccontext_.callback.emit<events::on_message>(server_chat_id{ccontext_.sid, chat_id_}, data, change);
 			} else {
 				LOG_WARN("invalid record, no groupchat message found");
 			}
@@ -86,12 +86,14 @@ void channel::on_user_change(sync::record_handle rec, sync::user_change usc) {
 		if(usc.signer) {
 			// check if we created the chat or not
 			auto my_key = my_private_key(ccontext_.context.private_data());
-			if(usc.signer != my_key.id()) {
-				ccontext_.callback.emit<events::on_join>(ccontext_.sid, chat_id_, error{});
+			if(usc.signer == my_key.id()) {
+				ccontext_.callback.emit<events::on_create>(server_chat_id{ccontext_.sid, chat_id_}, usc.members, error{});
+			} else {
+				ccontext_.callback.emit<events::on_join>(server_chat_id{ccontext_.sid, chat_id_}, usc.members, error{});
 			}
 		}
 	}
-	ccontext_.callback.emit<events::on_change_user>(ccontext_.sid, chat_id_, usc.members, error{});
+	ccontext_.callback.emit<events::on_change_user>(server_chat_id{ccontext_.sid, chat_id_}, usc.members, error{});
 }
 
 void channel::create_initial_record() {
@@ -136,6 +138,16 @@ std::deque<message> channel::messages(message_search ms) const {
 
 chat_id channel::id() const {
 	return chat_id_;
+}
+
+sync::client::storage_info channel::get_storage_info() const {
+	assert(false && "not implemented");
+
+	//crypto_context().records();
+	//crypto_context().enc_keys();
+
+	//return sync::client::storage_info{chat_id_, ccontext_.key_server, ccontext_.sync_server, };
+	return {};
 }
 
 }

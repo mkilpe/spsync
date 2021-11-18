@@ -113,8 +113,10 @@ struct groupchat::impl
 		cconn.set_own_account(info);
 	}
 
-	void on_create(server_id sid, chat_id cid, error err) {
-
+	void on_create(server_chat_id sid, sync::users us, error err) {
+		if(!err) {
+			//cconn.send_storage_invitation();
+		}
 	}
 
 	void handle_event(std::unique_ptr<event_system::event_base> ev) override {
@@ -136,7 +138,10 @@ struct groupchat::impl
 
 	std::shared_ptr<chat_connection> create_connection(host_port const& hp) {
 		auto id = ++last_id;
-		auto p = std::make_shared<chat_connection>(chat_conn_context{id, hp, *this, context, channels, conf.path});
+		//t: parameterise key server here too
+		host_port key_server{hp};
+		key_server.port = sync::default_key_server_port;
+		auto p = std::make_shared<chat_connection>(chat_conn_context{id, key_server, hp, *this, context, channels, conf.path});
 		hp_map[hp] = id;
 		connections[id] = p;
 		return p;

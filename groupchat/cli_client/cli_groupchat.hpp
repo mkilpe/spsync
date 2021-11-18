@@ -16,13 +16,13 @@ public:
 	/// called when server disconnected
 	void on_disconnect(server_id, error);
 	/// called when chat created or creating failed
-	void on_create(server_id, chat_id, error);
+	void on_init(server_chat_id, error);
 	/// called when user changed or failed
-	void on_change_user(server_id, chat_id, sync::users change, error);
+	void on_change_user(server_chat_id, sync::users change, error);
 	/// called when chat joined or it failed
-	void on_join(server_id, chat_id, error);
+	void on_join(server_chat_id, sync::users change, error);
 	/// called when chat message received
-	void on_message(server_id, chat_id, msg_data, msg_change);
+	void on_message(server_chat_id, msg_data, msg_change);
 
 	void handle_event(std::unique_ptr<event_system::event_base> ev) override;
 

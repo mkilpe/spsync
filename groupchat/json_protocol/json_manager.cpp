@@ -82,33 +82,33 @@ public:
 	}*/
 
 	//t: see what should go about compared to on_create
-	void on_init(server_id sid, chat_id cid, error err) {
+	void on_init(server_chat_id id, error err) {
 		json::object event{
 			{"action", "create"},
-			{"server", sid},
-			{"chat", to_hex(cid)}};
+			{"server", id.sid},
+			{"chat", to_hex(id.cid)}};
 		if(err) {
 			event["error"] = error_to_object(err);
 		}
 		notify(event_type::state_change, json::serialize(json::object{{"type", "chat"}, {"data", event}}));
 	}
 
-	void on_change_user(server_id sid, chat_id cid, sync::users change, error err) {
+	void on_change_user(server_chat_id id, sync::users change, error err) {
 	}
 
-	void on_join(server_id sid, chat_id cid, error err) {
+	void on_join(server_chat_id id, sync::users, error err) {
 		json::object event{
 			{"action", "join"},
-			{"server", sid},
-			{"chat", to_hex(cid)}};
+			{"server", id.sid},
+			{"chat", to_hex(id.cid)}};
 		if(err) {
 			event["error"] = error_to_object(err);
 		}
 		notify(event_type::state_change, json::serialize(json::object{{"type", "chat"}, {"data", event}}));
 	}
 
-	void on_message(server_id sid, chat_id cid, msg_data md, msg_change change) {
-		LOG_TRACE("json_manager::on_message [sid=%, cid=%]", sid, to_hex(cid));
+	void on_message(server_chat_id id, msg_data md, msg_change change) {
+		LOG_TRACE("json_manager::on_message [sid=%, cid=%]", id.sid, to_hex(id.cid));
 		json::object message{
 			{"message", md.message},
 			{"date", time_to_string(md.sender_time)},
@@ -120,8 +120,8 @@ public:
 
 		json::object event{
 			{"action", "message"},
-			{"server", sid},
-			{"chat", to_hex(cid)},
+			{"server", id.sid},
+			{"chat", to_hex(id.cid)},
 			{"message", message}};
 		notify(event_type::state_change, json::serialize(json::object{{"type", "chat"}, {"data", event}}));
 	}

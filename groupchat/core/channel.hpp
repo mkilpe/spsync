@@ -27,6 +27,7 @@ public:
 	std::deque<message> messages(message_search = {}) const;
 
 	chat_id id() const;
+	sync::client::storage_info get_storage_info() const;
 private:
 	channel(chat_conn_context& context, chat_id const&, database::connection_ptr);
 

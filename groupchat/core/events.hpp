@@ -14,23 +14,23 @@ struct on_disconnect {
 };
 
 struct on_init {
-	typedef void type(server_id, chat_id, error);
+	typedef void type(server_chat_id, error);
 };
 
 struct on_create {
-	typedef void type(server_id, chat_id, error);
+	typedef void type(server_chat_id, sync::users, error);
 };
 
 struct on_change_user {
-	typedef void type(server_id, chat_id, sync::users, error);
+	typedef void type(server_chat_id, sync::users, error);
 };
 
 struct on_join {
-	typedef void type(server_id, chat_id, error);
+	typedef void type(server_chat_id, sync::users, error);
 };
 
 struct on_message {
-	typedef void type(server_id, chat_id, msg_data, msg_change);
+	typedef void type(server_chat_id, msg_data, msg_change);
 };
 
 }

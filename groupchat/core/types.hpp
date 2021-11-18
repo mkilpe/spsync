@@ -30,6 +30,12 @@ using chat_id = octet_vector;
 /// handle for server
 using server_id = std::size_t;
 
+/// combined server and chat id
+struct server_chat_id {
+	server_id sid;
+	chat_id cid;
+};
+
 /// id for user/member/contact
 using user_id = sync::util::user_id;
 

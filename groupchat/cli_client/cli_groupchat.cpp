@@ -27,32 +27,32 @@ void cli_groupchat::on_disconnect(server_id sid, error err) {
 	win_.add_info(0, to_wstring(s));
 }
 
-void cli_groupchat::on_create(server_id sid, chat_id cid, error err) {
+void cli_groupchat::on_init(server_chat_id id, error err) {
 	std::string msg;
 	if(err) {
-		msg = print("failed to create chat (id=%, error=%)", to_hex(cid), err);
+		msg = print("failed to create chat (id=%, error=%)", to_hex(id.cid), err);
 	} else {
-		msg = print("created chat with id %", to_hex(cid));
+		msg = print("created chat with id %", to_hex(id.cid));
 	}
 	win_.add_info(0, to_wstring(msg));
 }
 
-void cli_groupchat::on_change_user(server_id sid, chat_id cid, sync::users change, error err) {
+void cli_groupchat::on_change_user(server_chat_id id, sync::users change, error err) {
 	std::string msg;
 	if(err) {
-		msg = print("failed to change user (id=%, error=%)", to_hex(cid), err);
+		msg = print("failed to change user (id=%, error=%)", to_hex(id.cid), err);
 	} else {
-		msg = print("changed users for chat with id %", to_hex(cid));
+		msg = print("changed users for chat with id %", to_hex(id.cid));
 	}
 	win_.add_info(0, to_wstring(msg));
 }
 
-void cli_groupchat::on_join(server_id sid, chat_id cid, error) {
-	auto s = print("joined '%'", to_hex(cid));
+void cli_groupchat::on_join(server_chat_id id, sync::users change, error) {
+	auto s = print("joined '%'", to_hex(id.cid));
 	win_.add_message(0, to_wstring(s));
 }
 
-void cli_groupchat::on_message(server_id, chat_id, msg_data md, msg_change change) {
+void cli_groupchat::on_message(server_chat_id, msg_data md, msg_change change) {
 	//auto s = print("%> %", m.sender_nick, m.data);
 	//win_.add_message(0, to_wstring(s));
 }
@@ -61,7 +61,7 @@ void cli_groupchat::handle_event(std::unique_ptr<event_system::event_base> ev) {
 	dispatch( *ev
 			, event_dest<events::on_connect>(&cli_groupchat::on_connect)
 			, event_dest<events::on_disconnect>(&cli_groupchat::on_disconnect)
-			, event_dest<events::on_init>(&cli_groupchat::on_create)
+			, event_dest<events::on_init>(&cli_groupchat::on_init)
 			, event_dest<events::on_change_user>(&cli_groupchat::on_change_user)
 			, event_dest<events::on_join>(&cli_groupchat::on_join)
 			, event_dest<events::on_message>(&cli_groupchat::on_message) );

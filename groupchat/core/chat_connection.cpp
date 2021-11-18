@@ -66,7 +66,7 @@ struct chat_connection::impl
 				err = e;
 			}
 		}
-		ccontext.callback.emit<events::on_init>(ccontext.sid, cid, err);
+		ccontext.callback.emit<events::on_init>(server_chat_id{ccontext.sid, cid}, err);
 	}
 
 	void handle_event(std::unique_ptr<event_system::event_base> ev) override {
@@ -87,13 +87,13 @@ struct chat_connection::impl
 		auto cid = net.create_storage();
 		auto ret = channels.emplace(cid, std::make_unique<channel>(ccontext, cid));
 		ret.first->second->set_data(std::move(name), std::move(members));
-		ccontext.channels.add(cid, ccontext.server);
+		ccontext.channels.add(cid, ccontext.sync_server);
 		return *ret.first->second;
 	}
 
 	std::future<void> connect() {
 		connect_promise = {};
-		error err = net.connect(ccontext.server.host, ccontext.server.port);
+		error err = net.connect(ccontext.sync_server.host, ccontext.sync_server.port);
 		if(err) {
 			if(make_error_code(network::errc::already_connected) == err.code()) {
 				// connected already, just set the value
@@ -138,7 +138,7 @@ channel& chat_connection::create_chat(std::string name, users members) {
 
 channel& chat_connection::join(chat_id const& storage) {
 	std::unique_lock l{impl_->mutex};
-	impl_->ccontext.channels.add(storage, impl_->ccontext.server);
+	impl_->ccontext.channels.add(storage, impl_->ccontext.sync_server);
 	return impl_->connect_to_storage(storage);
 }
 
@@ -170,7 +170,7 @@ network::context& chat_connection::context() {
 }
 
 host_port chat_connection::end_point() const {
-	return impl_->ccontext.server;
+	return impl_->ccontext.sync_server;
 }
 
 server_id chat_connection::id() const {

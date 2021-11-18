@@ -31,29 +31,29 @@ public:
 		connected.set_value(err);
 	}
 	/// called when chat created or creating failed
-	void on_create(server_id, chat_id id, error err) {
+	void on_create(server_chat_id id, sync::users change, error err) {
 		if(err) {
 			created.set_exception(std::make_exception_ptr(err));
 		} else {
-			created.set_value(id);
+			created.set_value(id.cid);
 		}
 
 	}
 	/// called when user changed or failed
-	void on_change_user(server_id, chat_id, sync::users change, error) {
+	void on_change_user(server_chat_id id, sync::users change, error) {
 	}
 
 	/// called when chat joined or it failed
-	void on_join(server_id, chat_id cid, error err) {
+	void on_join(server_chat_id id, sync::users, error err) {
 		if(err) {
 			joined.set_exception(std::make_exception_ptr(err));
 		} else {
-			joined.set_value(cid);
+			joined.set_value(id.cid);
 		}
 
 	}
 	/// called when chat message received
-	void on_message(server_id, chat_id id, msg_data md, msg_change change) {
+	void on_message(server_chat_id id, msg_data md, msg_change change) {
 	}
 
 
