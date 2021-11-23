@@ -2,6 +2,7 @@
 
 #include "channel_list.hpp"
 #include "types.hpp"
+#include <spsync/util/config.hpp>
 
 #include <securepath/event_system/event_handler.hpp>
 #include <securepath/network/encryption/context.hpp>
@@ -16,6 +17,7 @@ struct chat_conn_context {
 	event_system::event_handler& callback;
 	network::context& context;
 	channel_list& channels;
+	sync::util::config& config;
 	std::string const path;
 };
 

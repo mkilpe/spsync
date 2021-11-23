@@ -1,1 +1,1 @@
-add_sp_test_application(test_spsync_util spsync_util)
+add_sp_test_application(test_spsync_util spsync_test spsync_util)

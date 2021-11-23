@@ -9,6 +9,7 @@
 #include <spsync/client/request_storage.hpp>
 #include <spsync/client/types.hpp>
 #include <spsync/core/users.hpp>
+#include <spsync/util/config.hpp>
 #include <spsync/util/object_id.hpp>
 #include <securepath/event_system/event_loop.hpp>
 #include <securepath/util/error.hpp>
@@ -72,13 +73,17 @@ public:
 
 	/// Handler for contacts and requests
 	sync::client::contact_handler& request_handler();
+
+	/// Get the application configuration
+	sync::util::config& config();
 private:
 	bool check_account_exists(groupchat_config const&) const;
 
 private:
-	groupchat_config const config_;
+	groupchat_config const gc_config_;
 	event_system::event_handler& callback_;
 	network::context* const context_{};
+	sync::util::config config_;
 
 	class impl;
 	std::unique_ptr<impl> impl_;

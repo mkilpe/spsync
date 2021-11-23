@@ -42,7 +42,7 @@ struct groupchat::impl
 : public network::encrypted_net_base
 , public event_system::event_handler
 {
-	impl(event_system::event_handler& callb, network::context* c, groupchat_config conf)
+	impl(event_system::event_handler& callb, network::context* c, groupchat_config conf, sync::util::config& config)
 	: encrypted_net_base(network::client_tag, net_base_params(conf))
 	, event_handler(callb.event_loop())
 	, own_context(c ? std::optional<network::context>{} : construct_context())
@@ -52,6 +52,7 @@ struct groupchat::impl
 	, callback(callb)
 	, channels(database)
 	, cconn(context, callback, database)
+	, config(config)
 	{
 		network::enable_client_dh_handshake(context);
 		network::enable_client_pk_handshake(context);
@@ -111,12 +112,23 @@ struct groupchat::impl
 		info.server = server.sync_server();
 		info.packet_server = server.packet_server();
 		cconn.set_own_account(info);
+
+		set_config();
+	}
+
+	void set_config() {
+		config.set_database(database, "config");
+		// set config values so that they can be found via json interface and such
+		if(!config.find("network.timeout")) {
+			config.set("network.timeout", 10);
+		}
 	}
 
 	void on_create(server_chat_id sid, sync::users us, error err) {
 		if(!err) {
 			//cconn.send_storage_invitation();
 		}
+		callback.emit<events::on_create>(sid, us, err);
 	}
 
 	void handle_event(std::unique_ptr<event_system::event_base> ev) override {
@@ -128,8 +140,9 @@ struct groupchat::impl
 
 	void register_my_key(host_port const& server) {
 		//t: non-blocking
+		std::chrono::seconds timeout{config.get_default("network.timeout", 10).as_int64()};
 		key_client::unknown_user_key_client client(context);
-		client.connect(server.host, server.port);
+		client.connect(server.host, server.port, timeout);
 		client.wait_for_connection();
 		auto my_key = context.private_data().my_private_key();
 		assert(my_key);
@@ -141,7 +154,7 @@ struct groupchat::impl
 		//t: parameterise key server here too
 		host_port key_server{hp};
 		key_server.port = sync::default_key_server_port;
-		auto p = std::make_shared<chat_connection>(chat_conn_context{id, key_server, hp, *this, context, channels, conf.path});
+		auto p = std::make_shared<chat_connection>(chat_conn_context{id, key_server, hp, *this, context, channels, config, conf.path});
 		hp_map[hp] = id;
 		connections[id] = p;
 		return p;
@@ -163,6 +176,7 @@ struct groupchat::impl
 	std::map<server_id, std::shared_ptr<chat_connection>> connections;
 
 	sync::client::contact_handler cconn;
+	sync::util::config& config;
 };
 
 bool groupchat::check_account_exists(groupchat_config const& conf) const {
@@ -176,9 +190,9 @@ bool groupchat::check_account_exists(groupchat_config const& conf) const {
 }
 
 groupchat::groupchat(event_system::event_handler& callback, groupchat_config conf)
-: config_(std::move(conf))
+: gc_config_(std::move(conf))
 , callback_(callback)
-, impl_(check_account_exists(config_) ? std::make_unique<impl>(callback_, nullptr, config_) : nullptr)
+, impl_(check_account_exists(gc_config_) ? std::make_unique<impl>(callback_, nullptr, gc_config_, config_) : nullptr)
 {
 	if(impl_) {
 		impl_->load_info();
@@ -186,10 +200,10 @@ groupchat::groupchat(event_system::event_handler& callback, groupchat_config con
 }
 
 groupchat::groupchat(event_system::event_handler& callback, network::context& context, groupchat_config conf)
-: config_(std::move(conf))
+: gc_config_(std::move(conf))
 , callback_(callback)
 , context_(&context)
-, impl_(check_account_exists(config_) ? std::make_unique<impl>(callback_, &context, config_) : nullptr)
+, impl_(check_account_exists(gc_config_) ? std::make_unique<impl>(callback_, &context, gc_config_, config_) : nullptr)
 {
 	if(impl_) {
 		impl_->load_info();
@@ -235,7 +249,7 @@ void groupchat::create_account(gc_servers const& server, std::string const& name
 		throw make_error(sync::errc::constraint_violation, "account already exists");
 	}
 	try {
-		impl_ = std::make_unique<impl>(callback_, context_, config_);
+		impl_ = std::make_unique<impl>(callback_, context_, gc_config_, config_);
 		impl_->create_account(server, name);
 	} catch(...) {
 		impl_.reset();
@@ -308,6 +322,10 @@ network::context& groupchat::context() {
 sync::client::contact_handler& groupchat::request_handler() {
 	assert(impl_);
 	return impl_->cconn;
+}
+
+sync::util::config& groupchat::config() {
+	return config_;
 }
 
 }

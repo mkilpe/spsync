@@ -39,10 +39,10 @@ network_connection::~network_connection()
 {
 }
 
-error network_connection::connect(std::string_view host, std::uint16_t port) {
+error network_connection::connect(std::string_view host, std::uint16_t port, std::chrono::seconds timeout) {
 	error err;
 	if(impl_->state() == network::encrypted_connection::not_connected) {
-		impl_->connect(host, port);
+		impl_->connect(host, port, timeout);
 	} else {
 		LOG_TRACE("calling connect in some other than not_connected state");
 		if(impl_->state() == network::encrypted_connection::connected) {

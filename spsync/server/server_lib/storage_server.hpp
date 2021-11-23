@@ -7,6 +7,8 @@
 #include <cstdint>
 #include <memory>
 
+using namespace std::chrono_literals;
+
 namespace securepath::sync {
 
 struct storage_server_params {
@@ -16,6 +18,9 @@ struct storage_server_params {
 	std::optional<asio::ip::tcp::endpoint> storage_server_endpoint;
 
 	asio::ip::tcp::endpoint create_endpoint() const;
+
+	/// connecting/handshake timeout
+	std::chrono::seconds timeout{10s};
 };
 
 class storage_server {

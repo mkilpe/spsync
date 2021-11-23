@@ -10,10 +10,10 @@ namespace securepath::sync::test {
 class test_server
 {
 public:
-	test_server(network::context& context)
-	: server_(context, params_)
+	test_server(network::context& context, spsync_server_params params = {})
+	: server_(context, params)
 	, packet_params_{.packet_db=":memory"}
-	, packet_server_(context)
+	, packet_server_(context, packet_params_)
 	{
 	}
 
@@ -44,7 +44,6 @@ public:
 	}
 
 private:
-	spsync_server_params params_;
 	spsync_server server_;
 	packet_transport::packet_server_params packet_params_;
 	packet_transport::packet_server packet_server_;

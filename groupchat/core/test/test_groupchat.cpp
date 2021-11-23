@@ -106,16 +106,14 @@ TEST_CASE("groupchat_test", "[system]") {
 		conn->connect();
 		{
 			auto f = client.connected.get_future();
-			WAIT_CHECK(f.valid(), 2s);
-			REQUIRE(f.valid());
+			REQUIRE(f.wait_for(2s) == std::future_status::ready);
 			REQUIRE(!f.get());
 		}
 
 		cid = conn->create_chat("test").id();
 		{
 			auto f = client.created.get_future();
-			WAIT_CHECK(f.valid(), 2s);
-			REQUIRE(f.valid());
+			REQUIRE(f.wait_for(2s) == std::future_status::ready);
 			REQUIRE(f.get() == cid);
 			CHECK(client.channel_ids().find_server(cid));
 		}

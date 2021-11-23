@@ -291,14 +291,26 @@ std::string json_manager::create_account(std::string_view const& arg) {
 	});
 }
 
-std::string json_manager::get_config(std::string_view const&) const {
+std::string json_manager::get_config(std::string_view const& arg) const {
 	return call([&]{
-		return "{}";
+		json::array arr = json::parse(arg).as_array();
+		json::object obj;
+		for(auto&& v : arr) {
+			auto opt = impl_->config().find(v.as_string());
+			if(opt) {
+				obj[v.as_string()] = *opt;
+			}
+		}
+		return json::serialize(obj);
 	});
 }
 
-std::string json_manager::set_config(std::string_view const&) {
+std::string json_manager::set_config(std::string_view const& arg) {
 	return call([&]{
+		json::object obj = json::parse(arg).as_object();
+		for(auto&& v : obj) {
+			impl_->config().set(std::string(v.key()), v.value());
+		}
 		return "{}";
 	});
 }

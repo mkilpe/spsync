@@ -93,7 +93,8 @@ struct chat_connection::impl
 
 	std::future<void> connect() {
 		connect_promise = {};
-		error err = net.connect(ccontext.sync_server.host, ccontext.sync_server.port);
+		std::chrono::seconds timeout{ccontext.config.get_default("network.timeout", 10).as_int64()};
+		error err = net.connect(ccontext.sync_server.host, ccontext.sync_server.port, timeout);
 		if(err) {
 			if(make_error_code(network::errc::already_connected) == err.code()) {
 				// connected already, just set the value

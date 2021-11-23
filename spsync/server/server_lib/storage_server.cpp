@@ -177,7 +177,7 @@ storage_server::~storage_server()
 }
 
 void storage_server::start() {
-	impl_->start(impl_->params_.create_endpoint());
+	impl_->start(impl_->params_.create_endpoint(), impl_->params_.timeout);
 }
 
 void storage_server::close() {

@@ -585,4 +585,20 @@ TEST_CASE("json_manager requests test", "[system]") {
 	}
 }
 
+TEST_CASE("json_manager config test", "[system]") {
+
+	sync::test::test_context net_context;
+	net_context.add_client(1);
+
+	sync::spsync_server_params params;
+	params.key_params.timeout = 60s;
+	sync::test::test_server server(net_context.server_context(), params);
+	server.run();
+	std::this_thread::sleep_for(1s);
+
+	json_test_manager manager(net_context, 0, remove_db);
+	CHECK(manager.set_config(R"({"network.timeout": 60})") == "{}");
+	CHECK_JSON(manager.get_config(R"(["network.timeout"])"), R"({"network.timeout": 60})");
+	CHECK_JSON(manager.create_account(json_create_account("test")), json_create_account_result("test"));
+}
 }
