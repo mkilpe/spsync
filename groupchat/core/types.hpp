@@ -74,6 +74,8 @@ struct gc_servers {
 
 using sync::client::account_info;
 
+int const default_timeout = 60;
+
 }
 
 #endif

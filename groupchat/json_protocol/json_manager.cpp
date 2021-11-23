@@ -604,6 +604,11 @@ std::string json_manager::get_version() const {
 		json::object info{
 			{"version", ver_obj},
 			{"built", __DATE__},
+			{"devs",
+				{
+					{"Graphic design and GUI", "Tomi Ueda"},
+					{"Client core and server", "Mikael Kilpeläinen"}
+				}},
 			{"license", "<todo>"}};
 
 		return json::serialize(info);

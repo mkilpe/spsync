@@ -7,6 +7,8 @@
 #include <securepath/database/connection.hpp>
 #include <securepath/event_system/event_handler.hpp>
 
+using namespace std::chrono_literals;
+
 namespace securepath::sync::client {
 
 class request_handler {
@@ -18,7 +20,7 @@ public:
 	account_info own_account() const;
 
 	/// connect to the server
-	error connect(host_port const& server);
+	error connect(host_port const& server, std::chrono::seconds timeout = 10s);
 
 	/// close connection
 	void close();

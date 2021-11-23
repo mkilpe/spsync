@@ -3,10 +3,12 @@
 #include "events.hpp"
 #include "protocol/protocol.hpp"
 
+
 #include <securepath/serialisation/util.hpp>
 
 #include <infrastructure/packet_transport/client/packet_client.hpp>
 #include <infrastructure/packet_transport/client/events.hpp>
+#include <infrastructure/packet_transport/protocol/ports.hpp>
 
 #include <spsync/protocol/ports.hpp>
 
@@ -182,12 +184,12 @@ account_info request_handler::own_account() const {
 	return impl_->own_account;
 }
 
-error request_handler::connect(host_port const& server) {
+error request_handler::connect(host_port const& server, std::chrono::seconds timeout) {
 	if(!impl_->own_account.me.is_valid()) {
 		LOG_WARN("own id not set for request_handler");
 		throw make_error(errc::constraint_violation, "own id not set");
 	}
-	return impl_->client.connect(server.host);
+	return impl_->client.connect(server.host, packet_transport::default_packet_server_port, timeout);
 }
 
 void request_handler::close() {

@@ -120,7 +120,7 @@ struct groupchat::impl
 		config.set_database(database, "config");
 		// set config values so that they can be found via json interface and such
 		if(!config.find("network.timeout")) {
-			config.set("network.timeout", 10);
+			config.set("network.timeout", default_timeout);
 		}
 	}
 
@@ -140,7 +140,7 @@ struct groupchat::impl
 
 	void register_my_key(host_port const& server) {
 		//t: non-blocking
-		std::chrono::seconds timeout{config.get_default("network.timeout", 10).as_int64()};
+		std::chrono::seconds timeout{config.get_default("network.timeout", default_timeout).as_int64()};
 		key_client::unknown_user_key_client client(context);
 		client.connect(server.host, server.port, timeout);
 		client.wait_for_connection();
@@ -216,7 +216,8 @@ groupchat::~groupchat()
 
 void groupchat::connect() {
 	assert(impl_);
-	error err = impl_->cconn.connect(impl_->info.packet_server);
+	std::chrono::seconds timeout{impl_->config.get_default("network.timeout", default_timeout).as_int64()};
+	error err = impl_->cconn.connect(impl_->info.packet_server, timeout);
 	if(err) {
 		if(make_error_code(network::errc::already_connected) == err.code()) {
 			// connected already, emit event nevertheless
