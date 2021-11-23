@@ -16,6 +16,7 @@ build() {
 echo "Copying header to ${DEST}/include"
 cp -f ./groupchat/json_protocol/json_manager.hpp "${DEST}/include"
 
+build "armeabi-v7a"
 build "arm64-v8a"
 build "x86_64"
 
