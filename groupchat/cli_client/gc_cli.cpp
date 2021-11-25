@@ -103,11 +103,21 @@ void gc_cli::create_account(std::vector<std::wstring_view> const& args) {
 }
 
 void gc_cli::connect(std::vector<std::wstring_view> const& args) {
-	gc_->connect();
+	auto info = gc_->account_info();
+	if(info) {
+		gc_->connect();
+	} else {
+		win_->add_info(0, L"no account");
+	}
 }
 
 void gc_cli::disconnect(std::vector<std::wstring_view> const& args) {
-	gc_->disconnect();
+	auto info = gc_->account_info();
+	if(info) {
+		gc_->disconnect();
+	} else {
+		win_->add_info(0, L"no account");
+	}
 }
 
 void gc_cli::create_chat(std::vector<std::wstring_view> const& args) {
