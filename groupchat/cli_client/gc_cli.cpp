@@ -137,12 +137,16 @@ void gc_cli::add_contact(std::vector<std::wstring_view> const& args) {
 }
 
 void gc_cli::show_contacts(std::vector<std::wstring_view> const& args) {
-	win_->add_info(0, L"contacts:");
-	auto contacts = gc_->contacts().enumerate();
-	for(auto& v : contacts) {
-		std::string key_id = v->id().public_key_id().in_hex();
-		std::string name = v->name();
-		win_->add_message(0, to_wstring(print("  name='%' key_id='%'", name, key_id)));
+	if(gc_->account_info()) {
+		win_->add_info(0, L"contacts:");
+		auto contacts = gc_->contacts().enumerate();
+		for(auto& v : contacts) {
+			std::string key_id = v->id().public_key_id().in_hex();
+			std::string name = v->name();
+			win_->add_message(0, to_wstring(print("  name='%' key_id='%'", name, key_id)));
+		}
+	} else {
+		win_->add_info(0, L"no account");
 	}
 }
 
