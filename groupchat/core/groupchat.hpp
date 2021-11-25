@@ -30,6 +30,8 @@ struct groupchat_config {
 	std::string db() const { return path.empty() ? "gc_client.db" : path + "/gc_client.db"; };
 };
 
+gc_servers default_servers();
+
 /**
  * Simple group chat interface to send and receive messages using spsync as backend
  */

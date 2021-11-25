@@ -38,6 +38,13 @@ static network::encrypted_net_base_params net_base_params(groupchat_config const
 	return {conf.db(), conf.db(), conf.db(), conf.db()};
 }
 
+gc_servers default_servers() {
+	return gc_servers{"gc.securepath.fi",
+			sync::default_key_server_port,
+			sync::default_storage_server_port,
+			packet_transport::default_packet_server_port};
+}
+
 struct groupchat::impl
 : public network::encrypted_net_base
 , public event_system::event_handler

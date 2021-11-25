@@ -17,6 +17,7 @@ struct gc_cli_commands : gc_cli_config, command_parser {
 
 	gc_cli_commands() {
 		add(help, "help", "h", "show help");
+		add(path, "path", "p", "path to find gc_client.db");
 	}
 };
 

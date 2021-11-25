@@ -5,8 +5,11 @@
 #include <securepath/log/log.hpp>
 #include <securepath/util/string_util.hpp>
 #include <securepath/util/print_util.hpp>
+#include <securepath/common/version_number.hpp>
 
 namespace securepath::groupchat {
+
+version_number const gc_cli_version{0,0,1,"alpha"};
 
 struct input : console::input_line {
 public:
@@ -25,7 +28,7 @@ public:
 	gc_cli& parent;
 };
 
-gc_cli::gc_cli(gc_cli_config)
+gc_cli::gc_cli(gc_cli_config config)
 : event_handler(static_cast<event_system::event_loop&>(*this))
 {
 	set_mode(console::mode::nodelay | console::mode::cbreak | console::mode::noecho | console::mode::colours);
@@ -33,7 +36,7 @@ gc_cli::gc_cli(gc_cli_config)
 	init_commands();
 	// modes need to be set before constructing the windows
 	win_ = std::make_unique<cli_window>(*this);
-	gc_  = std::make_unique<cli_groupchat>(static_cast<event_system::event_loop&>(*this), *win_);
+	gc_  = std::make_unique<cli_groupchat>(static_cast<event_system::event_loop&>(*this), *win_, config);
 
 	// add info channel, index 0
 	win_->add_channel(L"Info");
@@ -44,8 +47,11 @@ gc_cli::gc_cli(gc_cli_config)
 	add_widget(in);
 	set_focus(in);
 
-	std::uint16_t const default_storage_server_port{18200};
-	//chat_conn_ = gc_->load("127.0.0.1", default_storage_server_port);
+	win_->add_info(0, to_wstring(print("Welcome to gc_cli [version %]", gc_cli_version)));
+
+	if(gc_->account_info()) {
+		gc_->connect();
+	}
 }
 
 gc_cli::~gc_cli() {
@@ -65,21 +71,43 @@ bool gc_cli::handle_input(console::input in) {
 	return ret;
 }
 
+void gc_cli::add_command(std::wstring const& cmd, std::size_t req, cmd_func f) {
+	cmds_.emplace(cmd, cmd_data(cmd, std::move(f), req));
+}
+
 void gc_cli::init_commands() {
-	cmds_[L"exit"] = [this](auto){ quit(); };
-	cmds_[L"connect"] = [this](auto v){ connect(v); };
-	cmds_[L"disconnect"] = [this](auto){ /*chat_conn_->disconnect();*/ };
-	cmds_[L"create-chat"] = [this](auto v){ create_chat(v); };
-	cmds_[L"add-user"] = [this](auto v){ add_user(v); };
-	cmds_[L"add-member"] = [this](auto v){ add_member(v); };
-	cmds_[L"join"] = [this](auto v){ join(v); };
-	cmds_[L"my-info"] = [this](auto v){ my_info(v); };
+	add_command(L"help", 0, [this](auto v){ help(v); });
+	add_command(L"exit", 0, [this](auto){ quit(); });
+	add_command(L"connect", 0, [this](auto v){ connect(v); });
+	add_command(L"create-account", 1, [this](auto v){ create_account(v); });
+	add_command(L"disconnect", 0, [this](auto v){ disconnect(v); });
+	add_command(L"add-contact", 2, [this](auto v){ add_contact(v); });
+	add_command(L"contacts", 0, [this](auto v){ show_contacts(v); });
+	add_command(L"requests", 0, [this](auto v){ show_requests(v); });
+
+	//add_command(L"create-chat", [this](auto v){ create_chat(v); });
+	//add_command(L"add-member", [this](auto v){ add_member(v); });
+	//add_command(L"join", [this](auto v){ join(v); });
+	add_command(L"account", 0, [this](auto v){ my_info(v); });
+}
+
+void gc_cli::create_account(std::vector<std::wstring_view> const& args) {
+	auto acc = gc_->account_info();
+	if(acc) {
+		LOG_WARN("account already exists");
+		throw make_error(errc::constraint_violation, "account already exists");
+	} else {
+		gc_->create_account(default_servers(), to_string(args[0]));
+		win_->add_info(0, L"account created successfully");
+	}
 }
 
 void gc_cli::connect(std::vector<std::wstring_view> const& args) {
-	//host_port hp = chat_conn_->end_point();
-	//win_->add_info(0, to_wstring(print("connecting to %:%...", hp.host, hp.port)));
-	//chat_conn_->connect();
+	gc_->connect();
+}
+
+void gc_cli::disconnect(std::vector<std::wstring_view> const& args) {
+	gc_->disconnect();
 }
 
 void gc_cli::create_chat(std::vector<std::wstring_view> const& args) {
@@ -91,7 +119,34 @@ void gc_cli::create_chat(std::vector<std::wstring_view> const& args) {
 	}
 }
 
-void gc_cli::add_user(std::vector<std::wstring_view> const& args) {
+void gc_cli::add_contact(std::vector<std::wstring_view> const& args) {
+		auto name = to_string(args[0]);
+		auto key_id_string = to_string(args[1]);
+		auto message = args.size() > 2 ? to_string(args[2]) : "";
+
+		crypto::public_key_id key_id{key_id_string};
+		auto contact = gc_->contacts().find(key_id);
+
+		if(contact && contact->state() == sync::client::contact_state::complete) {
+			win_->add_info(0, L"contact already exists");
+		} else {
+			user receiver{key_id, default_servers().key_server()};
+			gc_->request_handler().add_contact(receiver, name, message);
+			win_->add_info(0, L"added contact '" + to_wstring(name) + L"'");
+		}
+}
+
+void gc_cli::show_contacts(std::vector<std::wstring_view> const& args) {
+	win_->add_info(0, L"contacts:");
+	auto contacts = gc_->contacts().enumerate();
+	for(auto& v : contacts) {
+		std::string key_id = v->id().public_key_id().in_hex();
+		std::string name = v->name();
+		win_->add_message(0, to_wstring(print("  name='%' key_id='%'", name, key_id)));
+	}
+}
+
+void gc_cli::show_requests(std::vector<std::wstring_view> const& args) {
 
 }
 
@@ -126,20 +181,29 @@ void gc_cli::join(std::vector<std::wstring_view> const& args) {
 }
 
 void gc_cli::my_info(std::vector<std::wstring_view> const& args) {
-	auto& context = gc_->context();
-	auto key = context.private_data().my_private_key();
-	if(key) {
-		auto s = print("my key is '%'", key->id());
-		win_->add_info(0, to_wstring(s));
+	auto info = gc_->account_info();
+	if(info) {
+		if(args.size() == 1 && args[0] == L"qr-code") {
+			//todo
+		} else {
+			win_->add_info(0, to_wstring(print("name='%' key_id='%'", info->name, info->me.id().public_key_id().in_hex())));
+		}
 	} else {
-		win_->add_info(0, L"no key set yet");
+		win_->add_info(0, L"no account");
+	}
+}
+
+void gc_cli::help(std::vector<std::wstring_view> const& args) {
+	win_->add_info(0, L"Commands:");
+	for(auto c : cmds_) {
+		win_->add_info(0, L"  " + c.first);
 	}
 }
 
 void gc_cli::execute_command(std::wstring cmd, std::vector<std::wstring_view> const& args) {
 	auto it = cmds_.find(cmd);
 	if(it != cmds_.end()) {
-		it->second(args);
+		it->second.call(args);
 	} else {
 		win_->add_info(0, L"invalid command");
 	}
@@ -147,15 +211,21 @@ void gc_cli::execute_command(std::wstring cmd, std::vector<std::wstring_view> co
 
 void gc_cli::handle_command(std::wstring input) {
 	if(!input.empty()) {
-		if(input[0] == L'/') {
-			std::wstring cmd = input.substr(1);
-			auto res = tokenise_view(cmd);
-			if(!res.empty()) {
-				execute_command(std::wstring{res[0]}, {res.begin()+1, res.end()});
+		try {
+			if(input[0] == L'/') {
+				std::wstring cmd = input.substr(1);
+				auto res = tokenise_view(cmd);
+				if(!res.empty()) {
+					execute_command(std::wstring{res[0]}, {res.begin()+1, res.end()});
+				}
+			} else {
+				//chat_conn_->get(cid_).send_message(to_string(input));
+				win_->add_message(0, std::move(input));
 			}
-		} else {
-			//chat_conn_->get(cid_).send_message(to_string(input));
-			win_->add_message(0, std::move(input));
+		} catch(error const& err) {
+			win_->add_info(0, to_wstring(err.message()));
+		} catch(std::exception const& ex) {
+			win_->add_info(0, L"exception: " + to_wstring(ex.what()));
 		}
 		redraw();
 	}
