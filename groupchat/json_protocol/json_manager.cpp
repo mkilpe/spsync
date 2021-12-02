@@ -150,6 +150,15 @@ public:
 			, {"data", contacting_to_object(req, name, message)}}));
 	}
 
+	void on_invitation(sync::client::request req, sync::client::storage_info info
+		, std::string name
+		, std::string message)
+	{
+		LOG_TRACE("json_manager::on_invitation [kid=%, name=%, msg=%]", req.sender, name, message);
+		notify(event_type::request, json::serialize(json::object{{"type", "invite"}
+			, {"data", invitation_to_object(req, info, sender_to_object(req.sender.id()), name, message)}}));
+	}
+
 	void handle_event(std::unique_ptr<event_system::event_base> ev) override {
 		dispatch( *ev
 			//, event_dest<events::on_connect>(&impl::on_connect)
@@ -160,7 +169,8 @@ public:
 			, event_dest<events::on_message>(&impl::on_message)
 			, event_dest<sync::client::events::on_connect>(&impl::on_connect)
 			, event_dest<sync::client::events::on_disconnect>(&impl::on_disconnect)
-			, event_dest<sync::client::events::on_contacting>(&impl::on_contacting) );
+			, event_dest<sync::client::events::on_contacting>(&impl::on_contacting)
+			, event_dest<sync::client::events::on_invitation>(&impl::on_invitation) );
 	}
 
 	host_port extract_host_port(json::object const& obj, std::string const& default_host, uint16_t default_port) {
@@ -235,6 +245,21 @@ public:
 			}
 		}
 		return ret;
+	}
+
+	json::object join(sync::client::request_id id) {
+		auto r = requests().find(id);
+		if(!r || r->tag != sync::client::invite_tag) {
+			throw make_error(securepath::errc::no_such_data, "no such chat invitation");
+		}
+
+		auto data = serialisation::asn_der_deserialise<sync::client::protocol::invitation_data>(r->data);
+
+		auto conn = load(data.sync_server);
+		conn->join(data.to_storage_info(), data.name);
+
+		requests().remove(id);
+		return json::object{{"name", data.name}, {"id", to_hex(data.sid)}};
 	}
 
 public:
@@ -409,6 +434,7 @@ std::string json_manager::create_chat(std::string_view const& arg) {
 	return call([&]{
 		json::object obj = json::parse(arg).as_object();
 		std::string name = extract<std::string>(obj, "name");
+		std::string message = extract_opt<std::string>(obj, "message").value_or("");
 		auto conn = impl_->load(impl_->extract_storage_host_port(obj));
 		conn->connect().get(); //t: make this whole thing correctly async
 
@@ -432,9 +458,22 @@ std::string json_manager::join_chat(std::string_view const& arg) {
 	return call([&]{
 		json::object obj = json::parse(arg).as_object();
 		chat_id cid = from_hex(extract<std::string>(obj, "id"));
-		auto conn = impl_->load(impl_->extract_storage_host_port(obj));
+		auto opt_name = extract_opt<std::string>(obj, "name");
+		if(!opt_name) {
+			opt_name = to_hex(cid);
+		}
+
+		sync::client::storage_info sinfo{
+			cid,
+			impl_->extract_key_host_port(obj),
+			impl_->extract_storage_host_port(obj),
+			{},
+			{}};
+
+		auto conn = impl_->load(sinfo.sync_server);
 		conn->connect().get(); //t: make this whole thing correctly async
-		conn->join(cid);
+
+		conn->join(sinfo, *opt_name);
 		return json::serialize(json::object{{"id", to_hex(cid)}});
 	});
 }
@@ -607,7 +646,7 @@ std::string json_manager::get_version() const {
 			{"devs",
 				{
 					{"Graphic design and GUI", "Tomi Ueda"},
-					{"Client core and server", "Mikael Kilpeläinen"}
+					{"Client core and server", "Mikael Kilpelainen"}
 				}},
 			{"license", "<todo>"}};
 
@@ -623,6 +662,9 @@ std::string json_manager::get_requests(std::string_view const&) const {
 			if(v.tag == sync::client::contact_tag) {
 				auto data = serialisation::asn_der_deserialise<sync::client::protocol::contact_data>(v.data);
 				arr.push_back(contacting_to_object(v, data.name, data.message));
+			} else if(v.tag == sync::client::invite_tag) {
+				auto data = serialisation::asn_der_deserialise<sync::client::protocol::invitation_data>(v.data);
+				arr.push_back(invitation_to_object(v, data.to_storage_info(), impl_->sender_to_object(v.sender.id()), data.name, data.message));
 			}
 		}
 		return json::serialize(json::object{{"data", arr}});
@@ -641,6 +683,8 @@ std::string json_manager::request_action(std::string_view const& arg) {
 		if(action == "add_contact") {
 			auto contact = rh.accept_contact_request(id);
 			result = json::object{{"name", contact->name()}, {"id", contact->id().public_key_id().in_hex()}};
+		} else if(action == "join") {
+			return json::serialize(impl_->join(id));
 		} else if(action == "remove") {
 			rh.remove_request(id);
 		} else if(action == "ban") {

@@ -1,11 +1,14 @@
 #include "gc_cli.hpp"
 
+#include <spsync/client/protocol/contact.hpp>
+
 #include <securepath/console/input_line.hpp>
 #include <securepath/console/text_window.hpp>
 #include <securepath/log/log.hpp>
 #include <securepath/util/string_util.hpp>
 #include <securepath/util/print_util.hpp>
 #include <securepath/common/version_number.hpp>
+
 
 namespace securepath::groupchat {
 
@@ -85,7 +88,8 @@ void gc_cli::init_commands() {
 	add_command(L"contacts", 0, [this](auto v){ show_contacts(v); });
 	add_command(L"requests", 0, [this](auto v){ show_requests(v); });
 
-	//add_command(L"create-chat", [this](auto v){ create_chat(v); });
+	add_command(L"create-chat", 1, [this](auto v){ create_chat(v); });
+	add_command(L"chats", 0, [this](auto v){ show_chats(v); });
 	//add_command(L"add-member", [this](auto v){ add_member(v); });
 	//add_command(L"join", [this](auto v){ join(v); });
 	add_command(L"account", 0, [this](auto v){ my_info(v); });
@@ -121,11 +125,19 @@ void gc_cli::disconnect(std::vector<std::wstring_view> const& args) {
 }
 
 void gc_cli::create_chat(std::vector<std::wstring_view> const& args) {
-	if(!args.empty()) {
-		std::wstring name{args.front()};
-		//win_->add_info(0, L"creating chat '" + name + L"' with id=" + to_wstring(to_hex(cid_)));
-	} else {
-		win_->add_info(0, L"missing argument(s) for /create-chat");
+	std::string name{to_string(args.front())};
+	auto conn = gc_->load();
+	auto cid = conn->create_chat(name, sync::users{}).id();
+	win_->add_info(0, print("created chat '%' with id=%", name, to_hex(cid)));
+}
+
+void gc_cli::show_chats(std::vector<std::wstring_view> const& args) {
+	win_->add_info(0, L"Chats:");
+	for(auto const& c : gc_->connections()) {
+		for(auto const& c_id : c->channel_ids()) {
+			channel& ch = c->get(c_id);
+			win_->add_info(0, print("  % (%)", ch.name(), to_hex(ch.id())));
+		}
 	}
 }
 
@@ -161,7 +173,14 @@ void gc_cli::show_contacts(std::vector<std::wstring_view> const& args) {
 }
 
 void gc_cli::show_requests(std::vector<std::wstring_view> const& args) {
-
+	win_->add_info(0, L"Requests:");
+	auto list = gc_->requests().enumerate();
+	for(auto&& v : list) {
+		if(v.tag == sync::client::contact_tag) {
+			auto data = serialisation::asn_der_deserialise<sync::client::protocol::contact_data>(v.data);
+			win_->add_info(0, print("  % type=Contacting, sender=% (%)", v.id, data.name, v.sender.id().public_key_id().in_hex()));
+		}
+	}
 }
 
 // add member to chat

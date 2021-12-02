@@ -2,6 +2,7 @@
 
 #include <securepath/console/attr.hpp>
 #include <securepath/log/log.hpp>
+#include <securepath/util/string_util.hpp>
 
 #include <stdexcept>
 
@@ -29,8 +30,6 @@ void cli_window::add_line_to_screen(cli_message const& msg) {
 	console::scoped_attr color{text_area_->native_handle(),
 		msg.type == cli_message::normal ? console::colour_index{1} : console::colour_index{2}};
 	text_area_->add_line(msg.msg);
-	// note the console system to draw everything next time control returns
-	context_.redraw();
 }
 
 void cli_window::add_line(int channel, cli_message msg) {
@@ -40,6 +39,9 @@ void cli_window::add_line(int channel, cli_message msg) {
 	}
 	if(channel == current_channel_) {
 		add_line_to_screen(msg);
+		context_.redraw();
+	} else {
+		c->second.unseen = true;
 	}
 	c->second.history.push_back(std::move(msg));
 }
@@ -63,9 +65,30 @@ void cli_window::add_info(int channel, std::wstring msg) {
 	add_line(channel, cli_message{std::move(msg), cli_message::info});
 }
 
+void cli_window::add_message(int channel, std::string msg) {
+	add_message(channel, to_wstring(msg));
+}
+
+void cli_window::add_info(int channel, std::string msg) {
+	add_info(channel, to_wstring(msg));
+}
+
 void cli_window::change_channel(int channel) {
+	auto c = channels_.find(channel);
+	if(c == channels_.end()) {
+		throw std::runtime_error("no such channel");
+	}
 	current_channel_ = channel;
-	//t: change text from history
+	c->second.unseen = false;
+
+	for(auto&& m : c->second.history) {
+		add_line_to_screen(m);
+	}
+	context_.redraw();
+}
+
+void cli_window::update_status_bar() {
+
 }
 
 }

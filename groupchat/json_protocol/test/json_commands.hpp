@@ -72,15 +72,16 @@ std::string json_handle_qr_code_user_result(json_contact);
 std::string json_handle_qr_code_join(std::string);
 std::string json_handle_qr_code_join_result(std::string);
 
-struct json_contact_request {
+struct json_request {
 	std::int64_t id{};
 	crypto::public_key_id sender;
 	std::string state;
-	std::string name;
+	std::string user_name;
 	std::string message;
+	std::string action;
 };
-std::string json_get_requests_result(std::vector<json_contact_request>);
+std::string json_get_requests_result(std::vector<json_request>);
 std::string json_request_action(std::int64_t id, std::string action);
-std::vector<json_contact_request> list_requests(std::string);
+std::vector<json_request> list_requests(std::string);
 
 }

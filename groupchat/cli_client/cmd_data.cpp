@@ -25,4 +25,8 @@ std::wstring cmd_data::name() const {
 	return name_;
 }
 
+void cmd_data::show_help(std::function<void(std::wstring)> out) const {
+
+}
+
 }

@@ -56,10 +56,16 @@ public:
 	/// Load and connect to existing channels
 	std::deque<channel_id> load_channels();
 
-	/// create/get chat connection to given server
-	std::shared_ptr<chat_connection> load(host_port const& server);
+	/// create/get chat connection to given server (or your own default server if not given)
+	std::shared_ptr<chat_connection> load(host_port const& server = {});
 	std::shared_ptr<chat_connection> find(server_id) const;
 	std::vector<std::shared_ptr<chat_connection>> connections() const;
+
+	/// send invitation to join chat for other person
+	void send_chat_invitation(user receiver, std::string message, chat_id const&);
+
+	/// join chat from invitation
+	void join_chat(sync::client::storage_info const& sinfo, std::string const& name);
 
 	/// return contacts
 	sync::client::contact_list& contacts();

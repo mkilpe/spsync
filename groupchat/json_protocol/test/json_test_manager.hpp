@@ -115,7 +115,7 @@ struct json_test_manager : json_manager {
 				{"type": "contact",
 				 "data":
 				 	{ "action": "contacting",
-				 	  "sender": {"keyid": "%", "name": "%"},
+				 	  "sender": {"id": "%", "name": "%"},
 				 	  "message": "%" }
 				 })", kid.in_hex(), name, message));
 	}
@@ -126,9 +126,19 @@ struct json_test_manager : json_manager {
 				 "data":
 				 	{ "action": "contacting",
 				 	  "state": "%",
-				 	  "sender": {"keyid": "%", "name": "%"},
+				 	  "sender": {"id": "%", "name": "%"},
 				 	  "message": "%" }
 				 })", state, kid.in_hex(), name, message));
+	}
+
+	bool has_invitation_event(crypto::public_key_id kid, std::string name, std::string message) const {
+		return contains_event(event_type::request, print(R"(
+				{"type": "invite",
+				 "data":
+				 	{ "action": "invitation",
+				 	  "sender": {"id": "%", "name": "%"},
+				 	  "message": "%" }
+				 })", kid.in_hex(), name, message));
 	}
 
 	mutable std::mutex mutex;

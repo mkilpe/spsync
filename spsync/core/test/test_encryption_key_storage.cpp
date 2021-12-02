@@ -43,6 +43,7 @@ TEST_CASE("encryption_key_storage", "[unit]") {
 	auto res1 = storage.find(sequence_number{1});
 	REQUIRE(res1);
 	CHECK(*res1 == key);
+	CHECK(storage.export_keys().size() == 2);
 }
 
 }

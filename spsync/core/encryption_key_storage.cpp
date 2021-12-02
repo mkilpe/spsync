@@ -82,6 +82,21 @@ encryption_key encryption_key_storage::create_key() {
 	return res;
 }
 
+std::vector<encryption_key> encryption_key_storage::export_keys() const {
+	auto q = db_->prepare("SELECT * FROM encryption_key_storage;");
+	auto res = q.execute();
+
+	std::vector<encryption_key> result;
+	for(; res; res.next()) {
+		std::optional<octet_vector> data = res.value<octet_vector>(1);
+		if(data) {
+			result.push_back(serialisation::asn_der_deserialise<encryption_key>(*data));
+		}
+	}
+
+	return result;
+}
+
 bool operator==(encryption_key const& left, encryption_key const& right) {
 	return left.key_seq == right.key_seq && left.key == right.key;
 }

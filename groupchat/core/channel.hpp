@@ -22,12 +22,15 @@ public:
 	/// data that is set when creating the chat
 	void set_data(std::string name, users members);
 
+	/// data that is set when joining chat
+	void set_join_data(sync::client::storage_info const& sinfo, std::string const& name);
+
 	void create_initial_record();
 	message send_message(std::string const& message);
 	std::deque<message> messages(message_search = {}) const;
 
 	chat_id id() const;
-	sync::client::storage_info get_storage_info() const;
+	sync::client::storage_info storage_info() const;
 private:
 	channel(chat_conn_context& context, chat_id const&, database::connection_ptr);
 

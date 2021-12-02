@@ -131,11 +131,16 @@ struct groupchat::impl
 		}
 	}
 
-	void on_create(server_chat_id sid, sync::users us, error err) {
+	void on_create(server_chat_id id, sync::users us, error err) {
 		if(!err) {
-			//cconn.send_storage_invitation();
+			for(auto&& c : us) {
+				if(c.user != info.me.id()) {
+					//t: read the host_port from contact data
+					send_chat_invitation(user{c.user, host_port{}}, "", id.cid);
+				}
+			}
 		}
-		callback.emit<events::on_create>(sid, us, err);
+		callback.emit<events::on_create>(id, us, err);
 	}
 
 	void handle_event(std::unique_ptr<event_system::event_base> ev) override {
@@ -165,6 +170,29 @@ struct groupchat::impl
 		hp_map[hp] = id;
 		connections[id] = p;
 		return p;
+	}
+
+	void send_chat_invitation(user receiver, std::string message, chat_id const& cid) {
+		auto hp = channels.find_server(cid);
+		if(!hp) {
+			LOG_TRACE("no chat with id %", to_hex(cid));
+			throw make_error(errc::no_such_data, "could not find chat");
+		}
+
+		std::shared_ptr<chat_connection> conn;
+		auto it = hp_map.find(*hp);
+		if(it != hp_map.end()) {
+			auto c_it = connections.find(it->second);
+			if(c_it != connections.end()) {
+				conn = c_it->second;
+			}
+		}
+		if(!conn) {
+			LOG_TRACE("no connection fot chat with id %", to_hex(cid));
+			throw make_error(errc::no_such_data, "could not find connection for chat");
+		}
+		auto& channel = conn->get(cid);
+		cconn.send_storage_invitation(std::move(receiver), channel.name(), std::move(message), channel.storage_info());
 	}
 
 	gc::account_info info;
@@ -235,7 +263,7 @@ void groupchat::connect() {
 		load_channels();
 	}
 	for(auto&& v : impl_->connections) {
-			v.second->connect();
+		v.second->connect();
 	}
 }
 
@@ -278,8 +306,12 @@ std::deque<channel_id> groupchat::load_channels() {
 
 std::shared_ptr<chat_connection> groupchat::load(host_port const& hp) {
 	assert(impl_);
+	host_port s = hp;
+	if(!s.is_valid()) {
+		s = impl_->info.server;
+	}
 	std::shared_ptr<chat_connection> ret;
-	auto it = impl_->hp_map.find(hp);
+	auto it = impl_->hp_map.find(s);
 	if(it != impl_->hp_map.end()) {
 		auto c_it = impl_->connections.find(it->second);
 		if(c_it != impl_->connections.end()) {
@@ -287,7 +319,7 @@ std::shared_ptr<chat_connection> groupchat::load(host_port const& hp) {
 		}
 	}
 	if(!ret) {
-		ret = impl_->create_connection(hp);
+		ret = impl_->create_connection(s);
 	}
 	return ret;
 }
@@ -305,6 +337,16 @@ std::vector<std::shared_ptr<chat_connection>> groupchat::connections() const {
 		ret.push_back(v.second);
 	}
 	return ret;
+}
+
+void groupchat::send_chat_invitation(user receiver, std::string message, chat_id const& cid) {
+	assert(impl_);
+	impl_->send_chat_invitation(receiver, message, cid);
+}
+
+void groupchat::join_chat(sync::client::storage_info const& sinfo, std::string const& name) {
+	auto conn = load(sinfo.sync_server);
+	conn->join(sinfo, name);
 }
 
 sync::client::contact_list& groupchat::contacts() {

@@ -56,6 +56,18 @@ void channel::set_data(std::string name, users members) {
 	initial_members_ = members;
 }
 
+void channel::set_join_data(sync::client::storage_info const& sinfo, std::string const& name) {
+	//t: check initial block
+
+	insert(gc_name_tag, name);
+
+	// add encryption keys for the storage
+	auto& keys = crypto_context().enc_keys();
+	for(auto&& k : sinfo.enc_keys) {
+		keys.insert(k);
+	}
+}
+
 void channel::on_data_change(sync::record_handle rec, std::deque<sync::single_data_change> changes) {
 	LOG_TRACE("on_object_data_changed [count=%]", changes.size());
 
@@ -140,14 +152,20 @@ chat_id channel::id() const {
 	return chat_id_;
 }
 
-sync::client::storage_info channel::get_storage_info() const {
-	assert(false && "not implemented");
+sync::client::storage_info channel::storage_info() const {
+	auto root = crypto_context().records().find_root();
+	if(!root) {
+		LOG_WARN("no root for storage?! [sid=%]", to_hex(chat_id_));
+		throw make_error(errc::invalid_state, "could not find root record for storage");
+	}
 
-	//crypto_context().records();
-	//crypto_context().enc_keys();
-
-	//return sync::client::storage_info{chat_id_, ccontext_.key_server, ccontext_.sync_server, };
-	return {};
+	return sync::client::storage_info{
+		chat_id_,
+		ccontext_.key_server,
+		ccontext_.sync_server,
+		root->block_id(),
+		crypto_context().enc_keys().export_keys()
+	};
 }
 
 }

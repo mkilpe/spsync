@@ -31,7 +31,7 @@ public:
 	channel& create_chat(std::string name, users = {});
 
 	/// join existing chat
-	channel& join(chat_id const& storage);
+	channel& join(sync::client::storage_info const& sinfo, std::string const& name);
 
 	/// load existing storage, this makes the storage to synchronise
 	channel& load(chat_id const& storage);

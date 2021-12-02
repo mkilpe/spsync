@@ -567,12 +567,13 @@ TEST_CASE("json_manager requests test", "[system]") {
 		WAIT_CHECK(manager2.has_contacting_event("verification_succeeded", net_context.key_id(0), "test1", "msg1"), 2s);
 
 		CHECK_JSON(manager2.get_requests(""), json_get_requests_result({
-			json_contact_request{
+			json_request{
 				1,
 				net_context.key_id(0),
 				"verification_succeeded",
 				"test1",
-				"msg1"
+				"msg1",
+				"contacting"
 			}}));
 
 		auto rlist = list_requests(manager2.get_requests(""));
@@ -582,6 +583,42 @@ TEST_CASE("json_manager requests test", "[system]") {
 			, json_add_contact_result({"test1", net_context.key_id(0)}));
 
 		CHECK_JSON(manager2.get_contacts(""), json_get_contacts_result({json_contact{"test1", net_context.key_id(0)}}));
+		{
+			auto rlist = list_requests(manager2.get_requests(""));
+			CHECK(rlist.size() == 0);
+		}
+
+		// chat invitation
+		json_create_chat_result cc_res = manager1.create_chat(json_create_chat("test chat", {net_context.key_id(0), net_context.key_id(1)}));
+		REQUIRE(!cc_res.result.id.empty());
+		std::string cid = cc_res.result.id;
+
+		CHECK_JSON(manager1.get_chats(""), json_get_chats_result({{"test chat", cid}}));
+
+		WAIT_CHECK(manager2.has_invitation_event(net_context.key_id(0), "test1", ""), 2s);
+
+		CHECK_JSON(manager2.get_requests(""), json_get_requests_result({
+			json_request{
+				1,
+				net_context.key_id(0),
+				"verification_succeeded",
+				"test1",
+				"",
+				"invitation"
+			}}));
+
+		auto rlist2 = list_requests(manager2.get_requests(""));
+		REQUIRE(rlist2.size() == 1);
+
+		json_create_chat_result jres = manager2.request_action(json_request_action(1, "join"));
+		REQUIRE(!cc_res.result.id.empty());
+		CHECK(jres.result.name == "test chat");
+		CHECK(jres.result.id == cid);
+		CHECK_JSON(manager2.get_chats(""), json_get_chats_result({{"test chat", cid}}));
+		{
+			auto rlist = list_requests(manager2.get_requests(""));
+			CHECK(rlist.size() == 0);
+		}
 	}
 }
 

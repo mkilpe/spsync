@@ -38,6 +38,22 @@ struct chat_connection::impl
 		return *it->second;
 	}
 
+	channel& join_to_storage(sync::client::storage_info const& sinfo, std::string const& name) {
+		auto it = channels.find(sinfo.sid);
+		if(it != channels.end()) {
+			LOG_WARN("chat already exists [cid=%]", to_hex(sinfo.sid));
+			throw make_error(errc::invalid_state, "chat already exists");
+		}
+
+		auto ret = channels.emplace(sinfo.sid, std::make_unique<channel>(ccontext, sinfo.sid));
+		ret.first->second->set_join_data(sinfo, name);
+
+		ccontext.channels.add(sinfo.sid, ccontext.sync_server);
+
+		ret.first->second->init(sinfo.sid, net);
+		return *it->second;
+	}
+
 	void on_connect() {
 		ccontext.callback.emit<events::on_connect>(ccontext.sid);
 		connect_promise.set_value();
@@ -137,10 +153,9 @@ channel& chat_connection::create_chat(std::string name, users members) {
 	return impl_->create_chat(std::move(name), std::move(members));
 }
 
-channel& chat_connection::join(chat_id const& storage) {
+channel& chat_connection::join(sync::client::storage_info const& sinfo, std::string const& name) {
 	std::unique_lock l{impl_->mutex};
-	impl_->ccontext.channels.add(storage, impl_->ccontext.sync_server);
-	return impl_->connect_to_storage(storage);
+	return impl_->join_to_storage(sinfo, name);
 }
 
 channel& chat_connection::load(chat_id const& storage) {

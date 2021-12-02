@@ -11,6 +11,8 @@ struct channel_data {
 	chat_id cid;
 };
 
+//t: save server_id to database and use it instead of host_port to identify servers
+
 /**
  * Simple interface to keep track of existing chat channels
  */

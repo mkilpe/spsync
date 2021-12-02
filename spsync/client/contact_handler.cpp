@@ -37,7 +37,7 @@ std::unique_ptr<contact> contact_handler::add_contact(user receiver, std::string
 
 std::unique_ptr<contact> contact_handler::accept_contact_request(request_id id) {
 	auto r = requests().find(id);
-	if(r && r->tag != contact_tag) {
+	if(!r || r->tag != contact_tag) {
 		throw make_error(securepath::errc::no_such_data, "no such contact request");
 	}
 

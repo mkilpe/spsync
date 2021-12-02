@@ -15,6 +15,7 @@ public:
 	void call(std::vector<std::wstring_view> const&) const;
 
 	std::wstring name() const;
+	void show_help(std::function<void(std::wstring)> out) const;
 private:
 	std::wstring name_;
 	cmd_func func_;

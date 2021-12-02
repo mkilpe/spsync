@@ -53,6 +53,9 @@ public:
 
 	/// create new key with next sequence number
 	encryption_key create_key();
+
+	/// get all encryption keys
+	std::vector<encryption_key> export_keys() const;
 private:
 	database::connection_ptr db_;
 };
