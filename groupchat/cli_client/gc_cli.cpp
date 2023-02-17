@@ -90,8 +90,11 @@ void gc_cli::init_commands() {
 
 	add_command(L"create-chat", 1, [this](auto v){ create_chat(v); });
 	add_command(L"chats", 0, [this](auto v){ show_chats(v); });
-	//add_command(L"add-member", [this](auto v){ add_member(v); });
-	//add_command(L"join", [this](auto v){ join(v); });
+	add_command(L"join", 1, [this](auto v){ join_chat(v); });
+
+	add_command(L"chat", 1, [this](auto v){ manage_chat(v); });
+	add_command(L"window", 1, [this](auto v){ manage_window(v); });
+
 	add_command(L"account", 0, [this](auto v){ my_info(v); });
 }
 
@@ -124,38 +127,21 @@ void gc_cli::disconnect(std::vector<std::wstring_view> const& args) {
 	}
 }
 
-void gc_cli::create_chat(std::vector<std::wstring_view> const& args) {
-	std::string name{to_string(args.front())};
-	auto conn = gc_->load();
-	auto cid = conn->create_chat(name, sync::users{}).id();
-	win_->add_info(0, print("created chat '%' with id=%", name, to_hex(cid)));
-}
-
-void gc_cli::show_chats(std::vector<std::wstring_view> const& args) {
-	win_->add_info(0, L"Chats:");
-	for(auto const& c : gc_->connections()) {
-		for(auto const& c_id : c->channel_ids()) {
-			channel& ch = c->get(c_id);
-			win_->add_info(0, print("  % (%)", ch.name(), to_hex(ch.id())));
-		}
-	}
-}
-
 void gc_cli::add_contact(std::vector<std::wstring_view> const& args) {
-		auto name = to_string(args[0]);
-		auto key_id_string = to_string(args[1]);
-		auto message = args.size() > 2 ? to_string(args[2]) : "";
+	auto name = to_string(args[0]);
+	auto key_id_string = to_string(args[1]);
+	auto message = args.size() > 2 ? to_string(args[2]) : "";
 
-		crypto::public_key_id key_id{key_id_string};
-		auto contact = gc_->contacts().find(key_id);
+	crypto::public_key_id key_id{key_id_string};
+	auto contact = gc_->contacts().find(key_id);
 
-		if(contact && contact->state() == sync::client::contact_state::complete) {
-			win_->add_info(0, L"contact already exists");
-		} else {
-			user receiver{key_id, default_servers().key_server()};
-			gc_->request_handler().add_contact(receiver, name, message);
-			win_->add_info(0, L"added contact '" + to_wstring(name) + L"'");
-		}
+	if(contact && contact->state() == sync::client::contact_state::complete) {
+		win_->add_info(0, L"contact already exists");
+	} else {
+		user receiver{key_id, default_servers().key_server()};
+		gc_->request_handler().add_contact(receiver, name, message);
+		win_->add_info(0, L"added contact '" + to_wstring(name) + L"'");
+	}
 }
 
 void gc_cli::show_contacts(std::vector<std::wstring_view> const& args) {
@@ -179,6 +165,28 @@ void gc_cli::show_requests(std::vector<std::wstring_view> const& args) {
 		if(v.tag == sync::client::contact_tag) {
 			auto data = serialisation::asn_der_deserialise<sync::client::protocol::contact_data>(v.data);
 			win_->add_info(0, print("  % type=Contacting, sender=% (%)", v.id, data.name, v.sender.id().public_key_id().in_hex()));
+		} else if(v.tag == sync::client::invite_tag) {
+			auto data = serialisation::asn_der_deserialise<sync::client::protocol::invitation_data>(v.data);
+			win_->add_info(0, print("  % type=Chat invitation, sender=% (%)", v.id, data.name, v.sender.id().public_key_id().in_hex()));
+		}
+	}
+}
+
+void gc_cli::create_chat(std::vector<std::wstring_view> const& args) {
+	std::string name{to_string(args.front())};
+	auto conn = gc_->load();
+	auto cid = conn->create_chat(name, sync::users{}).id();
+	int ch = gc_->add_channel(cid);
+	win_->change_channel(name, ch);
+	win_->add_info(ch, print("created chat '%' with id=%", name, to_hex(cid)));
+}
+
+void gc_cli::show_chats(std::vector<std::wstring_view> const& args) {
+	win_->add_info(0, L"Chats:");
+	for(auto const& c : gc_->connections()) {
+		for(auto const& c_id : c->channel_ids()) {
+			channel& ch = c->get(c_id);
+			win_->add_info(0, print("  % (%)", ch.name(), to_hex(ch.id())));
 		}
 	}
 }
@@ -205,11 +213,63 @@ void gc_cli::add_member(std::vector<std::wstring_view> const& args) {
 }
 
 void gc_cli::join(std::vector<std::wstring_view> const& args) {
-	if(args.size() == 1) {
-		//cid_ = from_hex(to_string(args[0]));
-		//chat_conn_->join(cid_);
+	auto rid = std::atoll(args[0]);
+	auto info = gc_->join_chat(rid);
+	int ch = gc_->add_channel(info.cid);
+	win_->change_channel(info.name, ch);
+}
+
+void gc_cli::manage_chat(std::vector<std::wstring_view> const& args) {
+	if(args.front() == "open") {
+		if(args.size() < 2) {
+			throw make_error(errc::invalid_argument, "missing argument for /chat open");
+		}
+		auto cid = from_hex(to_string(args[1]));
+		auto hp = gc_->channels().find_server(cid);
+		if(!hp) {
+			LOG_TRACE("no chat with id %", to_hex(cid));
+			throw make_error(errc::no_such_data, "could not find chat");
+		}
+		auto conn = gc_->load(*hp);
+		auto channel = conn->get(cid);
+		int ch = gc_->add_channel(cid);
+		win_->change_channel(channel->name(), ch);
+	}
+}
+
+void gc_cli::manage_window(std::vector<std::wstring_view> const& args) {
+	if(args.front() == "close") {
+		int ch = win_->current_channel();
+		if(ch) {
+			gc_->remove_channel(ch)
+			win_->change_channel("", 0);
+		}
 	} else {
-		win_->add_info(0, L"missing argument(s) for /join");
+		char* p_end;
+		auto ch = std::strtoll(args[0], &p_end, 10);
+		if(args[0] != p_end) {
+			win_->change_channel();
+		} else {
+			throw make_error(errc::invalid_argument, "invalid /window command");
+		}
+	}
+}
+
+void gc_cli::send_message(std::string const& message) {
+	int ch = win_->current_channel();
+	if(ch) {
+		auto cid = gc_->map_to_cid(ch);
+		if(cid) {
+			auto hp = gc_->channels().find_server(cid);
+			if(!hp) {
+				LOG_TRACE("no chat with id %", to_hex(cid));
+				throw make_error(errc::no_such_data, "could not find chat");
+			}
+			auto conn = gc_->load(*hp);
+			auto channel = conn->get(cid);
+			channel->send_message(message);
+			win_->add_message(ch, "--> " + message);
+		}
 	}
 }
 
@@ -252,8 +312,7 @@ void gc_cli::handle_command(std::wstring input) {
 					execute_command(std::wstring{res[0]}, {res.begin()+1, res.end()});
 				}
 			} else {
-				//chat_conn_->get(cid_).send_message(to_string(input));
-				win_->add_message(0, std::move(input));
+				send_message(to_string(input));
 			}
 		} catch(error const& err) {
 			win_->add_info(0, to_wstring(err.message()));

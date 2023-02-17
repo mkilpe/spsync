@@ -35,9 +35,12 @@ private:
 
 	void create_chat(std::vector<std::wstring_view> const& args);
 	void show_chats(std::vector<std::wstring_view> const& args);
+	void manage_chat(std::vector<std::wstring_view> const& args);
+	void manage_window(std::vector<std::wstring_view> const& args);
+	void send_message(std::string const& message);
 
 	void add_member(std::vector<std::wstring_view> const& args);
-	void join(std::vector<std::wstring_view> const& args);
+	void join_chat(std::vector<std::wstring_view> const& args);
 	void my_info(std::vector<std::wstring_view> const& args);
 	void help(std::vector<std::wstring_view> const& args);
 private:

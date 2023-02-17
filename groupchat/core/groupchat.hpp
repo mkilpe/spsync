@@ -65,7 +65,7 @@ public:
 	void send_chat_invitation(user receiver, std::string message, chat_id const&);
 
 	/// join chat from invitation
-	void join_chat(sync::client::storage_info const& sinfo, std::string const& name);
+	channel_info join_chat(sync::client::request_id);
 
 	/// return contacts
 	sync::client::contact_list& contacts();

@@ -248,18 +248,8 @@ public:
 	}
 
 	json::object join(sync::client::request_id id) {
-		auto r = requests().find(id);
-		if(!r || r->tag != sync::client::invite_tag) {
-			throw make_error(securepath::errc::no_such_data, "no such chat invitation");
-		}
-
-		auto data = serialisation::asn_der_deserialise<sync::client::protocol::invitation_data>(r->data);
-
-		auto conn = load(data.sync_server);
-		conn->join(data.to_storage_info(), data.name);
-
-		requests().remove(id);
-		return json::object{{"name", data.name}, {"id", to_hex(data.sid)}};
+		auto info = join_chat(id);
+		return json::object{{"name", info.name}, {"id", to_hex(info.cid)}};
 	}
 
 public:

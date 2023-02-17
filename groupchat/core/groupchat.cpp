@@ -344,9 +344,19 @@ void groupchat::send_chat_invitation(user receiver, std::string message, chat_id
 	impl_->send_chat_invitation(receiver, message, cid);
 }
 
-void groupchat::join_chat(sync::client::storage_info const& sinfo, std::string const& name) {
-	auto conn = load(sinfo.sync_server);
-	conn->join(sinfo, name);
+channel_info groupchat::join_chat(sync::client::request_id id) {
+	auto r = requests().find(id);
+	if(!r || r->tag != sync::client::invite_tag) {
+		throw make_error(securepath::errc::no_such_data, "no such chat invitation");
+	}
+
+	auto data = serialisation::asn_der_deserialise<sync::client::protocol::invitation_data>(r->data);
+
+	auto conn = load(data.sync_server);
+	conn->join(data.to_storage_info(), data.name);
+
+	requests().remove(id);
+	return channel_info{data.sid, data.name};
 }
 
 sync::client::contact_list& groupchat::contacts() {

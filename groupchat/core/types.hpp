@@ -61,6 +61,11 @@ struct channel_id {
 	chat_id cid;
 };
 
+struct channel_info {
+	chat_id cid;
+	std::string name;
+};
+
 struct gc_servers {
 	std::string host;
 	std::uint16_t key_server_port;

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <securepath/console/context.hpp>
+#include <securepath/console/label.hpp>
 #include <securepath/console/text_window.hpp>
 
 #include <map>
@@ -27,7 +28,7 @@ public:
 	void add_info(int channel, std::string msg);
 
 	int current_channel() const;
-	void change_channel(int channel);
+	void change_channel(std::string text, int channel);
 
 private:
 	void add_line_to_screen(cli_message const& msg);
@@ -43,6 +44,8 @@ private:
 	int current_channel_{};
 	std::map<int, channel_info> channels_;
 	std::shared_ptr<console::text_window> text_area_;
+	std::shared_ptr<console::label> status_area_;
+	std::string status_text_;
 };
 
 }

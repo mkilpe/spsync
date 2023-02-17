@@ -21,6 +21,7 @@ struct msg_data {
 	, sender(std::move(sender))
 	, sender_time(d.sender_time)
 	, receiver_time(clock_type::now())
+	, server_time(receiver_time) //t: fix this to be correct time
 	, iid(iid)
 	, seq(seq)
 	{}

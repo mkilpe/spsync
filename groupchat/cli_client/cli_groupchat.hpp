@@ -12,6 +12,11 @@ public:
 	cli_groupchat(event_system::event_loop&, cli_window& win, gc_cli_config config);
 	~cli_groupchat();
 
+	std::optional<int> map_to_channel(chat_id const&) const;
+	std::optional<chat_id> map_to_cid(int) const;
+	int add_channel(chat_id const&);
+	void remove_channel(int);
+
 	/// called when packet server connected
 	void on_connect();
 	/// called when packet server disconnected
@@ -32,9 +37,13 @@ public:
 	void handle_event(std::unique_ptr<event_system::event_base> ev) override;
 
 private:
+	int notice_channel(chat_id const&) const;
+
+private:
 	cli_window& win_;
 	gc_cli_config config_;
 	std::map<chat_id, int> channel_map_;
+	std::map<int, chat_id> cid_map_;
 };
 
 }
