@@ -1,0 +1,4 @@
+[submodule "submodules/securepath"]
+	path = submodules/securepath
+	url = ../securepath
+	branch = main

@@ -47,9 +47,9 @@ TEST_CASE("request handler test", "[unit]") {
 		CHECK(c2.storage_has(request_state::verification_succeeded, user1, "test tag", tdata));
 	}
 	SECTION("key query fail 1") {
-		key_server::unknown_user_key_server dummy_key_server(
+		key_server::server dummy_key_server(
 			dummy_server_context.server_context(),
-			key_server::unknown_user_key_server_params{.port=sync::default_key_server_port+10});
+			key_server::server_params{.port=sync::default_key_server_port+10});
 
 		dummy_key_server.run();
 
@@ -102,9 +102,9 @@ TEST_CASE("request handler test", "[unit]") {
 		}
 		LOG_TRACE("restarting test_client");
 		{
-			key_server::unknown_user_key_server dummy_key_server(
+			key_server::server dummy_key_server(
 				dummy_server_context.server_context(),
-				key_server::unknown_user_key_server_params{.port=sync::default_key_server_port+10});
+				key_server::server_params{.port=sync::default_key_server_port+10});
 
 			dummy_server_context.server_context().public_keys().insert(
 				my_private_key(net_context.client_context(3).private_data()).public_key());

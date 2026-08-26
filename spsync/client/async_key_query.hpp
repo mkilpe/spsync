@@ -1,7 +1,7 @@
 #pragma once
 
 #include "types.hpp"
-#include <infrastructure/key_client_lib/unknown_user_key_client.hpp>
+#include <infrastructure/key_client/key_client.hpp>
 #include <securepath/event_system/event_handler.hpp>
 #include <securepath/event_system/asio_broadcast_observer.hpp>
 #include <securepath/network/encryption/context.hpp>
@@ -40,7 +40,7 @@ private:
 	network::context& context_;
 	event_system::event_handler& callback_;
 	std::deque<query_data> queries_;
-	key_client::unknown_user_key_client client_;
+	key_client::client client_;
 	event_system::asio_broadcast_observer observer_;
 };
 

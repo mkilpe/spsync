@@ -1,4 +1,5 @@
 #include "error.hpp"
+#include "protocol_base.hpp"
 
 #include <securepath/log/log.hpp>
 
@@ -45,7 +46,7 @@ error to_error(network::net_error const& err) {
 			}
 		}
 		if(!ret) {
-			LOG_WARN("unknown error code from server: %", err);
+			LOG_WARN("unknown error code from server: {}", err);
 			ret = make_error(securepath::errc::unknown_error);
 		}
 	}

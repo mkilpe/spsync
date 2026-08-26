@@ -30,11 +30,11 @@ error content_auth::verify(crypto::public_key_access const& keys) const {
 		auto pkey = keys.find(signature_->issuer());
 		if(pkey) {
 			if(!pkey->verify(*signature_, gcm_tag_)) {
-				LOG_WARN("content auth tag is not authentic [kid=%]", signature_->issuer());
+				LOG_WARN("content auth tag is not authentic [kid={}]", signature_->issuer());
 				err = make_error(crypto::errc::signature_not_authentic);
 			}
 		} else {
-			LOG_WARN("could not verify content_auth tag because we do not have the public key [kid=%]", signature_->issuer());
+			LOG_WARN("could not verify content_auth tag because we do not have the public key [kid={}]", signature_->issuer());
 			err = make_error(crypto::errc::no_such_key);
 		}
 	} else {

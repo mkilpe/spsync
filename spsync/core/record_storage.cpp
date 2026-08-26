@@ -137,7 +137,7 @@ public:
 	}
 
 	void update_record(chain_block const& rec) {
-		LOG_TRACE("updating record to storage % [bid=%, parent_h=%]", to_hex(rec.tag()), rec.id(), to_hex(rec.parent_hash()));
+		LOG_TRACE("updating record to storage {} [bid={}, parent_h={}]", to_hex(rec.tag()), rec.id(), to_hex(rec.parent_hash()));
 
 		auto q = db_->prepare(
 			"UPDATE record SET tag = :tag, seq = :seq, hash = :hash, parent_hash = :parent_hash,"
@@ -251,7 +251,7 @@ struct record_storage::impl {
 
 		//check if the data is valid, notice that data_ref might not be set
 		if(!tag || !state) {
-			LOG_WARN("invalid record storage entry [key=%1%]", key);
+			LOG_WARN("invalid record storage entry [key={}]", key);
 			throw make_error(securepath::errc::invalid_data, "failed to interpret record columns");
 		}
 
@@ -466,7 +466,7 @@ record_handle record_storage::create_impl(RecordType const& r, chain_block const
 }
 
 record_handle record_storage::create(chain_block const& rec, record_state state) {
-	LOG_TRACE("creating record to storage [tag=%, state=%]", to_hex(rec.tag()), state);
+	LOG_TRACE("creating record to storage [tag={}, state={}]", to_hex(rec.tag()), state);
 	return rec.deserialise_record<record_handle>([&, this](auto const& r)
 		{
 			return create_impl(r, rec, state);
@@ -474,7 +474,7 @@ record_handle record_storage::create(chain_block const& rec, record_state state)
 }
 
 record_handle record_storage::create(auth_record<data_change_record> const& rec) {
-	LOG_TRACE("creating record to storage [tag=%]", to_hex(rec.auth.tag()));
+	LOG_TRACE("creating record to storage [tag={}]", to_hex(rec.auth.tag()));
 
 	database::transaction tact(*impl_->db);
 	auto handle = insert_to_db(chain_block(rec, rec.record.last_seen_block().sequence + 1), record_state::pending_commit, data_change_record_tag);

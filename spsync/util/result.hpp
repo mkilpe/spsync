@@ -2,6 +2,7 @@
 #define SPSYNC_UTIL_RESULT_HEADER
 
 #include <securepath/util/error.hpp>
+#include <spsync/util/format.hpp>
 
 #include <optional>
 #include <utility>
@@ -59,7 +60,7 @@ inline bool check_result_error(util::result<ResultType> const& res, Enum value) 
 	auto err = make_error_code(value);
 	bool ret = res.get_error().code() == err;
 	if(!ret) {
-		LOG_INFO("result error not matching [% != %]", res.get_error().code(), err);
+		LOG_INFO("result error not matching [{} != {}]", util::fmt_stream(res.get_error().code()), util::fmt_stream(err));
 	}
 	return ret;
 }

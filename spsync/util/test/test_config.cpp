@@ -19,7 +19,7 @@ TEST_CASE("config test", "[unit]") {
 
 	o.connect<events::on_config_changed>( [&](auto s)
 		{
-			LOG_TRACE("event: %", s);
+			LOG_TRACE("event: {}", s);
 			++counter;
 		} );
 

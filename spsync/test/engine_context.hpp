@@ -11,7 +11,7 @@
 #include <securepath/crypto/public_key_cache.hpp>
 #include <securepath/crypto/private_data_cache.hpp>
 #include <securepath/crypto/private_key.hpp>
-#include <securepath/crypto/rsa.hpp>
+#include <securepath/crypto/key_generation.hpp>
 #include <securepath/database/sqlite/connection.hpp>
 
 namespace securepath::sync::test {
@@ -43,7 +43,7 @@ public:
 			});
 	}
 
-	crypto::private_key root_user_key{crypto::generate_rsa_private_key(1024)};
+	crypto::private_key root_user_key{crypto::generate_private_key()};
 	util::user_id root_user{root_user_key.id()};
 
 	event_system::single_thread_event_loop single_thread_event_loop;

@@ -5,14 +5,14 @@
 #include <spsync/client/request_storage.hpp>
 #include <spsync/test/util.hpp>
 #include <securepath/database/sqlite/connection.hpp>
-#include <securepath/crypto/rsa.hpp>
+#include <securepath/crypto/key_generation.hpp>
 
 namespace securepath::sync::client::test {
 
 TEST_CASE("request_storage test", "[unit]") {
 	request_storage storage(sync::test::create_test_database("test_req_storage.db"));
 
-	auto priv_key = crypto::generate_rsa_private_key(1024);
+	auto priv_key = crypto::generate_private_key();
 
 	crypto::public_key_id t1{to_octet_vector("test1")};
 	crypto::public_key_id t2{to_octet_vector("test2")};

@@ -42,11 +42,11 @@ message_storage::message_storage(database::connection_ptr db)
 	if(res) {
 		sync_max_index_ = res.value<std::int64_t>(0).value_or(0);
 	}
-	LOG_TRACE("message_storage, max sync key = %", sync_max_index_);
+	LOG_TRACE("message_storage, max sync key = {}", sync_max_index_);
 }
 
 msg_change message_storage::insert(message_id const& id, msg_data const& md, msg_state state) {
-	LOG_TRACE("message_storage::insert [id=%, md.seq=%, md.iid=%, state=%]", id, md.seq, md.iid, int(state));
+	LOG_TRACE("message_storage::insert [id={}, md.seq={}, md.iid={}, state={}]", id, md.seq, md.iid, int(state));
 
 	std::string prep;
 	std::int64_t index_base = 0;
@@ -206,7 +206,7 @@ void sync_message_storage(message_storage& messages, sync::record_storage const&
 	auto m_last = messages.latest_sequence();
 	auto r_last = records.last_block().sequence;
 
-	LOG_TRACE("sync_message_storage [m_last=%, r_last=%]", m_last, r_last);
+	LOG_TRACE("sync_message_storage [m_last={}, r_last={}]", m_last, r_last);
 
 	++m_last; // the m_last seq we already have
 	for(; m_last <= r_last; ++m_last) {

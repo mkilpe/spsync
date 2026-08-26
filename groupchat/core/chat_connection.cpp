@@ -41,7 +41,7 @@ struct chat_connection::impl
 	channel& join_to_storage(sync::client::storage_info const& sinfo, std::string const& name) {
 		auto it = channels.find(sinfo.sid);
 		if(it != channels.end()) {
-			LOG_WARN("chat already exists [cid=%]", to_hex(sinfo.sid));
+			LOG_WARN("chat already exists [cid={}]", to_hex(sinfo.sid));
 			throw make_error(errc::invalid_state, "chat already exists");
 		}
 
@@ -74,11 +74,11 @@ struct chat_connection::impl
 					it->second->init(cid, net);
 					it->second->create_initial_record();
 				} else {
-					LOG_WARN("no channel found for chat: %", to_hex(cid));
+					LOG_WARN("no channel found for chat: {}", to_hex(cid));
 					err = make_error(securepath::errc::invalid_state, "chat room not set");
 				}
 			} catch(error const& e) {
-				LOG_WARN("exception while initialising storage: %", e);
+				LOG_WARN("exception while initialising storage: {}", e);
 				err = e;
 			}
 		}
@@ -96,7 +96,7 @@ struct chat_connection::impl
 		//check we have keys for the members (as otherwise on_create_storage will fail)
 		for(auto&& m : members) {
 			if(!ccontext.context.public_keys().find(m.user.public_key_id())) {
-				LOG_WARN("cannot create chat because one of the member keys is missing [key=%]", m.user.public_key_id());
+				LOG_WARN("cannot create chat because one of the member keys is missing [key={}]", m.user.public_key_id());
 				throw make_error(crypto::errc::no_such_key, "cannot create chat, member key missing");
 			}
 		}

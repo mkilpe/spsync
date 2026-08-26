@@ -1,4 +1,5 @@
 #include "client_sync.hpp"
+#include <securepath/crypto/public_key_access.hpp>
 #include "record_util.hpp"
 
 #include <spsync/core/crypto_context.hpp>
@@ -78,7 +79,7 @@ struct client_sync::impl : engine_output {
 
 	//todo: handle return correct for higher level notification
 	users process_user_change(plain_user_change_data const& change) {
-		LOG_TRACE("process_user_change [users=%]", change.access());
+		LOG_TRACE("process_user_change [users={}]", change.access());
 		users delta;
 		auto us = change.access();
 		database::transaction trans{*db};
@@ -95,13 +96,13 @@ struct client_sync::impl : engine_output {
 				member_status status;
 				auto k = find_member(v.user, status);
 				if(k && v.access == util::access_type::no_access) {
-					LOG_TRACE("process_user_change remove [user=%]", v.user);
+					LOG_TRACE("process_user_change remove [user={}]", v.user);
 					remove_member(v.user);
 				} else if(!k) {
-					LOG_TRACE("process_user_change create [user=%]", v.user);
+					LOG_TRACE("process_user_change create [user={}]", v.user);
 					create_member(v.user, member_status::member);
 				} else {
-					LOG_TRACE("process_user_change set [user=%]", v.user);
+					LOG_TRACE("process_user_change set [user={}]", v.user);
 					set_member_status(v.user, member_status::member);
 				}
 			}
@@ -129,7 +130,7 @@ struct client_sync::impl : engine_output {
 				LOG_WARN("message not authentic");
 			}
 		} else {
-			LOG_WARN("could not find key to decrypt message (seq=%)", user_rec.encryption_key());
+			LOG_WARN("could not find key to decrypt message (seq={})", user_rec.encryption_key());
 		}
 	}
 
@@ -200,7 +201,7 @@ struct client_sync::impl : engine_output {
 	void add_or_remove_user_access(users const& us) {
 		assert(engine);
 		if(us.mode() != users_change_mode::delta) {
-			LOG_WARN("users change is not in delta mode: %", us);
+			LOG_WARN("users change is not in delta mode: {}", us);
 			throw make_error(securepath::errc::invalid_data, "users change is not in delta mode");
 		}
 		update_members(us);

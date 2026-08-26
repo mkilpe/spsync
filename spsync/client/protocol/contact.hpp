@@ -1,6 +1,7 @@
 #pragma once
 
 #include <spsync/client/types.hpp>
+#include <securepath/serialisation/vector.hpp>
 
 
 namespace securepath::sync::client::protocol {

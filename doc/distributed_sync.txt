@@ -1,0 +1,790 @@
+SPSync distributed synchronisation plan
+=======================================
+
+Markers as in dev-phases.txt:  + done   * in progress   - todo
+
+
+Goal
+----
+
+Support both sync mode families over multiple servers:
+
+  weak modes   (allow_all, require_special_seen, require_data_add_remove_seen)
+               multi-master replication, no consensus, deterministic merge
+
+  strict mode  (require_all_seen)
+               per-storage consensus (Raft), one leader per storage, forks prevented
+
+plus server-to-server synchronisation, recovery of lagging/restarted/new servers,
+and fork detection with transferable evidence.
+
+Incremental: every milestone is usable on its own and is a prerequisite for the next.
+First target is weak mode working end-to-end on one server (M1), then on two servers (M3).
+
+
+Design decisions
+----------------
+
+D1  Servers never decide validity, only order. They cannot decrypt, so the only merge a
+    server can do is content-blind (union + deterministic order). Semantic merge is client work.
+
+D2  Clients never mutate committed history. No c2s verb for that will ever be added
+    (c2s_types currently has none; keep it that way). Repair happens either
+    server-to-server inside the replication protocol, or client-locally over records in
+    pending_commit state only. Records in in_sync are immutable on the client.
+
+D3  Strict mode keeps the rigid hash chain: last_seen_block = (seq, hash), parent_hash in
+    block hash. Forks are *prevented* by consensus, never repaired.
+
+D4  Weak modes bind references by record tag, not by block position. Sequence numbers are a
+    per-server cursor, not part of record identity. Each server linearises the record DAG in
+    its own order; merge between servers is a union keyed by tag.
+
+D5  Signing is mandatory for any replicated storage. The signature covers a digest of the
+    whole record (sha3-512 over serialised record + gcm tag), not the 128-bit GCM tag.
+
+D6  Every record carries a client-chosen stable operation id (op_id, 128-bit random) inside
+    the authenticated part, preserved across rebases. Dedup is by op_id, not only tag.
+
+D7  Server replication metadata (term, origin server, server signature over the assignment)
+    lives in an envelope *around* chain_block. chain_block stays client-authored.
+
+D8  record_state::in_sync splits into
+      acked    one server accepted it (what in_sync means today)
+      in_sync  durable: quorum-committed in strict mode, locally durable in weak mode
+    Single server: acked -> in_sync immediately. Higher layers (msg_state) follow.
+
+D9  Merge semantics by record class:
+      data changes  commutative; union of both branches, display order by sender_time /
+                    creation_time (already inside encrypted payload), not chain index
+      user changes  deterministic, fail closed:
+                      - removal beats addition for the same user
+                      - encryption keys are unioned; highest key_seq is used for new writes
+                      - merged access is never a superset of what any single signed
+                        user_change granted (no escalation by merging)
+                    users_change_mode::delta is mandatory on replicated storages
+      segment       treated as special; in weak modes a segment is an advisory checkpoint
+
+D10 Detection halts, never heals, in strict mode (surface to operator/app with evidence).
+    In weak modes merge heals; the user sees only "messages arrived".
+
+D11 Post-quantum cryptography for everything from now on (decision 2026-08-21, a selling
+    point). Backend: Botan 3 (>= 3.9, BSD-2, C++20 API, std::span, ML-KEM/ML-DSA/SLH-DSA/
+    FrodoKEM/Classic McEliece/XMSS/HSS-LMS, own TLS 1.3 with hybrid X25519/ML-KEM-768 on
+    by default, RFC 7250 raw public keys and external PSK) - preferred, confirmed by the
+    0.0c spike; OpenSSL 3.5 LTS is the fallback. Botan replaces BOTH cryptopp and OpenSSL
+    (network's asio::ssl use goes away with Botan's TLS). Algorithms:
+      signatures      ML-DSA-65 (FIPS 204) for records, server assignments, certificates
+      key wrapping    hybrid X25519 + ML-KEM-768 (FIPS 203) KEM for the group-key envelope
+      transport       hybrid KEM key exchange + ML-DSA authentication
+      symmetric/hash  AES-256-GCM and SHA3-512 stay (already quantum-adequate)
+    Every serialised key, signature, envelope and handshake carries a suite id so
+    parameter sets can move (ML-DSA-87 / ML-KEM-1024 for a "high" suite; SLH-DSA as
+    the conservative fallback if lattice schemes weaken). No RSA/ECDSA/classic DH
+    anywhere in new code; classical primitives appear only inside hybrids.
+
+
+Known defects found during analysis (fix in phase 0, they block replication)
+----------------------------------------------------------------------------
+
+B1  chain_sync ctor restores last_block_ from db but not last_data_add_remove_ /
+    last_user_change_or_segment_. After restart both are invalid and
+    check_rules_special_seen silently skips enforcement (guarded by is_valid()).
+    Hidden today only because storage.cpp hardcodes require_all_seen.
+    For replication these cursors must be *derived by replay*, never accumulated.
+
+B2  chain_sync::current_record_ is a mutable member smuggling state from check_rules()
+    into set_and_save_block(). Non-deterministic under concurrent/alternative apply paths.
+
+B3  record_storage has no truncation path (no DELETE on the record table). Needed for
+    uncommitted-suffix rollback (strict) and for client acked->pending demotion.
+
+B4  sync_engine::update_record throws not_implemented when previous_oid_record_tag is
+    non-empty: rebase only works for an object's first change. Any contention on an existing
+    object is fatal. Multi-server raises retry rates, so this is a hard prerequisite.
+
+B5  storage.cpp:24 hardcodes chain_sync_config{require_all_seen, only_tag}; the mode is not
+    read from the db and not settable at create_storage. (dimensions.txt already says mode
+    is chosen at creation and immutable afterwards.)
+
+B6  try_commit_pending: "//t: handle allow_all correctly" - in weak modes it recommits
+    without rebasing even when the server demands a special record seen.
+
+B7  Server never verifies signatures (auth_mode only checked structurally on client).
+    Server has no private key use at all (only in tests).
+
+
+Milestones
+----------
+
+  M0  securepath library consolidated + modernised; spsync builds on
+      it, crypto reworked post-quantum; B1/B2/B5 fixed; per-storage
+      mode configurable                                                 (phase 0)
+  M1  weak mode works end-to-end, one server, N concurrent clients,
+      rebase of existing objects, conflicts surfaced to app            (phase 1)
+  M2  authenticity hardened: digest signing, op_id, mandatory signing
+      on replicated storages, server verifies                           (phase 2)
+  M3  two servers, weak mode, replication + anti-entropy, client can
+      switch server                                                     (phase 3+4)
+  M4  server recovery: restart, bootstrap new replica, lag catch-up,
+      equivocation evidence                                             (phase 5)
+  M5  strict mode on 3-node Raft cluster                               (phase 6)
+  M6  ops hardening                                                     (phase 7)
+
+Effort marks are rough, same style as todos.txt.
+
+
+Phase 0  Foundation  (M0)
+-------------------------
+
+The securepath base library (~/dev/sp, last touched 2022) must be modernised and
+consolidated *before* spsync builds on it again. Several sub-libraries have already
+been modernised inside other projects; the rest exist only in sp. State on 2026-08-21:
+
+  sub-library       newest copy                        notes
+  util              rumpu/securepath   (2026-08-19)    std::span, utf-8 string_util, error::what fix
+  log               rumpu/securepath   (2026-08-19)    std::format: placeholders are {} not %
+  serialisation     rumpu/securepath   (2026-08-21)    ser.github (github mkilpe/serialisation,
+                                                       2026-02-21 "fix UB") differs in 53 files ->
+                                                       three-way reconcile sp -> ser.github -> rumpu
+  event_system      rumpu/securepath   (2026-08-19)    SLIMMED: broadcast_event_handler,
+                                                       broadcast_observer, asio_broadcast_observer
+                                                       dropped; 24 users in sp libs + spsync need them
+  test_frame        rumpu/securepath   (2026-08-19)    Catch2 v3 submodule, test_suite.hpp API same
+  energu/src/util   event_system copy  (2025-09)       older than rumpu, ignore
+
+  only in sp (2021-2022, must be ported onto the modern base):
+  crypto 7.1k lines (30 tests) -> NOT a port: rework on OpenSSL 3.5 with PQ (0.0c)
+  network 4.7k (10) -> transport handshake redesigned (0.0c)   remote_object 6.8k (23)
+  database 0.9k (2)   common+client_common+server_common 1.0k (4)   console 1.0k (0)
+  infrastructure: key_client_lib 0.1k, key_server 0.6k (2), packet_transport 2.1k (6)
+  spsync links all of these except remote_object. Decision 2026-08-21: remote_object is
+  NOT ported now (drop it from gc_lib's object list); it may be convenient later for
+  key-distribution / misc servers and gets reworked if and when that need arrives.
+
+  rumpu conventions to adopt: out-of-source builds enforced + CMakePresets, C++26,
+  GLOB CONFIGURE_DEPENDS, #pragma once, Catch2 v3 via submodule, FetchContent for
+  third parties, optional -fsanitize=address,undefined, ctest wired.
+
+- 0.0 New repository for all modernised bits (decision 2026-08-21)                 [2d]
+      + 2026-08-21: ~/dev/securepath exists (MIT (c) Secure Path Oy, C++26, CMakePresets,
+        Catch2 submodule); seed libs from rumpu build + tests green; ser.github left as is.
+      One new repo (working name: securepath, ~/dev/securepath) where every modernised
+      library lives together; to be published later. Consequences of "publish later":
+        - fresh history (no rumpu/sp history), first commit already clean
+        - pick the licence before the first commit: the already-public serialisation
+          (github mkilpe/serialisation) is BSL-1.0, rumpu is MIT (c) Secure Path Oy;
+          one licence for the whole repo. Nothing from spssh (AGPL) goes in.
+        - no secrets/keys in history: test keys are generated by the tests
+          (sp's test_keys/ dirs, certificates.db etc. are never copied in)
+        - rumpu's CI (.github/workflows/ci.yml, Linux + Windows/Wine) as the template
+      Layout (one target per directory, namespace securepath::<lib>):
+        securepath/{util,log,serialisation,event_system,test_frame}   seeded from rumpu
+        securepath/{common,database,crypto,network,client_common,server_common,console}
+        securepath/infrastructure/{key_client_lib,key_server,packet_transport}
+        securepath/audio  (rumpu's; generic enough, keeps rumpu on one submodule)
+        submodules/catch2, cmake/, CMakePresets.json, ctest wired, C++26
+      Seed: copy rumpu/securepath/{util,log,serialisation,event_system,test_frame};
+      reconcile serialisation against ser.github (confirm rumpu carries the 2026-02
+      UB fix, else port it); build + tests green in the new repo before anything else.
+      Consumers (rumpu, spsync, energu, ser.github) switch to a submodule or
+      FetchContent of the new repo; stop copying directories between projects.
+      C++ standard: 26 everywhere (decision 2026-08-21); the new spsync is C++26.
+
+- 0.0b Port the sp-only libraries onto the modern base                           [8d]
+      + 2026-08-26: key_client/key_server reworked WITHOUT remote_object -- hand-rolled
+        request/response over network (pk handshake, anonymous client) in securepath repo
+        (targets key_client, key_server; exe key_serverd; doc/key_server.md). spsync 0.1
+        changes: unknown_user_key_client->key_client::client, unknown_user_key_server->key_server::server,
+        _params->server_params, default_..._port->default_key_server_port; includes key_client_lib/
+        unknown_user_key_client.hpp->key_client/key_client.hpp and .../unknown_user_key_server.hpp->
+        .../key_server.hpp; ro::events->key_client::events; drop remote_object includes; link
+        key_client/key_server (were *_lib).
+      + 2026-08-21: database, common (no qt), console, event_system broadcast family
+        ported, tests green; crypto/network in progress (docs: securepath/doc/*.md)
+      + 2026-08-25: DONE apart from the deferred remote_object chain. crypto reworked on
+        Botan (PQ, 150 tests), network rebuilt on Botan TLS 1.3 + exporter-bound ML-DSA
+        auth (34 tests), server_common/key_check + packet_transport ported (both test
+        suites green). Clean tree: 12/12 suites, zero warnings. NOT ported (with
+        remote_object, by decision): client_common, ro_server_base, key_server,
+        key_client_lib. packet signing kept at default context (no "sp-packet" yet).
+      Order = dependency order: common -> database -> crypto -> network ->
+      client_common/server_common -> console -> infrastructure (key_*, packet_transport).
+      remote_object is not ported (see above).
+      Mechanical parts (do first, per library):
+        - LOG_* format strings '%' -> '{}' (sp libs ~230 calls, spsync+groupchat 131;
+          note rumpu's change: bool prints true/false, \% escapes gone)
+        - securepath::span -> std::span (util/span.hpp is now an alias)
+        - header guards -> #pragma once, CMake GLOB CONFIGURE_DEPENDS, tests on Catch2 v3
+      Real work:
+        - re-add broadcast_event_handler / broadcast_observer / asio_broadcast_observer
+          to event_system (or move them next to network if only network-side code
+          uses them; spsync uses them in client/util/server/groupchat too)
+        - crypto and network/encryption are not ported, they are reworked in 0.0c;
+          0.0b only brings the rest of network (asio 1.30 vs 2021 asio: deprecated
+          io_context APIs) and the callers onto the new crypto API
+        - Qt-free: common_qt is not needed by spsync; leave it behind
+      Each library's own tests green before moving to the next.
+      Drop the stale prebuilt spsync/lib/*.a (including libasio_support.a, a target
+      that no longer exists anywhere).
+
+- 0.0c Crypto rework: post-quantum on Botan 3  (D11)                              [10d]
+      Current state: RSA for signing, envelope and key ids; custom DH handshake
+      (network/encryption/handshake: dh_/pk_/ss_handshake); AES-256-GCM, SHA3-512,
+      HKDF, PBKDF2 via cryptopp. Own certificate format (key/identifier/property
+      certificates), not X.509 - so PQ certificates are just a signature swap.
+      Keep the public API shape (private_key, public_key, public_key_id, signature,
+      enveloped_content, certificate*, auth_stream_cipher, hash, hkdf, random); the
+      ~30 call-site symbols outside the lib (116x public_key_id, 35x public_key,
+      19x private_key, 15x generate_rsa_private_key, 8x enveloped_content, ...) are
+      the compatibility surface. Steps:
+        - backend: Botan 3.9 (Fedora: botan3-devel 3.9.0; Android via configure.py
+          --os=android for gc_lib). PK_Signer/PK_Verifier for ML-DSA, PK_KEM_Encryptor/
+          Decryptor for ML-KEM, AEAD_Mode for AES-256-GCM, SHA-3, HKDF, PBKDF2/Argon2id.
+          cryptopp and OpenSSL removed. Known gaps found 2026-08-21 (verify on 3.9):
+            . ML-DSA context strings (FIPS 204 ctx) are not exposed -> domain-separate
+              in the message instead: sign sha3-512(context || digest)
+            . no public hybrid-KEM combiner outside TLS -> own combiner: X25519 KEM +
+              ML-KEM-768, shared secret = HKDF-SHA3(ss_x25519 || ss_mlkem || ct_x25519 ||
+              ct_mlkem || pk...) following the X-Wing construction; ~100 lines + KATs
+            . Botan::TLS::Stream (asio_stream.h) requires Boost.Asio, not standalone
+              asio (this code base is standalone asio). Botan::TLS::Client/Server are
+              transport-agnostic via TLS::Callbacks, so write a ~300-line stream over
+              standalone asio inside network/encryption (fits the existing
+              encrypted_connection design). Q10.
+            . no FIPS 140 validation (OpenSSL has a FIPS provider); Botan's TLS 1.3 and
+              PQC were developed with BSI funding (Rohde & Schwarz Cybersecurity) -
+              the assurance story for EU customers; revisit if US-federal FIPS is asked
+          Spike (2 days, first thing in 0.0c): ML-DSA-65 sign/verify + KAT, ML-KEM-768
+          encaps/decaps + X25519 combiner, TLS 1.3 client/server over standalone asio
+          with raw public keys and X25519/ML-KEM-768. Pass -> Botan; fail -> OpenSSL 3.5.
+          + DONE 2026-08-21, Botan 3.9.0 passes: all primitives (ML-DSA-65 sig 3309 B,
+            sign 1.8 ms; ML-KEM-768 ct 1088 B; combiner; AES-GCM; SHA3; Argon2id) and
+            TLS 1.3 over standalone asio with HYBRID x25519/ML-KEM-768 + mutual raw keys.
+            CAVEAT: Botan TLS signs only with RSA/ECDSA (no ML-DSA sigalgs, EdDSA excluded
+            upstream) -> the TLS raw key cannot be our ML-DSA key; see Q9 update.
+        - suite id: enum crypto::suite { pq1 = ML-DSA-65 + X25519MLKEM768 + AES-256-GCM
+          + SHA3-512, pq1_high = ML-DSA-87 + X448MLKEM1024, ... } serialised in every
+          key, signature, encrypted_key, certificate and handshake hello
+        - keys: private_key/public_key become (suite, sig key, kem key) pairs; a user
+          identity = one ML-DSA key + one hybrid KEM key; public_key_id = SHA3-256
+          over the serialised public key (both halves)
+        - signature: ML-DSA-65 over the message (ML-DSA hashes internally; the record
+          digest from 2.1 is the message); context string per use
+          ("spsync-record", "spsync-assign", "sp-cert") to stop cross-protocol reuse
+        - envelope (group keys): enveloped_content keeps its shape; encrypted_key =
+          hybrid KEM ciphertext (1088 B ML-KEM-768 + 32 B X25519) + AES-256-GCM-wrapped
+          key; decapsulate + unwrap on receive
+        - generate_rsa_private_key -> generate_private_key(suite); test contexts
+          use pq1 (ML-DSA keygen is fast, RSA-1024 was only ever a test shortcut)
+        - transport: Botan TLS 1.3 replaces dh_/pk_/ss_handshake: hybrid
+          X25519/ML-KEM-768 key exchange (Botan default), pk variant = RFC 7250 raw
+          public keys with the user's/server's ML-DSA key, ss variant = external PSK,
+          dh variant (anonymous) dropped. The own certificate model stays above TLS
+          (Botan's Credentials_Manager hands out the raw key; our certificate chain is
+          checked in the TLS::Callbacks). Q9/Q10 below.
+        - sizes: ML-DSA-65 sig 3309 B, pk 1952 B; ML-KEM-768 ct 1088 B, pk 1184 B.
+          A signed chat record grows by ~3.4 KB; a user_change for N members by
+          N x ~1.2 KB. Protocol max sizes (7.2), packet_transport framing and sqlite
+          blobs must assume this; large groups (>100) want a tree-based key
+          agreement later (MLS-style), out of scope here.
+        - tests: all 30 crypto tests ported + known-answer tests from the FIPS 203/204
+          vectors; [security] bit-flip tests on ML-DSA signatures and KEM ciphertexts;
+          interop check of signatures against `openssl pkeyutl`.
+        - key/cert migration: nothing deployed, so no RSA compatibility path; the
+          suite id exists for future PQ-to-PQ moves, not for RSA.
+
+* 0.1 Build spsync against the consolidated library                              [1d]
+      + securepath repo added as git submodule (submodules/securepath, branch main,
+        relative url ../securepath; nested catch2 inited). Note: the gitolite remote's
+        HEAD points at a non-existent branch (repo has only 'main') - plain clones
+        check out an unborn branch; fix the symref server-side when convenient.
+      + new root CMakeLists.txt: C++26, out-of-source only + CMakePresets (build/),
+        add_subdirectory(submodules/securepath), compat helpers (add_deps,
+        add_application, add_sp_test_application now ctest-registered), gc_lib pruned
+        (remote_object, client_common, key_client_lib out). cmake.config/cmake.main
+        no longer used; stale in-source cmake residue removed.
+      + sudo dnf install done: sqlite-devel ncurses-devel botan3-devel present;
+        configure green (asio, sqlite 3.51.2, ncursesw, Botan 3.9.0)
+      + key infrastructure ported in securepath repo (2026-08-26) and spsync rewired:
+        key_client::client / key_server::server + server_params, includes and CMake
+        target names updated, key_client added to gc_lib, network_test_support and
+        client_common references dropped
+      + LOG migration done: '%' -> '{}' (175 calls incl. LTRACE-family macros),
+        spsync/util/format.hpp ostream_formatter bridge + std::formatter
+        specialisations for sequence_number, object_id, user_id/user/access_type/
+        user_access, chain_block_id, record_state, users/users_change_mode,
+        member_status, asio endpoint; 'this' args cast to void const*, exception
+        args -> .what()
+      + crypto API migrated: generate_rsa_private_key -> generate_private_key()
+        (7 files), dh handshake dropped (anonymous pk client covers it),
+        sync::test::test_context reimplemented on the lib's endpoint_state /
+        pki_test_context (root-sharing ctor kept), Catch2 v3 generator fix,
+        spsync/util/print.hpp restores the string-returning '%' print for the
+        cli client and json test templates
+      + pre-existing "no idea if compiles" bugs fixed while migrating:
+        cli_window::current_channel never defined, status_text_ typo,
+        add_channel_to_map never written (-> add_channel), join vs join_chat
+        naming, wrong map in add_channel free-slot scan, missing semicolon,
+        unfinished /window number branch completed, channel copied instead of
+        referenced, %1% boost-format leftover
+      + 2026-08-26: FULL TREE BUILDS - zero errors; all 27 binaries: spsync_server,
+        packet_server, key_serverd, gc_cli, gc_lib, storage tool and every
+        spsync/groupchat/securepath test binary (SECUREPATH_BUILD_TESTS on)
+      + ctest 2026-08-26: 22/22 suites green (PQ handshake, key server flows,
+        packet transport, sync engine/server system tests, groupchat json).
+        Empty comm suite passes via --allow-running-no-tests; the json suite
+        needs ~120s, so don't cap ctest below default timeouts.
+
+      => 0.1 DONE. Next: 0.2 (replay-derived cursors, B1) and phase 0 close-out.
+      note: securepath lib formatters (error, host_port, public_key_id) hardcode
+        std::format_context and so fail the std::formattable concept; works in
+        direct std::format calls, breaks generic constraints - fix upstream by
+        templating the format() member on the context
+      - spsync/groupchat LOG '%' -> '{}' (131 calls), std::span, pragma once
+      - get every test binary green. Last commit: "no idea if compiles".
+      - 891 files show as modified = mode-only (100644->100755); decide whether
+        to commit the modes or `chmod -R a-x` and `git config core.fileMode false`.
+
+- 0.2 Replay-derived cursors in chain_sync  (B1)                                  [0.5d]
+      chain_sync ctor: scan record table for the last block of each class
+      (data add/remove vs user_change/segment) and set the cursors. Add
+      record_storage::find_last_of_type(record_type_tag) or a single query.
+      Test: commit in require_special_seen mode, destroy chain_sync, reopen on same
+      db, verify out-of-sync is still enforced. Run all four modes.
+
+- 0.3 Pure check_rules  (B2)                                                      [0.5d]
+      check_rules(...) returns struct { error err; rec_type type; }; set_and_save_block
+      takes the type as argument. Remove the mutable member.
+
+- 0.4 Separate validate from apply in chain_sync                                  [1d]
+      error      validate(chain_block const&) const      // reads state only
+      chain_block apply(chain_block const&)               // mutates, no checks
+      commit_block(b) = validate + apply under lock (behaviour unchanged).
+      This is the seam consensus slides under later (leader validates, every replica
+      applies; apply must re-validate since the head can move in between).
+      Test: existing test_chain_sync passes unchanged.
+
+- 0.5 Per-storage configuration  (B5)                                             [1d]
+      storage_config table in storage.db: sync_mode, auth_mode, created_by, created_at,
+      replication (none|weak|strict, phase 3+), peers (phase 3+).
+      create_storage packet gains sync_mode + auth_mode (protocol v2 fields; both
+      protocol_base structs have trailing_data so older clients keep working).
+      Immutable after creation. Client-side sync_engine_config.mode is validated
+      against the server's mode on connect (server_hello carries it, or
+      request_sequence_number reply does).
+      Test: create with each mode, reopen, mode persists; mismatching client rejected.
+
+- 0.6 Doc: update server_api.txt and dimensions.txt with the decisions above.     [0.5d]
+
+
+Phase 1  Weak mode, single server  (M1)
+---------------------------------------
+
+Everything here is client/engine work; the server already accepts weak-mode commits
+(check_rules_special_seen, check_rules_add) - it is the engine that cannot cope yet.
+
+- 1.1 Mode-aware commit in sync_engine                                            [2d]
+      try_commit_pending / update_pending_commit:
+        require_all_seen            rebase on every head move (as today)
+        require_special_seen        rebase only when a newer special record exists
+                                    (compare last_seen_block.sequence with the newest
+                                    in_sync user_change/segment)
+        require_data_add_remove_seen  as above plus newest add/remove
+        allow_all                   never rebase for head movement; only for oid conflicts
+      Keep a per-mode "needs rebase?" predicate in one small function so it is unit
+      testable without the engine.
+      sync_object_change: last_block(true) only in require_all_seen (the //q: in code);
+      in weak modes use last in_sync block.
+      Test: test_engine_sync for each mode; property: no record is ever rebuilt
+      unnecessarily in allow_all.
+
+- 1.2 Mode-aware chain acceptance in sync_engine::check_chain_block               [2d]
+      Today: requires parent_hash linkage and rejects "sequence already in use".
+      Weak modes: a block is acceptable if its tag is unknown and it is authentic;
+      sequence is recorded as the server cursor; parent_hash is informative only.
+      pending_sync for missing-key cases stays.
+      Strict mode: unchanged.
+      Test: feed blocks out of order / with gaps in weak mode; all end in in_sync;
+      strict mode still rejects.
+
+- 1.3 Rebase of existing objects  (B4)                                            [3d]
+      update_record for data_change: when previous_oid_record_tag is non-empty, look up
+      records.find_last(oid) in in_sync; if its tag differs from the record's
+      previous_oid_record_tag the object moved underneath us:
+        - rebuild with the new previous tag (last-writer-wins on top), and
+        - emit engine_events::on_object_conflict(local_handle, remote_handle)
+      Default policy = rebase on top; the higher layer may cancel (drop the pending
+      record) or replace the content via a new engine_input call
+      (conflict_handling.txt: policy belongs to the data structure, not the engine).
+      Interface: add on_object_conflict to engine_output and a conflict_policy hook
+      to sync_engine_config (enum: rebase_on_top | ask).
+      Test: two clients change the same oid concurrently, in each mode; with 'ask'
+      policy the event fires exactly once per conflict; with rebase both end in sync.
+
+- 1.4 Multi-change records                                                        [1d]
+      data_change_record already holds a deque; rebase must handle a record where some
+      changes conflict and some do not (rebuild keeps non-conflicting ones, conflict
+      event per conflicting oid).
+
+- 1.5 record_state::acked  (D8, single-server trivial form)                       [1d]
+      Add acked to the enum, DB and unique_seq_selector logic; on single server the
+      engine moves acked->in_sync in the same step. No behaviour change yet; it makes
+      the later split a data-only change. msg_state gets the same value.
+
+- 1.6 groupchat on weak mode                                                      [1d]
+      New chats created with allow_all by default (messages are new oids, never
+      conflict). message_storage: expose ordering by sender_time in message_search
+      (index order stays available). Membership changes stay special records so
+      require_special_seen semantics apply to them (server rule, not chat code).
+      Test: N cli clients, random send interleaving, all see the same message set.
+
+- 1.7 System test: concurrent clients                                             [1d]
+      test_sync_context(mode): add a 'commit storm' helper: k clients each commit m
+      records without waiting; handle_events until quiet; compare_record_storages().
+      Run for all four modes; this is the regression net for everything below.
+
+      M1 done when: 1.7 green for all modes, groupchat runs on allow_all, conflict
+      event fires for same-oid races.
+
+
+Phase 2  Authenticity hardening  (M2)
+-------------------------------------
+
+Prerequisite for any second server: a replica must be able to verify what a peer
+sends without the group key.
+
+- 2.1 Sign a digest, not the GCM tag  (D5, D11)                                   [1d]
+      content_auth: ML-DSA-65 signature (context "spsync-record") over
+      sha3-512(record_ bytes || gcm_tag) (record_ is the
+      asn_der serialised record choice; both sides already have it). Keep gcm_tag_ as
+      is. content_auth has trailing_data; add a 'digest_version' field. Verifier
+      accepts v0 (tag-signed) only for storages created before the change
+      (storage_config.created_at) - or simply drop v0 since nothing is deployed.
+
+- 2.2 op_id in record_base  (D6)                                                  [1d]
+      record_base gains op_id (16 random bytes), inside the authenticated base.
+      record_creator_base generates it; update_record (rebase) copies it.
+      record table: op_id column, UNIQUE; chain_sync::can_block_be_committed checks
+      op_id before tag -> record_already_committed. Replaces the local-only
+      internal_id for wire-level identity.
+      Test: rebase keeps op_id; server rejects a rebased duplicate of an already
+      committed op.
+
+- 2.3 Server-side signature verification  (B7)                                    [2d]
+      auth_mode::sign_records: chain_sync::validate verifies content_auth against the
+      public keys the server knows (it already runs unknown_user_key_server and has
+      public_key.db). Unknown signer -> reject with a new errc::unknown_signer; the
+      client can push the key first (key server exists).
+      Access check hook: validate() gets the signer id; phase 7 enforces rights.
+
+- 2.4 Mandatory signing for replicated storages                                   [0.5d]
+      storage_config.replication != none requires auth_mode::sign_records; refuse to
+      create otherwise. Engine refuses to join a replicated storage in only_tag.
+
+- 2.5 Server signed sequence assignment  (D7, first use)                          [1d]
+      block_envelope { chain_block block; server_id origin; uint64 term{0};
+                       signature over (storage_id, origin, term, seq, block hash) }
+      response_commit and notify_record carry the envelope (new optional field via
+      trailing_data -> old clients ignore). Server signs with its
+      storage_server ML-DSA key (context "spsync-assign").
+      Client stores the envelope with the record (new blob column).
+      This is what makes equivocation *provable* later: two envelopes from one origin
+      with equal (storage, term, seq) and different hashes.
+
+- 2.6 Client cross-check of authenticated back references                         [0.5d]
+      On incoming record: if we hold an in_sync block at rec.last_seen_block().sequence
+      (strict) and its hash differs -> the server showed two worlds. Emit
+      engine_events::on_fork_suspected(evidence). Strict: stop committing to that
+      storage (D10). Weak modes: check by tag presence instead (phase 4.3).
+
+      M2 done when: all tests pass with sign_records; server rejects forged/unknown
+      signer; op_id dedup proven; envelope round-trips.
+
+
+Phase 3  Server log abstraction  (still single server)
+------------------------------------------------------
+
+- 3.1 Truncation path  (B3)                                                       [1d]
+      record_storage::truncate_from(sequence_number first_removed) - deletes in_sync /
+      acked / pending_sync rows with seq >= N and their record_objects in one
+      transaction; returns the removed blocks. Never touches pending_commit.
+      Client use: demote acked -> pending_commit instead of delete (keeps op_id and
+      content for rebase).
+      Test: truncate then commit again; cursors (0.2) are recomputed.
+
+- 3.2 chain_log                                                                   [2d]
+      Extract from chain_sync a log type over block_envelope:
+        head(), get(range), append(envelope), truncate_from(seq), find_by_tag,
+        find_by_op_id, find_divergence(peer_head_list) -> sequence
+      chain_sync keeps validation rules and uses chain_log for storage.
+      Weak and strict replication both talk to chain_log; the Raft state machine
+      adapter (6.2) is a thin wrapper on it.
+
+- 3.3 Server identity and peer config                                             [1d]
+      spsync_server.cfg: server_id (public key id of the storage server key),
+      peers = list of host_port + key id. storage_config.peers per storage
+      (subset of known peers that replicate this storage).
+
+- 3.4 Storage head table                                                          [0.5d]
+      Per storage: for each origin server the highest (term, seq, hash) seen, plus
+      our own head. This is what anti-entropy exchanges.
+
+
+Phase 4  Server-to-server, weak mode  (M3)
+------------------------------------------
+
+- 4.1 s2s protocol and transport                                                  [3d]
+      Reuse encrypted_server with handshake_tag::public_key (the PQ KEM handshake
+      from 0.0c); peers authenticate by server ML-DSA key id from 3.3. New packet
+      family s2s_types:
+        peer_hello        { server_id, protocol version }
+        heads             { storage_id, [ (origin, term, seq, hash) ] }
+        pull_records      { storage_id, origin, from_seq, to_seq }   (reuse
+                           response_records shape, envelopes instead of blocks)
+        push_records      { storage_id, [ envelope ] }
+        not_replicating   { storage_id }
+      One peer_connection per peer, both directions, reconnect with backoff.
+      Test: two in-process storage_servers on loopback exchanging heads.
+
+- 4.2 Weak-mode replication: push on commit                                       [2d]
+      storage::commit_block (weak): validate+apply locally, set acked->in_sync
+      (local durability is the weak-mode definition), push envelope to peers.
+      Receiving side: storage::apply_foreign(envelope):
+        - verify server signature of origin and client signature (2.3)
+        - op_id/tag known -> ignore
+        - else validate with weak rules, apply, assign *our own* sequence, keep the
+          origin (origin_id, origin_seq) from the envelope
+      Foreign blocks are not pushed onward (peers pull the rest via anti-entropy);
+      keeps it simple, no flooding.
+      Test: commit on A, appears on B; commit on both concurrently, both converge to
+      the same tag set (different local sequences is fine by D4).
+
+- 4.3 Tag-bound special references for weak modes  (D4)                           [2d]
+      Problem: check_rules_special_seen compares last_seen_block.sequence against
+      last_user_change_or_segment_; sequences differ per replica.
+      Fix: record_base gains last_seen_special_tag (record_tag of the newest special
+      record the client had seen), authenticated. Weak-mode server rule becomes:
+        the tag must be in our log, and no special record may have been applied
+        after it (by our local order). Strict mode keeps the sequence rule.
+      Client 2.6 cross-check in weak mode: "does the referenced tag exist" only.
+      Test: membership change on A, concurrent message on B not yet seeing it ->
+      B's server accepts (allow_all) / rejects (require_special_seen) consistently
+      regardless of which replica the message lands on.
+
+- 4.4 Anti-entropy                                                                [2d]
+      Periodic (and on reconnect): exchange heads; for each origin where the peer is
+      ahead, pull_records from our known seq; apply_foreign each. For origins where
+      we are ahead the peer does the same. Both directions, idempotent via op_id.
+      Test: partition A|B (drop the peer connection), commit on both, heal ->
+      converge. Kill B, commit on A, restart B -> B catches up.
+
+- 4.5 Client: replica awareness                                                   [2d]
+      comm layer: server_id from server_hello; record storage remembers which server
+      a sequence cursor belongs to. On connecting to a different replica of the same
+      storage in weak mode: fetch from 1, dedup by op_id/tag, adopt the new cursor;
+      records only known locally stay pending_commit and are committed there.
+      gc_servers already holds multiple endpoints; make chat_connection try them in
+      order.
+      Test: client commits on A, disconnects, connects to B, sees everything, commits
+      more, reconnects to A, all in sync.
+
+- 4.6 Client semantic merge for user changes  (D9)                                [3d]
+      client_sync::add_or_remove_user_access becomes a fold over all in_sync
+      user_change records in local order with the D9 rules; recomputed when a foreign
+      user_change arrives out of order (weak modes only). Delta mode enforced on
+      replicated storages (reject full-mode user_change in validate()).
+      Key handling: encryption_key_storage already unions by key_seq (insert ignores
+      known); current_key() = highest seq - matches D9. Keys arrive via the hybrid
+      KEM envelope (0.0c); one user_change with N members carries N encapsulations. Document that key_seq
+      collisions between concurrent key rotations are resolved by tag order and both
+      keys are kept.
+      Test: concurrent add X on A and remove X on B -> X removed everywhere; concurrent
+      key rotation on both -> both keys present, everyone can decrypt everything.
+
+- 4.7 Multi-server system test harness                                            [2d]
+      test_sync_context -> N test servers sharing a peer table, controllable links
+      (up/down/delay). compare_record_storages() becomes "same op_id set, same
+      derived membership, same decrypted message set"; sequences may differ.
+      Add [stress] test: random commits, random partitions, assert convergence.
+
+      M3 done when: 4.7 stress test passes for hours; cli groupchat works against
+      two servers with one killed and restarted mid-conversation.
+
+
+Phase 5  Server recovery and evidence  (M4)
+-------------------------------------------
+
+- 5.1 Restart                                                                     [0.5d]
+      = 0.2 (replay cursors) + 4.4 anti-entropy on startup. Verify nothing else needed.
+
+- 5.2 Bootstrap a new replica                                                     [1d]
+      storage_config.peers updated on an existing replica; new server learns the
+      storage from heads and pulls from seq 1 for every origin, verifying both
+      signatures per block. Until caught up it answers clients with
+      errc::storage_syncing (new) so clients try another replica.
+
+- 5.3 Divergence finder                                                           [1d]
+      chain_log::find_divergence: given a peer's (origin, seq, hash) samples, binary
+      search back to the last matching block per origin. Used by 4.4 to avoid full
+      pulls and by 6.5 for truncation. Test with synthetic forks.
+
+- 5.4 Equivocation detection between servers                                      [1d]
+      Two envelopes with same (origin, term, seq) and different block hash, both
+      correctly signed by origin -> proof. Store it (evidence table), stop accepting
+      pushes from that origin, raise an operator event (log + server event hook).
+      Clients receive on_fork_suspected with the proof attached (strict: halt,
+      weak: continue but surface).
+
+- 5.5 Root anchoring for joiners                                                  [1d]
+      todos.txt item: join_chat invitation carries the tag + hash of the first record
+      (and of the user_change that added the joiner); engine verifies on first fetch.
+      Closes the one case where a malicious server can still fully deceive a client.
+
+
+Phase 6  Strict mode with consensus  (M5)
+-----------------------------------------
+
+- 6.1 Decide: library vs own Raft                                                 [2d]
+      Evaluate NuRaft (Apache-2, asio based like this code base, has log store /
+      state machine / snapshot interfaces). Own implementation is only justified if
+      the dependency is unacceptable for the mobile gc_lib build (it is server side
+      only, so probably fine). Criteria: asio integration, Android not needed, log
+      store pluggable onto chain_log, membership change support.
+
+- 6.2 State machine adapter                                                       [3d]
+      log entry = serialised block_envelope. pre_commit on leader = chain_sync::validate
+      (cheap reject, returns record_out_of_sync to the client without a round).
+      commit on every replica = validate again + apply (head may have moved since
+      pre_commit; if validate now fails the entry is applied as a no-op tombstone so
+      the log stays identical, and the client is told out_of_sync).
+      Log store = chain_log (3.2) with term column; snapshot = "record range up to
+      seq N" (the records *are* the state; no reconstruction needed).
+
+- 6.3 Leader redirect                                                             [1d]
+      request_commit on follower -> response_commit error errc::not_leader with leader
+      endpoint; client comm layer follows once, then tries peers. Reads
+      (request_records, request_sequence_number) are served by followers for the
+      committed prefix.
+
+- 6.4 acked vs in_sync on the client  (D8, real form)                             [2d]
+      Strict: response_commit -> acked; notify_record / commit index advance -> in_sync.
+      Add committed_seq to reply_base (trailing) so every reply moves the watermark.
+      engine_output::on_object_data_changed fires on in_sync only (as now);
+      new on_object_acked for UIs that want "sent" vs "delivered".
+
+- 6.5 Rollback of uncommitted suffix                                              [2d]
+      Follower truncation is the library's job (via chain_log::truncate_from).
+      Client side: a record we held as acked whose (seq, hash) is contradicted by the
+      new leader's log -> demote to pending_commit, rebase (1.3), recommit. Never
+      touches in_sync (committed) records - the invariant from D2. Evidence: not a
+      fork, so no on_fork_suspected; log at info.
+
+- 6.6 Replica set membership                                                      [1d]
+      Add/remove peer for a storage via the library's config change; stored in
+      storage_config.peers; operators only (storage_management packet, exists,
+      currently not_implemented).
+
+- 6.7 Tests                                                                       [3d]
+      3-node cluster in process (4.7 harness + Raft): kill leader mid-commit,
+      partition minority/majority, restart from empty disk. Invariants:
+        - no block that any client saw as in_sync is ever missing afterwards
+        - all replicas' committed prefixes are identical
+        - clients converge; acked-but-lost records get recommitted exactly once (op_id)
+      [stress] variant running random faults.
+
+      M5 done when: 6.7 invariants hold under the stress test; strict-mode groupchat
+      survives leader loss without user-visible duplication or loss.
+
+
+Phase 7  Hardening and operations  (M6)
+---------------------------------------
+
+- 7.1 Access rights enforced in validate() using the signer id (todos.txt)         [2d]
+- 7.2 Max record/packet sizes, per-connection throttling (todos.txt); limits sized  [1d]
+      for PQ records (3.4 KB signature, ~1.2 KB per envelope member)
+- 7.3 Statistics: per storage heads, replication lag, rejected commits, evidence   [1d]
+- 7.4 Operator tooling: spsync/tools: show heads, diff two replicas, verify a       [2d]
+      storage's signatures offline, dump evidence
+- 7.5 Side channel / msg server items from todos.txt are independent of this plan
+
+
+Open questions (decide before the phase that needs them)
+--------------------------------------------------------
+
+Q1 (phase 0.5)  Mode per storage only, or also per record class (e.g. data allow_all,
+                users require_special_seen)? The server rules already distinguish the
+                classes; exposing it is cheap. Recommend: per storage, with
+                require_special_seen as the weak default for chats.
+
+Q2 (phase 2.1)  Drop v0 tag-signed records entirely (nothing deployed) or keep a
+                compatibility path? Recommend drop.
+
+Q3 (phase 4.2)  Weak-mode durability definition: local disk of one replica, or
+                "pushed to at least one peer" before in_sync? Start with local; revisit
+                once 4.4 exists (cheap to switch: delay the acked->in_sync step).
+
+Q4 (phase 4.3)  Change record_base (structure_version 2) or carry last_seen_special_tag
+                in trailing_data? Version bump is cleaner; trailing_data keeps old
+                clients reading new records. Recommend version bump; no deployment to
+                protect yet.
+
+Q5 (phase 6.1)  NuRaft vs own. Decide with a one-day spike: chain_log as NuRaft
+                log_store, one storage, three nodes, commit a block.
+
+Q6 (phase 6.2)  Tombstone vs reject for entries that fail validate at apply time.
+                Tombstone keeps logs identical and is simpler; costs a log slot.
+
+Q7 (phase 0.0c) Parameter sets: ML-DSA-65 + ML-KEM-768 (NIST level 3) as the default
+                suite, or go straight to ML-DSA-87 + ML-KEM-1024 (level 5, what CNSA 2.0
+                mandates)? Cost is ~40% larger signatures/keys. Recommend level 3 default
+                with the level-5 suite selectable per storage at creation.
+
+Q8 (phase 0.0c) Hybrid for signatures too (composite ML-DSA-65 + Ed25519, IETF LAMPS
+                draft) or pure ML-DSA? KEM is hybrid regardless (industry consensus:
+                Signal PQXDH, Apple PQ3, TLS X25519MLKEM768). Recommend pure ML-DSA for
+                signatures with a composite suite id reserved; revisit if customers ask.
+
+Q9 (phase 0.0c) Transport: own KEM handshake vs TLS 1.3. Recommend TLS 1.3 from Botan
+                (reviewed protocol, hybrid PQ group default, RFC 7250 raw public keys for
+                the pk variant, external PSK for the ss variant); the own handshake only
+                if the spike fails. Either way the hello carries the suite id.
+                UPDATE 2026-08-21 (spike): Botan TLS cannot authenticate with ML-DSA, so
+                "raw ML-DSA key" is out. Options: (a) Botan TLS 1.3 with an EPHEMERAL
+                ECDSA raw key as channel binder + PQ authentication = ML-DSA signature over
+                the RFC 5705 exporter (our certificate chain checked there); verified in
+                the spike, single backend, Boost-free (recommended). (b) own KEM handshake
+                (ML-KEM + ML-DSA-signed transcript). (c) OpenSSL 3.5 TLS (has ML-DSA
+                sigalgs + asio::ssl) as a second backend next to Botan. Decision pending.
+
+                DECIDED 2026-08-25: option (a), keeping the escape hatch open — migrate
+                auth into TLS when Botan gains ML-DSA sigalgs (hello version/suite id are
+                the levers); threat model in securepath/doc/threat_model.md.
+
+Q10 (phase 0.0c) Botan's asio stream needs Boost.Asio. Options: (a) own TLS stream over
+                standalone asio using Botan::TLS::Callbacks (~300 lines, keeps the code
+                base Boost-free, recommended); (b) move the code base to Boost.Asio and
+                use Botan::TLS::Stream as-is (boost.json is already used standalone, so
+                Boost was avoided deliberately so far). Decide in the spike.
+
+
+Rationale summary (from the analysis, kept short)
+------------------------------------------------
+
+* chain_sync already is a deterministic state machine over an append-only log; commit
+  is compare-and-swap on the head; the client already implements fetch-rebase-retry.
+  Consensus goes *under* storage::commit_block, nothing above changes shape.
+* Servers never see plaintext, so replicas need to agree on order only. Crash-fault
+  consensus is enough for the strict data path; confidentiality holds regardless of
+  how many replicas are compromised. Byzantine *ordering* attacks (equivocation) are
+  made detectable and provable by client-authenticated back references plus
+  server-signed sequence assignments, not by BFT consensus.
+* The chain is transitively committed by clients (last_seen_block inside the
+  authenticated payload, block hash covers seq + parent). This is the property that
+  makes strict mode verifiable without trusting any server - keep it, which is why
+  strict mode cannot be re-linearised and must use consensus.
+* Weak modes never had a meaningful total order; binding references by tag lets
+  every replica linearise its own way and merge by union. Chat lives here.
+* Automatic fork recovery is only impossible when ordering is strict *and* there is
+  no consensus - which is exactly the single hard-coded configuration today. Both
+  exits are automatic: consensus for strict, merge for weak.

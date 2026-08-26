@@ -46,7 +46,7 @@ void config::load() {
 		std::error_code ec;
 		auto value = json::parse(value_str, ec);
 		if(ec) {
-			LOG_WARN("ignoring invalid value in config: '%'", value_str);
+			LOG_WARN("ignoring invalid value in config: '{}'", value_str);
 		} else {
 			set_impl(res.value<std::string>(0).value(), value, true);
 		}
@@ -119,7 +119,7 @@ void config::set_impl(std::string_view key, json::value const& v, bool overwrite
 }
 
 void config::set(std::string const& option, json::value const& v, bool only_leaf) {
-	LOG_TRACE("config set [% = %]", option, v);
+	LOG_TRACE("config set [{} = {}]", option, json::serialize(v));
 	std::unique_lock l{mutex_};
 	set_impl(option, v, !only_leaf);
 	if(db_) {

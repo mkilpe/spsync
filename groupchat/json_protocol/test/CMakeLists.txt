@@ -1,1 +1,1 @@
-add_sp_test_application(test_groupchat_json_protocol groupchat_json_protocol groupchat_core spsync_server_lib spsync_test network_test_support)
+add_sp_test_application(test_groupchat_json_protocol groupchat_json_protocol groupchat_core spsync_server_lib spsync_test)

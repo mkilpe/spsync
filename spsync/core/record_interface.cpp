@@ -15,7 +15,7 @@ std::ostream& operator<<(std::ostream& out, record_state state) {
 	if(0 <= state_value && state_value < sizeof(state_name)/sizeof(*state_name)) {
 		out << state_name[state_value];
 	} else {
-		LOG_WARN("bad state value: %", state_value);
+		LOG_WARN("bad state value: {}", state_value);
 		out << "<bad state value>";
 	}
 	return out;

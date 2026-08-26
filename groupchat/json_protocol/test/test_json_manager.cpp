@@ -1,5 +1,6 @@
 
 #include "json_test_helpers.hpp"
+#include <spsync/util/print.hpp>
 #include "json_test_manager.hpp"
 #include "json_commands.hpp"
 

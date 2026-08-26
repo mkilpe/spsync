@@ -42,7 +42,7 @@ int main(int argc, char* args[]) {
 			program.run();
 		}
 	} catch(std::exception const& ex) {
-		LOG_WARN("Error: %", ex.what());
+		LOG_WARN("Error: {}", ex.what());
 		std::cerr << "Error: " << ex.what() << std::endl;
 	}
 	return ret;

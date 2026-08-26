@@ -2,6 +2,7 @@
 #pragma once
 
 #include "json_test_helpers.hpp"
+#include <spsync/util/print.hpp>
 
 #include <groupchat/json_protocol/json_helpers.hpp>
 #include <groupchat/json_protocol/json_manager.hpp>

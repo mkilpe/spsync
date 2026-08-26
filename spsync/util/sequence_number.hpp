@@ -2,6 +2,7 @@
 #define SPSYNC_UTIL_SEQUENCE_NUMBER_HEADER
 
 #include <securepath/serialisation/types.hpp>
+#include <spsync/util/format.hpp>
 #include <securepath/serialisation/sequence.hpp>
 
 #include <iosfwd>
@@ -46,5 +47,8 @@ sequence_number operator-(std::uint64_t, sequence_number const&);
 std::ostream& operator<<(std::ostream&, sequence_number const&);
 
 }
+
+
+SPSYNC_FORMAT_VIA_OSTREAM(securepath::sync::util::sequence_number)
 
 #endif

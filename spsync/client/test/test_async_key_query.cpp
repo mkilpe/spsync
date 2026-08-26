@@ -9,10 +9,10 @@
 #include <spsync/test/test_context.hpp>
 #include <spsync/test/test_progress.hpp>
 #include <spsync/test/test_server_runner.hpp>
-#include <securepath/crypto/rsa.hpp>
+#include <securepath/crypto/key_generation.hpp>
 #include <securepath/crypto/public_key_cache.hpp>
 
-#include <infrastructure/key_server/server_lib/unknown_user_key_server.hpp>
+#include <infrastructure/key_server/server_lib/key_server.hpp>
 
 namespace securepath::sync::client::test {
 
@@ -106,9 +106,9 @@ TEST_CASE("async key query test", "[unit]") {
 	sync::test::test_server server(net_context.server_context());
 	server.run();
 
-	key_server::unknown_user_key_server secondary_key_server(
+	key_server::server secondary_key_server(
 		secondary_net_context.server_context(),
-		key_server::unknown_user_key_server_params{.port=key_server::default_unknown_user_key_server_port+10});
+		key_server::server_params{.port=key_server::default_key_server_port+10});
 
 	secondary_key_server.run();
 
@@ -117,7 +117,7 @@ TEST_CASE("async key query test", "[unit]") {
 	host_port local{"127.0.0.1", sync::default_key_server_port};
 	host_port bad_local{"127.0.0.1", sync::default_key_server_port+1};
 	host_port slocal{"127.0.0.1", sync::default_key_server_port+10};
-	auto temp_key = crypto::generate_rsa_private_key(1024);
+	auto temp_key = crypto::generate_private_key();
 	crypto::public_key_id non_existent_id = temp_key.id();
 
 	// make key cache that contains both server's public keys

@@ -1,4 +1,7 @@
 #include "request_handler.hpp"
+#include <securepath/crypto/public_key_access.hpp>
+#include <securepath/crypto/private_data_access.hpp>
+#include <securepath/crypto/error.hpp>
 #include "async_key_query.hpp"
 #include "events.hpp"
 #include "protocol/protocol.hpp"
@@ -35,7 +38,7 @@ struct request_handler::impl : public event_system::event_handler {
 	}
 
 	void on_disconnect(error const& err) {
-		LOG_TRACE("contact connection disconnected [err=%]", err);
+		LOG_TRACE("contact connection disconnected [err={}]", err);
 		handler.emit<events::on_disconnect>(err);
 	}
 
@@ -49,13 +52,13 @@ struct request_handler::impl : public event_system::event_handler {
 					this->handle(handle, packet);
 				});
 		} catch(std::exception const& ex) {
-			LOG_WARN("exception while handling packet [ex=%]", ex.what());
+			LOG_WARN("exception while handling packet [ex={}]", ex.what());
 			handle->mark_seen();
 		}
 	}
 
 	void on_error(packet_transport::packet_dir d, packet_transport::packet_key_type key, error const& err) {
-		LOG_TRACE("client packet error [key=%, err=%]", key, err);
+		LOG_TRACE("client packet error [key={}, err={}]", key, err);
 	}
 
 	void handle_event(std::unique_ptr<event_system::event_base> ev) {
@@ -72,7 +75,7 @@ struct request_handler::impl : public event_system::event_handler {
 			auto packet = handle->packet();
 
 			if(requests.is_sender_banned(packet.signature.issuer())) {
-				LOG_WARN("request from banned sender [kid=%]", packet.signature.issuer());
+				LOG_WARN("request from banned sender [kid={}]", packet.signature.issuer());
 				return;
 			}
 
@@ -84,13 +87,13 @@ struct request_handler::impl : public event_system::event_handler {
 			db_request req{{{rdata}, rh, request_state::waiting_for_verification}, packet};
 			do_verify_data(std::move(req), false);
 		} catch(std::exception const& ex) {
-			LOG_WARN("exception while handling packet [ex=%]", ex.what());
+			LOG_WARN("exception while handling packet [ex={}]", ex.what());
 		}
 		handle->mark_seen();
 	}
 
 	void on_query_event(error err, std::optional<crypto::public_key> optkey, std::any userdata) {
-		LOG_WARN("on_query_event [err=%, has key=%]", err, optkey ? "yes" : "no");
+		LOG_WARN("on_query_event [err={}, has key={}]", err, optkey ? "yes" : "no");
 		if(db_request* data = std::any_cast<db_request>(&userdata)) {
 			if(!err) {
 				if(optkey) {
@@ -117,7 +120,7 @@ struct request_handler::impl : public event_system::event_handler {
 			if(pkey->verify(req.payload.signature, serialisation::asn_der_serialise(req.payload.data))) {
 				req.state = request_state::verification_succeeded;
 			} else {
-				LOG_WARN("packet not authentic [kid=%]", pkey->id());
+				LOG_WARN("packet not authentic [kid={}]", pkey->id());
 				req.state = request_state::verification_failed;
 			}
 			requests.change_state(req.id, req.state);
@@ -136,18 +139,18 @@ struct request_handler::impl : public event_system::event_handler {
 			if(pkey) {
 				context.public_keys().insert(*pkey);
 			} else {
-				LOG_INFO("Could not query public key [kid=%, host=%, port=%]", key_id, server.host, server.port);
+				LOG_INFO("Could not query public key [kid={}, host={}, port={}]", key_id, server.host, server.port);
 			}
 		}
 		return pkey;
 	}
 
 	std::optional<crypto::public_key> query_key(host_port const& server, crypto::public_key_id const& key_id) {
-		LOG_TRACE("query key [kid=%, host=%, port=%]", key_id, server.host, server.port);
+		LOG_TRACE("query key [kid={}, host={}, port={}]", key_id, server.host, server.port);
 		auto key = context.public_keys().find(key_id);
 		if(!key) {
 			//t: non-blocking
-			key_client::unknown_user_key_client client{context};
+			key_client::client client{context};
 			client.connect(server.host, server.port);
 			client.wait_for_connection();
 			key = client.find_key(key_id);
@@ -201,7 +204,7 @@ request_storage& request_handler::requests() {
 }
 
 void request_handler::send_request(user receiver, std::string tag, octet_vector data) {
-	LOG_TRACE("sending request [kid=%, tag=%]", receiver.id(), tag);
+	LOG_TRACE("sending request [kid={}, tag={}]", receiver.id(), tag);
 
 	std::unique_lock l{impl_->mutex};
 	if(!impl_->own_account.me.is_valid()) {
@@ -211,7 +214,7 @@ void request_handler::send_request(user receiver, std::string tag, octet_vector 
 
 	auto opt_key = impl_->find_key(receiver.key_server(), receiver.id().public_key_id());
 	if(!opt_key) {
-		LOG_INFO("No public key found when sending request [key_id=%]", receiver.id().public_key_id().in_hex());
+		LOG_INFO("No public key found when sending request [key_id={}]", receiver.id().public_key_id().in_hex());
 		throw make_error(crypto::errc::no_such_key, "Could not find requested public key for user");
 	}
 	impl_->context.public_keys().insert(*opt_key);

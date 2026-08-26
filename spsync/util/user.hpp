@@ -2,6 +2,7 @@
 #define SPSYNC_UTIL_USER_HEADER
 
 #include "metadata.hpp"
+#include <spsync/util/format.hpp>
 
 #include <securepath/crypto/public_key_id.hpp>
 #include <securepath/serialisation/decls.hpp>
@@ -110,5 +111,11 @@ bool operator!=(user_access const& l, user_access const& r);
 std::ostream& operator<<(std::ostream&, user_access const&);
 
 }
+
+
+SPSYNC_FORMAT_VIA_OSTREAM(securepath::sync::util::user_id)
+SPSYNC_FORMAT_VIA_OSTREAM(securepath::sync::util::user)
+SPSYNC_FORMAT_VIA_OSTREAM(securepath::sync::util::access_type)
+SPSYNC_FORMAT_VIA_OSTREAM(securepath::sync::util::user_access)
 
 #endif

@@ -3,6 +3,7 @@
 #include "events.hpp"
 
 #include <spsync/client/contact_handler.hpp>
+#include <spsync/client/protocol/contact.hpp>
 #include <spsync/client/events.hpp>
 #include <spsync/comm/net_connection.hpp>
 #include <spsync/core/encryption_key_storage.hpp>
@@ -11,15 +12,14 @@
 #include <spsync/protocol/ports.hpp>
 
 #include <securepath/common/key_value_database.hpp>
-#include <securepath/crypto/rsa.hpp>
+#include <securepath/crypto/key_generation.hpp>
 #include <securepath/database/sqlite/connection.hpp>
 #include <securepath/event_system/event_handler.hpp>
 #include <securepath/network/encrypted_net_base.hpp>
 #include <securepath/network/encryption/error.hpp>
-#include <securepath/network/encryption/handshake/dh_handshake.hpp>
 #include <securepath/network/encryption/handshake/pk_handshake.hpp>
 
-#include <infrastructure/key_client_lib/unknown_user_key_client.hpp>
+#include <infrastructure/key_client/key_client.hpp>
 #include <infrastructure/key_server/server_lib/defaults.hpp>
 
 #include <filesystem>
@@ -61,7 +61,6 @@ struct groupchat::impl
 	, cconn(context, callback, database)
 	, config(config)
 	{
-		network::enable_client_dh_handshake(context);
 		network::enable_client_pk_handshake(context);
 
 		if(!c) {
@@ -95,11 +94,11 @@ struct groupchat::impl
 	}
 
 	void create_crypto_materials() {
-		context.private_data().set_my_private_key(crypto::generate_rsa_private_key(2048));
+		context.private_data().set_my_private_key(crypto::generate_private_key());
 	}
 
 	void create_account(gc_servers const& server, std::string const& name) {
-		LOG_TRACE("groupchat create_account [server=%:{%:%:%}]", server.host, server.key_server_port, server.sync_server_port, server.packet_server_port);
+		LOG_TRACE("groupchat create_account [server={}:{{{}:{}:{}}}]", server.host, server.key_server_port, server.sync_server_port, server.packet_server_port);
 
 		database::transaction t{*database};
 		init_crypto();
@@ -153,7 +152,7 @@ struct groupchat::impl
 	void register_my_key(host_port const& server) {
 		//t: non-blocking
 		std::chrono::seconds timeout{config.get_default("network.timeout", default_timeout).as_int64()};
-		key_client::unknown_user_key_client client(context);
+		key_client::client client(context);
 		client.connect(server.host, server.port, timeout);
 		client.wait_for_connection();
 		auto my_key = context.private_data().my_private_key();
@@ -175,7 +174,7 @@ struct groupchat::impl
 	void send_chat_invitation(user receiver, std::string message, chat_id const& cid) {
 		auto hp = channels.find_server(cid);
 		if(!hp) {
-			LOG_TRACE("no chat with id %", to_hex(cid));
+			LOG_TRACE("no chat with id {}", to_hex(cid));
 			throw make_error(errc::no_such_data, "could not find chat");
 		}
 
@@ -188,7 +187,7 @@ struct groupchat::impl
 			}
 		}
 		if(!conn) {
-			LOG_TRACE("no connection fot chat with id %", to_hex(cid));
+			LOG_TRACE("no connection fot chat with id {}", to_hex(cid));
 			throw make_error(errc::no_such_data, "could not find connection for chat");
 		}
 		auto& channel = conn->get(cid);
@@ -219,7 +218,7 @@ bool groupchat::check_account_exists(groupchat_config const& conf) const {
 		auto db = open_gc_client_database(conf);
 		return db && db->has_table("gc_info");
 	} catch(std::exception const& ex) {
-		LOG_WARN("failed to open database: %", conf.db());
+		LOG_WARN("failed to open database: {}", conf.db());
 	}
 	return false;
 }

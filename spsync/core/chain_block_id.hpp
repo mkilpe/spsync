@@ -2,6 +2,7 @@
 #define SPSYNC_CORE_CHAIN_BLOCK_ID_HEADER
 
 #include <spsync/core/types.hpp>
+#include <spsync/util/format.hpp>
 #include <securepath/util/conversions.hpp>
 
 namespace securepath::sync {
@@ -39,5 +40,8 @@ inline std::ostream& operator<<(std::ostream& out, chain_block_id const& b) {
 }
 
 }
+
+
+SPSYNC_FORMAT_VIA_OSTREAM(securepath::sync::chain_block_id)
 
 #endif

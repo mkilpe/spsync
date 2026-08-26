@@ -10,7 +10,7 @@
 #include <spsync/engine/record_verifier.hpp>
 #include <securepath/crypto/aes_gcm.hpp>
 #include <securepath/crypto/private_key.hpp>
-#include <securepath/crypto/rsa.hpp>
+#include <securepath/crypto/key_generation.hpp>
 #include <securepath/crypto/public_key_cache.hpp>
 #include <securepath/crypto/private_data_cache.hpp>
 
@@ -27,7 +27,7 @@ using namespace securepath::test;
 
 // (1)
 TEST_CASE("data_change_record_creator single", "[unit]") {
-	std::optional<crypto::private_key> signer = GENERATE(std::nullopt, crypto::generate_rsa_private_key(1024));
+	std::optional<crypto::private_key> signer = GENERATE(Catch::Generators::as<std::optional<crypto::private_key>>{}, std::nullopt, crypto::generate_private_key());
 
 	encryption_key key{1, random_octet_vector(crypto::aes_gcm_key_size())};
 	octet_vector prevhash = to_octet_vector("test tag");
@@ -82,7 +82,7 @@ TEST_CASE("user_change_record_creator", "[unit]") {
 
 	metadata mdata{{"test", to_octet_vector("data")}};
 
-	crypto::private_key root_user_key{crypto::generate_rsa_private_key(1024)};
+	crypto::private_key root_user_key{crypto::generate_private_key()};
 	keycache.insert(root_user_key.public_key());
 
 	util::user_id root_user{root_user_key.id()};

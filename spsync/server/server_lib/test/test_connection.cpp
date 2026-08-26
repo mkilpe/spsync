@@ -14,7 +14,7 @@
 #include <securepath/test_frame/test_utils.hpp>
 #include <securepath/database/sqlite/connection.hpp>
 #include <securepath/event_system/event_handler.hpp>
-#include <infrastructure/key_client_lib/unknown_user_key_client.hpp>
+#include <infrastructure/key_client/key_client.hpp>
 #include <infrastructure/key_server/server_lib/defaults.hpp>
 
 #include <future>
@@ -148,8 +148,8 @@ TEST_CASE("connection test", "[system]") {
 	server.run();
 	std::this_thread::sleep_for(1s);
 
-	key_client::unknown_user_key_client key_client(net_context.client_context(0));
-	key_client.connect("127.0.0.1", key_server::default_unknown_user_key_server_port);
+	key_client::client key_client(net_context.client_context(0));
+	key_client.connect("127.0.0.1", key_server::default_key_server_port);
 	key_client.wait_for_connection();
 	key_client.register_key(net_context.client_context(0).private_data().my_private_key()->public_key());
 

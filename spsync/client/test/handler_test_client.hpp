@@ -61,7 +61,7 @@ public:
 	}
 
 	void on_disconnect(error err) {
-		LOG_TRACE("on_disconnect [err=%]", err);
+		LOG_TRACE("on_disconnect [err={}]", err);
 		try {
 			connected.set_exception(std::make_exception_ptr(err));
 		} catch(...) {}
@@ -73,13 +73,13 @@ public:
 	}
 
 	void on_contacting(request req, std::string name, std::string message) {
-		LOG_TRACE("contacting [name=%, message=%]", name, message);
+		LOG_TRACE("contacting [name={}, message={}]", name, message);
 		std::unique_lock l{mutex};
 		requests.push_back(req);
 	}
 
 	void on_invitation(request req, storage_info, std::string name, std::string message) {
-		LOG_TRACE("invitation [name=%, message=%]", name, message);
+		LOG_TRACE("invitation [name={}, message={}]", name, message);
 		std::unique_lock l{mutex};
 		requests.push_back(req);
 	}

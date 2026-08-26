@@ -1,4 +1,5 @@
 #include "contact_handler.hpp"
+#include <securepath/serialisation/vector.hpp>
 #include "events.hpp"
 #include "protocol/contact.hpp"
 
@@ -80,7 +81,7 @@ void contact_handler::on_disconnect(error err) {
 }
 
 void contact_handler::on_request(request const& req) {
-	LOG_TRACE("on_request [tag=%]", req.tag);
+	LOG_TRACE("on_request [tag={}]", req.tag);
 	try {
 		if(req.tag == contact_tag) {
 			auto contact = contacts_.find(req.sender.id());
@@ -88,7 +89,7 @@ void contact_handler::on_request(request const& req) {
 				auto data = serialisation::asn_der_deserialise<protocol::contact_data>(req.data);
 				callback_.emit<events::on_contacting>(req, data.name, data.message);
 			} else {
-				LOG_INFO("contact request from user that is already a contact [user=%]", req.sender.id());
+				LOG_INFO("contact request from user that is already a contact [user={}]", req.sender.id());
 			}
 		} else if(req.tag == invite_tag) {
 			auto data = serialisation::asn_der_deserialise<protocol::invitation_data>(req.data);
@@ -97,7 +98,7 @@ void contact_handler::on_request(request const& req) {
 			callback_.emit<events::on_request>(req);
 		}
 	} catch(std::exception const& ex) {
-		LOG_WARN("exception while handling contact request [ex=%]", ex.what());
+		LOG_WARN("exception while handling contact request [ex={}]", ex.what());
 	}
 }
 

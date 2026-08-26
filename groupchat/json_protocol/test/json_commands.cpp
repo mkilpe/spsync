@@ -1,4 +1,5 @@
 #include "json_commands.hpp"
+#include <spsync/util/print.hpp>
 
 #include <securepath/util/print_util.hpp>
 

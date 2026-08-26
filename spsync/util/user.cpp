@@ -3,6 +3,7 @@
 #include <securepath/serialisation/enum.hpp>
 
 #include <cmath>
+#include <format>
 #include <ostream>
 
 namespace securepath::sync::util {
@@ -55,7 +56,7 @@ host_port user::key_server() const {
 }
 
 std::ostream& operator<<(std::ostream& out, user const& u) {
-	return out << "user={" << u.id() << ", " << u.key_server() << "}";
+	return out << "user={" << u.id() << ", " << std::format("{}", u.key_server()) << "}";
 }
 
 serialisation::serialiser& serialise(serialisation::serialiser& s, access_type const& v) {

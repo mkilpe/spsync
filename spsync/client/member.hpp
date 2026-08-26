@@ -1,6 +1,7 @@
 #pragma once
 
 #include <spsync/core/users.hpp>
+#include <spsync/util/format.hpp>
 
 #include <securepath/common/key_value_cache.hpp>
 
@@ -35,3 +36,5 @@ private:
 std::ostream& operator<<(std::ostream&, member_status);
 
 }
+
+SPSYNC_FORMAT_VIA_OSTREAM(securepath::sync::member_status)

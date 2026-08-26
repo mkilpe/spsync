@@ -38,6 +38,7 @@ public:
 
 private:
 	int notice_channel(chat_id const&) const;
+	std::string time_to_string(time_point) const;
 
 private:
 	cli_window& win_;

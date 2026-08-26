@@ -105,9 +105,13 @@ void cli_window::update_status_bar() {
 	}
 	status_area_->set_text(
 		to_wstring("(" + std::to_string(current_channel_) + ") " +
-		status_text + " [" + status +  "]"));
+		status_text_ + " [" + status +  "]"));
 
 	context_.redraw();
+}
+
+int cli_window::current_channel() const {
+	return current_channel_;
 }
 
 }

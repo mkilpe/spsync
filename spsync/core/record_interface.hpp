@@ -2,6 +2,7 @@
 #define SPSYNC_CORE_RECORD_INTERFACE_HEADER
 
 #include "chain_block_id.hpp"
+#include <spsync/util/format.hpp>
 #include "record_data.hpp"
 #include "types.hpp"
 #include <spsync/core/records/chain_block.hpp>
@@ -84,5 +85,8 @@ public:
 using record_handle = std::shared_ptr<record_interface>;
 
 }
+
+
+SPSYNC_FORMAT_VIA_OSTREAM(securepath::sync::record_state)
 
 #endif

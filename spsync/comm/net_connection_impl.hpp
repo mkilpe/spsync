@@ -43,7 +43,7 @@ struct network_connection_impl : network::encrypted_connection {
 	}
 
 	void on_disconnected(securepath::error const& error) override {
-		LOG_INFO("storage network connection disconnected: %", error);
+		LOG_INFO("storage network connection disconnected: {}", error);
 		handler.emit<events::on_disconnect>(error);
 		for(auto&& v : attached_comms) {
 			v.second->on_disconnected(error);
@@ -63,7 +63,7 @@ struct network_connection_impl : network::encrypted_connection {
 
 	void handle(protocol::server_hello const& p) {
 		if(p.error) {
-			LOG_WARN("server responded with error: %", p.error);
+			LOG_WARN("server responded with error: {}", p.error);
 			close(protocol::to_error(p.error));
 		} else {
 			hello_done = true;
@@ -78,7 +78,7 @@ struct network_connection_impl : network::encrypted_connection {
 	void handle(protocol::create_storage_reply const& p) {
 		error err;
 		if(p.error) {
-			LOG_INFO("failed to create storage (%) on server: %", to_hex(p.sid), p.error);
+			LOG_INFO("failed to create storage ({}) on server: {}", to_hex(p.sid), p.error);
 			err = protocol::to_error(p.error);
 		}
 		handler.emit<events::on_create_storage>(p.sid, err);

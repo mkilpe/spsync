@@ -1,4 +1,7 @@
 #include "record_util.hpp"
+#include <securepath/crypto/public_key_access.hpp>
+#include <securepath/crypto/error.hpp>
+#include <spsync/util/format.hpp>
 
 #include <spsync/engine/record_verifier.hpp>
 #include <securepath/util/print_util.hpp>
@@ -36,10 +39,10 @@ plain_user_change_data encrypt_last_key_for_users(users const& us, crypto_contex
 	for(auto v : us) {
 		auto key = cc.public_keys().find(v.user.public_key_id());
 		if(!key) {
-			LOG_WARN("could not make user change record because missing a public key for one of the users (kid=%)", v.user);
-			throw make_error(crypto::errc::no_such_key, print("missing key for user '%'", v.user));
+			LOG_WARN("could not make user change record because missing a public key for one of the users (kid={})", v.user);
+			throw make_error(crypto::errc::no_such_key, std::format("missing key for user '{}'", v.user));
 		}
-		LOG_TRACE("enveloping current key for user %", v.user);
+		LOG_TRACE("enveloping current key for user {}", v.user);
 		e.add(*key);
 	}
 	ret.set_enveloped_content(e.result());
@@ -70,7 +73,7 @@ error extract_single_data_changes(encryption_key_storage const& keys, record_han
 			err = make_error(errc::not_authentic);
 		}
 	} else {
-		LOG_WARN("could not find key to decrypt message (seq=%)", obj_rec.encryption_key());
+		LOG_WARN("could not find key to decrypt message (seq={})", obj_rec.encryption_key());
 		err = make_error(errc::no_encryption_key_found);
 	}
 
@@ -139,7 +142,7 @@ single_data_change search_data_records::decrypt_data_record(record_handle rec) c
 			LOG_WARN("message not authentic");
 		}
 	} else {
-		LOG_WARN("could not find key to decrypt message (seq=%)", obj_rec.encryption_key());
+		LOG_WARN("could not find key to decrypt message (seq={})", obj_rec.encryption_key());
 	}
 
 	//t: better error handling

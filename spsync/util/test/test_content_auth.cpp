@@ -2,7 +2,7 @@
 #include <securepath/test_frame/test_serialisation.hpp>
 
 #include <securepath/crypto/public_key_cache.hpp>
-#include <securepath/crypto/rsa.hpp>
+#include <securepath/crypto/key_generation.hpp>
 #include <securepath/util/octet_vector.hpp>
 
 #include <spsync/util/content_auth.hpp>
@@ -21,7 +21,7 @@ TEST_CASE("content_auth", "[unit]") {
 
 	CHECK(auth.verify(keys).code() == make_error_code(errc::invalid_state));
 
-	auto key = crypto::generate_rsa_private_key(1024);
+	auto key = crypto::generate_private_key();
 	auth.sign(key);
 
 	CHECK(auth.has_signature());

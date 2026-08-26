@@ -12,7 +12,7 @@ json::object error_to_object(securepath::error const& err) {
 
 std::string error_to_json(securepath::error const& err) {
 	json::object ret{{"error", error_to_object(err)}};
-	LOG_TRACE("error = %", ret);
+	LOG_TRACE("error = {}", json::serialize(ret));
 	return json::serialize(ret);
 }
 

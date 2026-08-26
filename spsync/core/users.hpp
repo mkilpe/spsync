@@ -2,6 +2,7 @@
 #define SPSYNC_CORE_USERS_HEADER
 
 #include <spsync/core/types.hpp>
+#include <spsync/util/format.hpp>
 #include <spsync/util/user.hpp>
 
 #include <securepath/serialisation/deque.hpp>
@@ -64,5 +65,9 @@ private:
 std::ostream& operator<<(std::ostream&, users const&);
 
 }
+
+
+SPSYNC_FORMAT_VIA_OSTREAM(securepath::sync::users)
+SPSYNC_FORMAT_VIA_OSTREAM(securepath::sync::users_change_mode)
 
 #endif

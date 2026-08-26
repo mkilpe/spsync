@@ -38,7 +38,7 @@ encryption_key encryption_key_storage::current_key() const {
 }
 
 std::optional<encryption_key> encryption_key_storage::find(util::sequence_number const& seq) const {
-	//LOG_TRACE("encryption_key_storage::find (seq=%) %", seq, this);
+	//LOG_TRACE("encryption_key_storage::find (seq={}) {}", seq, static_cast<void const*>(this));
 
 	auto q = db_->prepare("SELECT * FROM encryption_key_storage WHERE seq = :i LIMIT 1;");
 	q.bind(":i", seq.value);
@@ -56,7 +56,7 @@ std::optional<encryption_key> encryption_key_storage::find(util::sequence_number
 }
 
 void encryption_key_storage::insert(encryption_key const& key) {
-	LOG_TRACE("encryption_key_storage::insert (seq=%) %", key.key_seq, this);
+	LOG_TRACE("encryption_key_storage::insert (seq={}) {}", key.key_seq, static_cast<void const*>(this));
 
 	octet_vector data = serialisation::asn_der_serialise(key);
 	auto q = db_->prepare("INSERT OR REPLACE INTO encryption_key_storage VALUES(:a,:b);");

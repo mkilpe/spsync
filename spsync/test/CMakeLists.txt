@@ -2,4 +2,4 @@ file(GLOB SRC *.cpp *.hpp)
 add_library(spsync_test STATIC ${SRC})
 
 set_target_properties(spsync_test PROPERTIES LINKER_LANGUAGE CXX)
-target_link_libraries(spsync_test spsync_client spsync_engine spsync_server_lib packet_server_lib network_test_support crypto_test_support)
+target_link_libraries(spsync_test spsync_client spsync_engine spsync_server_lib packet_server_lib crypto_test_support)

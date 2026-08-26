@@ -36,3 +36,8 @@ Doxyfile.Doxygen
 
 .asciidoctor
 
+
+build*/
+compile_commands.json
+.cache/
+debug.log

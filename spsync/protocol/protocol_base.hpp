@@ -2,6 +2,8 @@
 #define SPSYNC_PROTOCOL_PROTOCOL_BASE_HEADER
 
 #include "types.hpp"
+#include <spsync/util/format.hpp>
+#include <securepath/network/net_error.hpp>
 
 #include <securepath/network/net_error.hpp>
 #include <securepath/util/typelist.hpp>
@@ -77,5 +79,8 @@ struct reply_base : protocol_base {
 
 }
 }
+
+
+SPSYNC_FORMAT_VIA_OSTREAM(securepath::network::net_error)
 
 #endif

@@ -8,6 +8,7 @@
 #include "server_lib/spsync_server.hpp"
 
 #include <filesystem>
+#include <format>
 #include <iostream>
 
 namespace securepath {
@@ -55,8 +56,8 @@ int main(int argc, char* args[]) {
 			ret = sync::spsync_server(p).run_and_wait();
 		}
 	} catch(securepath::error const& err) {
-		LOG_WARN("Error=%", err);
-		std::cerr << "Error=" << err << std::endl;
+		LOG_WARN("Error={}", err);
+		std::cerr << std::format("Error={}", err) << std::endl;
 	} catch(std::exception const& ex) {
 		LOG_WARN("Error=", ex.what());
 		std::cerr << "Error=" << ex.what() << std::endl;

@@ -73,7 +73,7 @@ storage_connection network_connection::create_storage_connection(storage_id id, 
 	std::unique_lock lock{impl_->mutex};
 	auto ret = impl_->comms.insert(std::make_pair(id, std::move(p)));
 	if(!ret.second || impl_->attached_comms.count(id)) {
-		LOG_WARN("already connection to storage (%)", to_hex(id));
+		LOG_WARN("already connection to storage ({})", to_hex(id));
 		throw make_error(securepath::errc::invalid_state, "already connection to given storage");
 	}
 	return storage_connection(std::move(id), *impl_, *ret.first->second);

@@ -69,7 +69,7 @@ void channel::set_join_data(sync::client::storage_info const& sinfo, std::string
 }
 
 void channel::on_data_change(sync::record_handle rec, std::deque<sync::single_data_change> changes) {
-	LOG_TRACE("on_object_data_changed [count=%]", changes.size());
+	LOG_TRACE("on_object_data_changed [count={}]", changes.size());
 
 	std::unique_lock l{mutex_};
 	database::transaction t{*db_};
@@ -155,7 +155,7 @@ chat_id channel::id() const {
 sync::client::storage_info channel::storage_info() const {
 	auto root = crypto_context().records().find_root();
 	if(!root) {
-		LOG_WARN("no root for storage?! [sid=%]", to_hex(chat_id_));
+		LOG_WARN("no root for storage?! [sid={}]", to_hex(chat_id_));
 		throw make_error(errc::invalid_state, "could not find root record for storage");
 	}
 

@@ -180,13 +180,13 @@ bool test_sync_context::compare_record_storages(sequence_number required_seq) co
 	sequence_number last_seq = server_records.last_block().sequence;
 	bool ret = !required_seq.is_valid() || required_seq == last_seq;
 	if(!ret) {
-		LOG_WARN("Server doesn't have required sequence as last one: server(%) != %", last_seq, required_seq);
+		LOG_WARN("Server doesn't have required sequence as last one: server({}) != {}", last_seq, required_seq);
 	}
 	for(int i = 0; ret && i != clients.size(); ++i) {
 		record_storage const& client_records = clients[i]->io.records();
 		if(last_seq != client_records.last_block().sequence) {
 			ret = false;
-			LOG_WARN("last sequence number mismatch: server(%) - client %(%)", last_seq, i, client_records.last_block().sequence);
+			LOG_WARN("last sequence number mismatch: server({}) - client {}({})", last_seq, i, client_records.last_block().sequence);
 		} else {
 			for(sequence_number seq{1}; ret && seq != last_seq+1; ++seq) {
 				ret = check_record_matches(seq, i, server_records.find(seq), client_records.find(seq));

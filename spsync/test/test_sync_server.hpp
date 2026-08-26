@@ -12,7 +12,7 @@
 #include <securepath/crypto/public_key_cache.hpp>
 #include <securepath/crypto/private_data_cache.hpp>
 #include <securepath/crypto/private_key.hpp>
-#include <securepath/crypto/rsa.hpp>
+#include <securepath/crypto/key_generation.hpp>
 #include <securepath/database/sqlite/connection.hpp>
 
 #include <deque>
@@ -69,7 +69,7 @@ class test_sync_server_client_context {
 public:
 	test_sync_server_client_context(int n, sync_mode mode, auth_mode = auth_mode::only_tag);
 
-	crypto::private_key user_key{crypto::generate_rsa_private_key(1024)};
+	crypto::private_key user_key{crypto::generate_private_key()};
 	util::user_id user{user_key.id()};
 
 	event_system::single_thread_event_loop single_thread_event_loop;

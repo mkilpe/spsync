@@ -13,7 +13,7 @@
 #include <spsync/util/object_id.hpp>
 #include <spsync/protocol/ports.hpp>
 
-#include <infrastructure/key_client_lib/unknown_user_key_client.hpp>
+#include <infrastructure/key_client/key_client.hpp>
 #include <infrastructure/key_server/server_lib/defaults.hpp>
 #include <infrastructure/packet_transport/protocol/ports.hpp>
 
@@ -108,7 +108,7 @@ public:
 	}
 
 	void on_message(server_chat_id id, msg_data md, msg_change change) {
-		LOG_TRACE("json_manager::on_message [sid=%, cid=%]", id.sid, to_hex(id.cid));
+		LOG_TRACE("json_manager::on_message [sid={}, cid={}]", id.sid, to_hex(id.cid));
 		json::object message{
 			{"message", md.message},
 			{"date", time_to_string(md.sender_time)},
@@ -145,7 +145,7 @@ public:
 		, std::string const& name
 		, std::string const& message)
 	{
-		LOG_TRACE("json_manager::on_contacting [kid=%, name=%, msg=%]", req.sender, name, message);
+		LOG_TRACE("json_manager::on_contacting [kid={}, name={}, msg={}]", req.sender, name, message);
 		notify(event_type::request, json::serialize(json::object{{"type", "contact"}
 			, {"data", contacting_to_object(req, name, message)}}));
 	}
@@ -154,7 +154,7 @@ public:
 		, std::string name
 		, std::string message)
 	{
-		LOG_TRACE("json_manager::on_invitation [kid=%, name=%, msg=%]", req.sender, name, message);
+		LOG_TRACE("json_manager::on_invitation [kid={}, name={}, msg={}]", req.sender, name, message);
 		notify(event_type::request, json::serialize(json::object{{"type", "invite"}
 			, {"data", invitation_to_object(req, info, sender_to_object(req.sender.id()), name, message)}}));
 	}
@@ -260,19 +260,19 @@ json_manager::json_manager(event_callback func)
 : loop_(std::make_unique<event_system::single_thread_event_loop>())
 , impl_(std::make_unique<impl>(*loop_, std::move(func)))
 {
-	LOG_TRACE("json_manager ctor %", this);
+	LOG_TRACE("json_manager ctor {}", static_cast<void const*>(this));
 }
 
 json_manager::json_manager(network::context& context, event_callback func, std::string path)
 : loop_(std::make_unique<event_system::single_thread_event_loop>())
 , impl_(std::make_unique<impl>(*loop_, context, std::move(func), std::move(path)))
 {
-	LOG_TRACE("json_manager ctor %", this);
+	LOG_TRACE("json_manager ctor {}", static_cast<void const*>(this));
 }
 
 json_manager::~json_manager()
 {
-	LOG_TRACE("json_manager dtor %", this);
+	LOG_TRACE("json_manager dtor {}", static_cast<void const*>(this));
 }
 
 std::string json_manager::get_account() const {
@@ -475,7 +475,7 @@ std::string json_manager::get_chat_members(std::string_view const& arg) const {
 
 		auto hp = impl_->channel_ids().find_server(cid);
 		if(!hp) {
-			LOG_TRACE("no chat with id %", to_hex(cid));
+			LOG_TRACE("no chat with id {}", to_hex(cid));
 			return error_to_json(make_error(errc::no_such_data, "could not find chat"));
 		}
 
@@ -548,7 +548,7 @@ std::string json_manager::change_chat_member(std::string_view const& arg) {
 }
 
 std::string json_manager::get_messages(std::string_view const& arg) const {
-	LOG_TRACE("get_messages: %", arg);
+	LOG_TRACE("get_messages: {}", arg);
 	return call([&]{
 		json::object obj = json::parse(arg).as_object();
 		chat_id cid = from_hex(extract<std::string>(obj, "id"));
@@ -601,7 +601,7 @@ std::string json_manager::send_message(std::string_view const& arg) {
 std::string json_manager::handle_qr_code(std::string_view const& arg) {
 	return call([&]{
 		if(!arg.starts_with("sp-gc:")) {
-			LOG_WARN("qr code data does not start with 'sp-gc:' [data=%]", arg);
+			LOG_WARN("qr code data does not start with 'sp-gc:' [data={}]", arg);
 			return error_to_json(make_error(errc::invalid_data, "invalid qr code data"));
 		}
 		json::object obj = json::parse(arg.substr(6)).as_object();
@@ -615,7 +615,7 @@ std::string json_manager::handle_qr_code(std::string_view const& arg) {
 			auto s = json::serialize(extract<json::object>(obj, "data"));
 			type_res = json::parse(join_chat(s)).as_object();
 		} else {
-			LOG_WARN("qr code data has unknown type [data=%]", arg);
+			LOG_WARN("qr code data has unknown type [data={}]", arg);
 			return error_to_json(make_error(errc::invalid_data, "unknown type in qr code"));
 		}
 

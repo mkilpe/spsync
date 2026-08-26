@@ -1,4 +1,5 @@
 #include "gc_cli.hpp"
+#include <spsync/util/print.hpp>
 
 #include <spsync/client/protocol/contact.hpp>
 
@@ -212,46 +213,47 @@ void gc_cli::add_member(std::vector<std::wstring_view> const& args) {
 	}
 }
 
-void gc_cli::join(std::vector<std::wstring_view> const& args) {
-	auto rid = std::atoll(args[0]);
+void gc_cli::join_chat(std::vector<std::wstring_view> const& args) {
+	auto rid = std::stoll(to_string(args[0]));
 	auto info = gc_->join_chat(rid);
 	int ch = gc_->add_channel(info.cid);
 	win_->change_channel(info.name, ch);
 }
 
 void gc_cli::manage_chat(std::vector<std::wstring_view> const& args) {
-	if(args.front() == "open") {
+	if(args.front() == L"open") {
 		if(args.size() < 2) {
 			throw make_error(errc::invalid_argument, "missing argument for /chat open");
 		}
 		auto cid = from_hex(to_string(args[1]));
-		auto hp = gc_->channels().find_server(cid);
+		auto hp = gc_->channel_ids().find_server(cid);
 		if(!hp) {
-			LOG_TRACE("no chat with id %", to_hex(cid));
+			LOG_TRACE("no chat with id {}", to_hex(cid));
 			throw make_error(errc::no_such_data, "could not find chat");
 		}
 		auto conn = gc_->load(*hp);
-		auto channel = conn->get(cid);
+		auto& channel = conn->get(cid);
 		int ch = gc_->add_channel(cid);
-		win_->change_channel(channel->name(), ch);
+		win_->change_channel(channel.name(), ch);
 	}
 }
 
 void gc_cli::manage_window(std::vector<std::wstring_view> const& args) {
-	if(args.front() == "close") {
+	if(args.front() == L"close") {
 		int ch = win_->current_channel();
 		if(ch) {
-			gc_->remove_channel(ch)
+			gc_->remove_channel(ch);
 			win_->change_channel("", 0);
 		}
 	} else {
-		char* p_end;
-		auto ch = std::strtoll(args[0], &p_end, 10);
-		if(args[0] != p_end) {
-			win_->change_channel();
-		} else {
+		int ch = 0;
+		try {
+			ch = std::stoi(to_string(args[0]));
+		} catch(std::exception const&) {
 			throw make_error(errc::invalid_argument, "invalid /window command");
 		}
+		auto cid = gc_->map_to_cid(ch);
+		win_->change_channel(cid ? to_hex(*cid) : std::string{}, ch);
 	}
 }
 
@@ -260,14 +262,14 @@ void gc_cli::send_message(std::string const& message) {
 	if(ch) {
 		auto cid = gc_->map_to_cid(ch);
 		if(cid) {
-			auto hp = gc_->channels().find_server(cid);
+			auto hp = gc_->channel_ids().find_server(*cid);
 			if(!hp) {
-				LOG_TRACE("no chat with id %", to_hex(cid));
+				LOG_TRACE("no chat with id {}", to_hex(*cid));
 				throw make_error(errc::no_such_data, "could not find chat");
 			}
 			auto conn = gc_->load(*hp);
-			auto channel = conn->get(cid);
-			channel->send_message(message);
+			auto& channel = conn->get(*cid);
+			channel.send_message(message);
 			win_->add_message(ch, "--> " + message);
 		}
 	}

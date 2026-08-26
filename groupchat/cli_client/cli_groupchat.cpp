@@ -1,4 +1,5 @@
 #include "cli_groupchat.hpp"
+#include <spsync/util/print.hpp>
 
 #include <groupchat/core/events.hpp>
 #include <spsync/client/events.hpp>
@@ -36,7 +37,7 @@ int cli_groupchat::add_channel(chat_id const& cid) {
 	if(it != channel_map_.end()) {
 		i = it->second;
 	} else {
-		for(; channel_map_.count(i) != 0; ++i) {}
+		for(; cid_map_.count(i) != 0; ++i) {}
 		channel_map_[cid] = i;
 		cid_map_[i] = cid;
 	}
@@ -99,7 +100,7 @@ std::string cli_groupchat::time_to_string(time_point time) const {
 void cli_groupchat::on_message(server_chat_id id, msg_data md, msg_change) {
 	auto c_opt = map_to_channel(id.cid);
 	if(!c_opt) {
-		c_opt = add_channel_to_map(id.cid);
+		c_opt = add_channel(id.cid);
 	}
 	auto opt_contact = contacts().find(md.sender);
 	std::string name = opt_contact ? opt_contact->name() : md.sender.public_key_id().in_hex();

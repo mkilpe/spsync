@@ -29,11 +29,11 @@ public:
 	: connection(context)
 	, encrypted_connection(c, std::move(hdata), server)
 	{
-		LOG_TRACE("constructing storage_server_client %", this);
+		LOG_TRACE("constructing storage_server_client {}", static_cast<void const*>(this));
 	}
 
 	~storage_server_client() {
-		LOG_TRACE("destructing storage_server_client %", this);
+		LOG_TRACE("destructing storage_server_client {}", static_cast<void const*>(this));
 		encrypted_connection::close();
 	}
 
@@ -59,7 +59,7 @@ public:
 	}
 
 	virtual void on_disconnected(securepath::error const& error) override {
-		LOG_TRACE("client disconnected (%): %", remote_key_id().value_or(crypto::public_key_id{}), error);
+		LOG_TRACE("client disconnected ({}): {}", remote_key_id().value_or(crypto::public_key_id{}), error);
 	}
 
 	virtual void on_sent(std::size_t) override {
@@ -70,7 +70,7 @@ public:
 		try {
 			deser_.handle(s, std::ref(*this));
 		} catch(error const& err) {
-			LOG_WARN("error while handling packet [err=%]", err);
+			LOG_WARN("error while handling packet [err={}]", err);
 			terminate(err);
 		} catch(...) {
 			LOG_WARN("unknown exception while handling network packet");
@@ -79,7 +79,7 @@ public:
 	}
 
 	void operator()(protocol::client_hello const& p) {
-		LOG_INFO("client version: %", p.version);
+		LOG_INFO("client version: {}", p.version);
 		auto key_id = remote_key_id();
 		assert(key_id);
 		auto err = connection::on_connect(p, *key_id);
@@ -90,7 +90,7 @@ public:
 		} else {
 			//all good
 			connection_good_ = true;
-			LOG_TRACE("client connection successfully connected (%)", *key_id);
+			LOG_TRACE("client connection successfully connected ({})", *key_id);
 		}
 	}
 
@@ -120,11 +120,11 @@ public:
 	, context_(context)
 	, handshake_data_(network::handshake_tag::public_key)
 	{
-		LOG_TRACE("constructing storage_server::impl %", this);
+		LOG_TRACE("constructing storage_server::impl {}", static_cast<void const*>(this));
 	}
 
 	~impl() {
-		LOG_TRACE("destructing storage_server::impl %", this);
+		LOG_TRACE("destructing storage_server::impl {}", static_cast<void const*>(this));
 	}
 
 	virtual std::shared_ptr<network::encrypted_connection> create_connection() override {
@@ -139,7 +139,7 @@ public:
 		std::unique_lock lock{mutex_};
 		auto it = storages_.find(id);
 		if(it == storages_.end()) {
-			LOG_TRACE("creating storage object (id=%)", to_hex(id));
+			LOG_TRACE("creating storage object (id={})", to_hex(id));
 			std::shared_ptr<storage> p = std::make_shared<storage>(id, default_storage_config_);
 			it = storages_.emplace(id, std::move(p)).first;
 		}
@@ -149,7 +149,7 @@ public:
 	virtual void release_sync(std::shared_ptr<storage> storage) override {
 		std::unique_lock lock{mutex_};
 		if(storage.use_count() == 1) {
-			LOG_TRACE("destroying storage object (id=%)", to_hex(storage->id()));
+			LOG_TRACE("destroying storage object (id={})", to_hex(storage->id()));
 			storages_.erase(storage->id());
 			storage.reset();
 		}
@@ -172,7 +172,7 @@ storage_server::storage_server(network::context& context, storage_server_params 
 
 storage_server::~storage_server()
 {
-	LOG_TRACE("storage_server::~storage_server %", impl_.get());
+	LOG_TRACE("storage_server::~storage_server {}", static_cast<void const*>(impl_.get()));
 	close();
 }
 

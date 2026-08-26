@@ -2,6 +2,7 @@
 #define SPSYNC_UTIL_OBJECT_ID_HEADER
 
 #include <securepath/util/octet_vector.hpp>
+#include <spsync/util/format.hpp>
 #include <securepath/serialisation/sequence.hpp>
 
 #include <iosfwd>
@@ -48,5 +49,8 @@ bool operator<(object_id const& left, object_id const& right);
 std::ostream& operator<<(std::ostream&, object_id const&);
 
 }
+
+
+SPSYNC_FORMAT_VIA_OSTREAM(securepath::sync::util::object_id)
 
 #endif

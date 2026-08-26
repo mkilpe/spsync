@@ -15,7 +15,7 @@ storage::storage(protocol::storage_id id, storage_config config)
 {
 	std::string path = config_.storage_root_path() + "/" + to_hex(id_);
 	std::string db = path + "/storage.db";
-	LOG_INFO("Constructing storage using path: %", db);
+	LOG_INFO("Constructing storage using path: {}", db);
 
 	//make sure the path exists, this does nothing if it already does
 	std::filesystem::create_directories(path);
