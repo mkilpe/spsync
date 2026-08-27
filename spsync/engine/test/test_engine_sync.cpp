@@ -1,6 +1,7 @@
 #include <spsync/test/test_sync_server.hpp>
 
 #include <spsync/client/record_util.hpp>
+#include <spsync/engine/record_creator.hpp>
 
 #include <spsync/core/records/data_change_record.hpp>
 #include <spsync/core/records/user_change_record.hpp>
@@ -304,6 +305,74 @@ TEST_CASE("engine sync object conflict ask policy", "[unit]") {
 	CHECK(h->state() == record_state::invalid);
 	WAIT_CHECK(observer.conflicts == 1, 2s);
 	CHECK(observer.conflicts == 1);
+	context.client(1).engine.set_output(nullptr);
+}
+
+
+// (15) a pending record with several changes where only a subset conflicts: the rebuild
+// keeps the non-conflicting changes and one conflict event fires per conflicting object
+TEST_CASE("engine sync multi change record partial conflict", "[unit]") {
+	auto mode = GENERATE(sync_mode::allow_all, sync_mode::require_all_seen);
+
+	test::test_sync_context context(chain_sync_config{mode});
+	context.add_client(true, 2);
+	context.create_initial_record();
+	while(context.handle_events()) {}
+
+	auto oid_a = create_object_id();
+	auto oid_b = create_object_id();
+	auto oid_c = create_object_id();
+	context.client(0).engine.sync_object_change(oid_a, metadata{});
+	context.client(0).engine.sync_object_change(oid_b, metadata{});
+	context.client(0).engine.sync_object_change(oid_c, metadata{});
+	while(context.handle_events()) {}
+	CHECK(context.compare_record_storages(sequence_number{4}));
+
+	// client 1 goes off-line holding a pending multi change record over a, b and c
+	context.disconnect_client(1);
+	auto& storage1 = context.client(1).io.records();
+	auto tag_a = storage1.find_last(oid_a)->tag();
+	auto tag_b = storage1.find_last(oid_b)->tag();
+	auto tag_c = storage1.find_last(oid_c)->tag();
+	data_change_record_creator creator(context.client(1).enc_keys.current_key(), storage1.last_block());
+	creator.add_change(oid_a, tag_a, metadata{});
+	creator.add_change(oid_b, tag_b, metadata{});
+	creator.add_change(oid_c, tag_c, metadata{});
+	auto h = storage1.create(creator.result());
+	auto original_tag = h->tag();
+
+	// meanwhile b and c move underneath it
+	context.client(0).engine.sync_object_change(oid_b, metadata{});
+	context.client(0).engine.sync_object_change(oid_c, metadata{});
+	while(context.handle_events()) {}
+	auto new_tag_b = context.client(0).io.records().find_last(oid_b)->tag();
+	auto new_tag_c = context.client(0).io.records().find_last(oid_c)->tag();
+
+	conflict_observer observer{context.client(1).single_thread_event_loop};
+	context.client(1).engine.set_output(&observer);
+
+	context.connect_client(1);
+	while(context.handle_events()) {}
+
+	CHECK(context.compare_record_storages(sequence_number{7}));
+	CHECK(h->tag() != original_tag);
+	auto committed = context.server.sync.records().find_tag(h->tag());
+	REQUIRE(committed);
+
+	// the rebuilt record keeps the non-conflicting change and rebases the conflicting ones
+	auto rec = committed->record().deserialise_to<data_change_record>();
+	std::map<object_id, record_tag> previous;
+	for(auto const& c : rec) {
+		previous[c.data.id] = c.data.previous_oid_record_tag;
+	}
+	REQUIRE(previous.size() == 3);
+	CHECK(previous[oid_a] == tag_a);
+	CHECK(previous[oid_b] == new_tag_b);
+	CHECK(previous[oid_c] == new_tag_c);
+
+	// one conflict event per conflicting object
+	WAIT_CHECK(observer.conflicts == 2, 2s);
+	CHECK(observer.conflicts == 2);
 	context.client(1).engine.set_output(nullptr);
 }
 

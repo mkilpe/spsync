@@ -460,10 +460,17 @@ Everything here is client/engine work; the server already accepts weak-mode comm
       (cross-thread via WAIT_CHECK), ask-policy cancellation. Full rebuild + suite
       22/22 green. B4 is CLOSED.
 
-- 1.4 Multi-change records                                                        [1d]
++ 1.4 Multi-change records -- done 2026-08-27                                     [1d]
       data_change_record already holds a deque; rebase must handle a record where some
       changes conflict and some do not (rebuild keeps non-conflicting ones, conflict
       event per conflicting oid).
+      Verified (the mechanism landed with 1.3): off-line client holds a pending
+      3-change record (built at record_creator level - batching is not an engine
+      input until phase 3), two objects move underneath it; on reconnect the rebuild
+      keeps the clean change's previous tag, rebases the two moved ones exactly onto
+      the concurrent writer's newest records, and fires one conflict event per
+      conflicting oid. Runs under allow_all and require_all_seen. Engine suite
+      33 cases green (test-only step, no production change).
 
 - 1.5 record_state::acked  (D8, single-server trivial form)                       [1d]
       Add acked to the enum, DB and unique_seq_selector logic; on single server the
