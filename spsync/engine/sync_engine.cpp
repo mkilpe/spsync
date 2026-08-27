@@ -259,13 +259,18 @@ public:
 
 		data_change_record_creator creator(key, last_block, signer);
 		for(auto const& r : ver.headers()) {
-			//f: conflict handling
-			if(!r.data.previous_oid_record_tag.empty()) {
-				LWARN("oid for out of sync not implemented");
-				throw error(securepath::errc::not_implemented, "oid for out of sync not implemented");
+			auto data = r.data;
+			if(!data.previous_oid_record_tag.empty()) {
+				auto current = records.find_last(data.id);
+				if(current && current->tag() != data.previous_oid_record_tag) {
+					// the object changed underneath us: rebase this change on top of the
+					// newest record (last writer wins)
+					LINFO("rebasing conflicting object change [oid={}, previous={}, current={}]"
+						, data.id, to_hex(data.previous_oid_record_tag), to_hex(current->tag()));
+					data.previous_oid_record_tag = current->tag();
+				}
 			}
-
-			creator.add_change(r.header, r.data);
+			creator.add_change(r.header, data);
 		}
 		return creator.result();
 	}
@@ -353,21 +358,63 @@ public:
 			});
 	}
 
+	/// the newest records of objects that changed underneath the pending record
+	std::deque<record_handle> find_oid_conflicts(chain_block const& record) const {
+		std::deque<record_handle> conflicts;
+		record.deserialise_record([&](auto const& rec) {
+				if constexpr(std::is_same_v<std::decay_t<decltype(rec)>, data_change_record>) {
+					for(auto const& c : rec) {
+						if(!c.data.previous_oid_record_tag.empty()) {
+							auto current = records.find_last(c.data.id);
+							if(current && current->tag() != c.data.previous_oid_record_tag) {
+								conflicts.push_back(current);
+							}
+						}
+					}
+				}
+			});
+		return conflicts;
+	}
+
+	void notify_conflicts(record_handle local, std::deque<record_handle> const& conflicts) {
+		if(output) {
+			for(auto&& remote : conflicts) {
+				output->emit<engine_events::on_object_conflict>(local, remote);
+			}
+		}
+	}
+
+	/// cancel the pending record because of the ask policy; the higher layer decides
+	void cancel_conflicting(record_handle handle, std::deque<record_handle> const& conflicts) {
+		LINFO("cancelling conflicting pending record [tag={}]", to_hex(handle->tag()));
+		handle->set_state(record_state::invalid);
+		notify_conflicts(handle, conflicts);
+	}
+
 	void try_commit_pending() {
 		if(!pushing_pending_commit) {
 			//t: can we optimise when we are trying to push commits again
 			// ie. pushing currently even if we just did and something came in meanwhile
 			LTRACE("trying to commit pending records");
 			auto handle = records.find_first_pending_commit();
-			if(handle) {
-				if(pending_needs_rebase(handle->record())) {
-					auto record = update_pending_commit(handle->record());
-					if(record.is_valid()) {
-						handle->set_record(record);
+			for(; handle;) {
+				auto conflicts = find_oid_conflicts(handle->record());
+				if(!conflicts.empty() && config.conflicts == conflict_policy::ask) {
+					cancel_conflicting(handle, conflicts);
+					// the cancelled record is invalid now, move on to the next pending one
+					handle = records.find_first_pending_commit();
+				} else {
+					if(!conflicts.empty() || pending_needs_rebase(handle->record())) {
+						auto record = update_pending_commit(handle->record());
+						if(record.is_valid()) {
+							handle->set_record(record);
+						}
+						notify_conflicts(handle, conflicts);
 					}
+					//t: avoid recommitting unchanged records the server has already rejected
+					commit_record(handle);
+					handle = nullptr;
 				}
-				//t: avoid recommitting unchanged records the server has already rejected
-				commit_record(handle);
 			}
 		}
 	}

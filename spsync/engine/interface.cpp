@@ -11,6 +11,7 @@ void engine_output::handle_event(std::unique_ptr<event_system::event_base> ev) {
 	dispatch(*ev
 			, event_dest<engine_events::on_object_data_changed>(&engine_output::on_object_data_changed)
 			, event_dest<engine_events::on_user_changed>(&engine_output::on_user_changed)
+			, event_dest<engine_events::on_object_conflict>(&engine_output::on_object_conflict)
 			);
 }
 

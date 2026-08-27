@@ -56,6 +56,14 @@ struct engine_output : event_system::event_handler {
 	/// Called when user change happened
 	virtual void on_user_changed(record_handle) {}
 
+	/**
+	 * Called when an object changed underneath a pending record (per conflicting object).
+	 * local is the own pending record, remote the newest record for the object. With
+	 * conflict_policy::rebase_on_top the local record has been rebuilt on top of remote;
+	 * with conflict_policy::ask it has been cancelled (state invalid).
+	 */
+	virtual void on_object_conflict(record_handle local, record_handle remote) {}
+
 	//users changed
 	//conflicting user change ??
 
@@ -70,6 +78,9 @@ struct on_object_data_changed {
 };
 struct on_user_changed {
 	typedef void type(record_handle);
+};
+struct on_object_conflict {
+	typedef void type(record_handle, record_handle);
 };
 }
 

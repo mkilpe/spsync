@@ -13,6 +13,26 @@
 namespace securepath::sync {
 using namespace securepath::sync::util;
 
+namespace {
+
+/// engine output observer counting object conflicts (events arrive on the loop thread)
+struct conflict_observer : engine_output {
+	using engine_output::engine_output;
+	~conflict_observer() { stop_handler(); }
+
+	void on_object_conflict(record_handle local, record_handle remote) override {
+		last_local = local;
+		last_remote = remote;
+		++conflicts;
+	}
+
+	std::atomic<int> conflicts{0};
+	record_handle last_local;
+	record_handle last_remote;
+};
+
+}
+
 // + (1) single client sync records (allow all mode)
 // + (2) two clients, one commits records (allow all mode)
 // + (3) multi client set-up where all commits (allow all mode)
@@ -223,6 +243,68 @@ TEST_CASE("engine sync allow_all does not rebuild", "[unit]") {
 	CHECK(h1->tag() == tag1);
 	CHECK(context.server.sync.records().find_tag(tag0));
 	CHECK(context.server.sync.records().find_tag(tag1));
+}
+
+
+// (13) two clients change the same object concurrently; the later one is rebased on top
+// and the conflict is reported, in every mode
+TEST_CASE("engine sync object conflict rebase", "[unit]") {
+	auto mode = GENERATE(sync_mode::allow_all, sync_mode::require_special_seen,
+		sync_mode::require_data_add_remove_seen, sync_mode::require_all_seen);
+
+	test::test_sync_context context(chain_sync_config{mode});
+	context.add_client(true, 2);
+	context.create_initial_record();
+	while(context.handle_events()) {}
+
+	auto oid = create_object_id();
+	context.client(0).engine.sync_object_change(oid, metadata{});
+	while(context.handle_events()) {}
+
+	conflict_observer observer{context.client(1).single_thread_event_loop};
+	context.client(1).engine.set_output(&observer);
+
+	// both change the same object; client 0 wins the race and client 1 is rebased
+	context.client(0).engine.sync_object_change(oid, metadata{});
+	auto h = context.client(1).engine.sync_object_change(oid, metadata{});
+	auto original_tag = h->tag();
+	while(context.handle_events()) {}
+
+	CHECK(context.compare_record_storages(sequence_number{4}));
+	CHECK(h->tag() != original_tag);
+	CHECK(context.server.sync.records().find_tag(h->tag()));
+	WAIT_CHECK(observer.conflicts == 1, 2s);
+	context.client(1).engine.set_output(nullptr);
+}
+
+// (14) with the ask policy the conflicting record is cancelled and reported once
+TEST_CASE("engine sync object conflict ask policy", "[unit]") {
+	test::test_sync_context context(chain_sync_config{sync_mode::allow_all});
+	context.add_client(true, 2);
+	context.create_initial_record();
+	while(context.handle_events()) {}
+
+	auto oid = create_object_id();
+	context.client(0).engine.sync_object_change(oid, metadata{});
+	while(context.handle_events()) {}
+
+	auto config = context.client(1).engine_config;
+	config.conflicts = conflict_policy::ask;
+	context.client(1).engine.set_config(config);
+
+	conflict_observer observer{context.client(1).single_thread_event_loop};
+	context.client(1).engine.set_output(&observer);
+
+	context.client(0).engine.sync_object_change(oid, metadata{});
+	auto h = context.client(1).engine.sync_object_change(oid, metadata{});
+	while(context.handle_events()) {}
+
+	// the conflicting record was cancelled: the server only has client 0's change
+	CHECK(context.compare_record_storages(sequence_number{3}));
+	CHECK(h->state() == record_state::invalid);
+	WAIT_CHECK(observer.conflicts == 1, 2s);
+	CHECK(observer.conflicts == 1);
+	context.client(1).engine.set_output(nullptr);
 }
 
 }

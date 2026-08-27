@@ -437,7 +437,7 @@ Everything here is client/engine work; the server already accepts weak-mode comm
       weak rejects a conflicting same-sequence block as invalid. Found defect B8
       (stale client record blobs) along the way. Full suite 22/22 green.
 
-- 1.3 Rebase of existing objects  (B4)                                            [3d]
++ 1.3 Rebase of existing objects  (B4) -- done 2026-08-27                         [3d]
       update_record for data_change: when previous_oid_record_tag is non-empty, look up
       records.find_last(oid) in in_sync; if its tag differs from the record's
       previous_oid_record_tag the object moved underneath us:
@@ -450,6 +450,15 @@ Everything here is client/engine work; the server already accepts weak-mode comm
       to sync_engine_config (enum: rebase_on_top | ask).
       Test: two clients change the same oid concurrently, in each mode; with 'ask'
       policy the event fires exactly once per conflict; with rebase both end in sync.
+      Implemented: conflict_policy{rebase_on_top, ask} in sync_engine_config;
+      engine_output::on_object_conflict(local, remote) + event; update_record rewrites
+      each conflicting change's previous tag to the object's newest record (per change,
+      so partial conflicts already rebuild correctly - 1.4 adds the dedicated test);
+      find_oid_conflicts feeds the rebase decision directly, closing the allow_all
+      recommit loop; ask cancels the record (invalid) and moves to the next pending.
+      Tests: rebase across all four modes with exactly-once conflict event
+      (cross-thread via WAIT_CHECK), ask-policy cancellation. Full rebuild + suite
+      22/22 green. B4 is CLOSED.
 
 - 1.4 Multi-change records                                                        [1d]
       data_change_record already holds a deque; rebase must handle a record where some
