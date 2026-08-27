@@ -1,5 +1,7 @@
 #include <spsync/test/test_sync_server.hpp>
 
+#include <spsync/client/record_util.hpp>
+
 #include <spsync/core/records/data_change_record.hpp>
 #include <spsync/core/records/user_change_record.hpp>
 #include <spsync/core/records/segment_record.hpp>
@@ -156,6 +158,71 @@ TEST_CASE("sync new records after disconnect/connect", "[unit]") {
 	context.connect_client(0);
 	while(context.handle_events()) {}
 	CHECK(context.compare_record_storages(sequence_number{2}));
+}
+
+
+// (10) two clients in require_special_seen mode; a data change that has not seen the newest
+// special record is rejected by the server and rebased by the engine
+TEST_CASE("engine sync special seen mode rebase", "[unit]") {
+	test::test_sync_context context(chain_sync_config{sync_mode::require_special_seen});
+	context.add_client(true, 2);
+	context.create_initial_record();
+	while(context.handle_events()) {}
+
+	// client 0 commits a new special record; client 1 commits a data change that is
+	// based on the old head and so has not seen it
+	users delta{users_change_mode::delta};
+	delta.add(util::user_access{context.client(1).user, util::access_type::data_write_access});
+	context.client(0).engine.sync_user_change(encrypt_last_key_for_users(delta, context.client(0).cc));
+	auto h = context.client(1).engine.sync_object_change(util::create_object_id(), metadata{});
+	auto original_tag = h->tag();
+
+	while(context.handle_events()) {}
+	CHECK(context.compare_record_storages(sequence_number{3}));
+	// the data change was rebuilt on top of the special record
+	CHECK(h->tag() != original_tag);
+	CHECK(!context.server.sync.records().find_tag(original_tag));
+	CHECK(context.server.sync.records().find_tag(h->tag()));
+}
+
+// (11) two clients in require_data_add_remove_seen mode; an add that has not seen the newest
+// add is rejected and rebased
+TEST_CASE("engine sync data add seen mode rebase", "[unit]") {
+	test::test_sync_context context(chain_sync_config{sync_mode::require_data_add_remove_seen});
+	context.add_client(true, 2);
+	context.create_initial_record();
+	while(context.handle_events()) {}
+
+	context.client(0).engine.sync_object_change(util::create_object_id(), metadata{});
+	auto h = context.client(1).engine.sync_object_change(util::create_object_id(), metadata{});
+	auto original_tag = h->tag();
+
+	while(context.handle_events()) {}
+	CHECK(context.compare_record_storages(sequence_number{3}));
+	CHECK(h->tag() != original_tag);
+	CHECK(context.server.sync.records().find_tag(h->tag()));
+}
+
+// (12) allow_all never rebuilds a record just because the head moved
+TEST_CASE("engine sync allow_all does not rebuild", "[unit]") {
+	test::test_sync_context context(chain_sync_config{sync_mode::allow_all});
+	context.add_client(true, 2);
+	context.create_initial_record();
+	while(context.handle_events()) {}
+
+	// both clients commit concurrently; neither has seen the other's record
+	auto h0 = context.client(0).engine.sync_object_change(util::create_object_id(), metadata{});
+	auto h1 = context.client(1).engine.sync_object_change(util::create_object_id(), metadata{});
+	auto tag0 = h0->tag();
+	auto tag1 = h1->tag();
+
+	while(context.handle_events()) {}
+	CHECK(context.compare_record_storages(sequence_number{3}));
+	// the records were committed exactly as created
+	CHECK(h0->tag() == tag0);
+	CHECK(h1->tag() == tag1);
+	CHECK(context.server.sync.records().find_tag(tag0));
+	CHECK(context.server.sync.records().find_tag(tag1));
 }
 
 }

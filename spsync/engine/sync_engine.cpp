@@ -1,6 +1,7 @@
 #include "sync_engine.hpp"
 #include "record_creator.hpp"
 #include "record_verifier.hpp"
+#include "rebase_policy.hpp"
 #include "types.hpp"
 
 #include <spsync/core/encryption_key_storage.hpp>
@@ -10,6 +11,7 @@
 #include <securepath/log/log.hpp>
 #include <securepath/util/conversions.hpp>
 
+#include <algorithm>
 #include <map>
 #include <mutex>
 
@@ -295,6 +297,38 @@ public:
 			});
 	}
 
+	/**
+	 * The block new records are based on: strict mode stacks pending commits (they are
+	 * rebased as needed), weak modes base records on the confirmed head. Falls back to
+	 * pending commits only when there is no confirmed block yet (bootstrap).
+	 */
+	chain_block_id base_block() const {
+		auto b = records.last_block(config.mode == sync_mode::require_all_seen);
+		if(!b.is_valid()) {
+			b = records.last_block(true);
+		}
+		return b;
+	}
+
+	/// mode-aware check whether the pending record has to be rebuilt before committing
+	bool pending_needs_rebase(chain_block const& record) const {
+		return record.deserialise_record<bool>([&](auto const& rec) {
+				rebase_state state;
+				state.mode = config.mode;
+				state.type = std::decay_t<decltype(rec)>::tag;
+				if constexpr(std::is_same_v<std::decay_t<decltype(rec)>, data_change_record>) {
+					state.has_adds = std::ranges::any_of(rec, [](auto const& c) {
+							return c.data.previous_oid_record_tag.empty();
+						});
+				}
+				state.last_seen = rec.last_seen_block();
+				state.head = records.last_block();
+				state.last_special = records.last_special_sequence();
+				state.last_data_add = records.last_data_add_sequence();
+				return needs_rebase(state);
+			});
+	}
+
 	void try_commit_pending() {
 		if(!pushing_pending_commit) {
 			//t: can we optimise when we are trying to push commits again
@@ -302,15 +336,13 @@ public:
 			LTRACE("trying to commit pending records");
 			auto handle = records.find_first_pending_commit();
 			if(handle) {
-				// we only want to rewrite/update the records in case of require all mode
-				//f: handle require_special_seen and require_data_add_remove_seen modes
-				if(config.mode == sync_mode::require_all_seen) {
+				if(pending_needs_rebase(handle->record())) {
 					auto record = update_pending_commit(handle->record());
 					if(record.is_valid()) {
 						handle->set_record(record);
 					}
 				}
-				//t: handle allow_all correctly, not trying to recommit always
+				//t: avoid recommitting unchanged records the server has already rejected
 				commit_record(handle);
 			}
 		}
@@ -494,7 +526,7 @@ record_handle sync_engine::sync_object_change(object_id oid, metadata mdata, rec
 	LTRACE("sync object change: oid={}", oid.to_hex());
 
 	auto last_oid_record = impl_->records.find_last(oid);
-	auto last_block = impl_->records.last_block(true); //q: no 'true' for non-require all modes?
+	auto last_block = impl_->base_block();
 
 	if(!last_block.is_valid()) {
 		throw error(errc::invalid_record_chain_state, "Can't find last record, data change cannot be first record");
@@ -521,7 +553,7 @@ record_handle sync_engine::sync_user_change(plain_user_change_data change_data, 
 	std::unique_lock lock{impl_->mutex};
 	LTRACE("sync user change: users={}", change_data.access());
 
-	auto last_block = impl_->records.last_block(true); //q: no 'true' for non-require all modes?
+	auto last_block = impl_->base_block();
 
 	std::optional<crypto::private_key> signer;
 	if(impl_->config.auth_mode == auth_mode::sign_records) {
@@ -540,7 +572,7 @@ record_handle sync_engine::sync_segment_end(metadata mdata) {
 	std::unique_lock lock{impl_->mutex};
 	LTRACE("sync segment end");
 
-	auto last_block = impl_->records.last_block(true); //q: no 'true' for non-require all modes?
+	auto last_block = impl_->base_block();
 
 	if(!last_block.is_valid()) {
 		throw error(errc::invalid_record_chain_state, "Can't find last record, segment cannot be first record");

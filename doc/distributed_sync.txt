@@ -392,7 +392,7 @@ Phase 1  Weak mode, single server  (M1)
 Everything here is client/engine work; the server already accepts weak-mode commits
 (check_rules_special_seen, check_rules_add) - it is the engine that cannot cope yet.
 
-- 1.1 Mode-aware commit in sync_engine                                            [2d]
++ 1.1 Mode-aware commit in sync_engine -- done 2026-08-27                         [2d]
       try_commit_pending / update_pending_commit:
         require_all_seen            rebase on every head move (as today)
         require_special_seen        rebase only when a newer special record exists
@@ -406,6 +406,13 @@ Everything here is client/engine work; the server already accepts weak-mode comm
       in weak modes use last in_sync block.
       Test: test_engine_sync for each mode; property: no record is ever rebuilt
       unnecessarily in allow_all.
+      Implemented: needs_rebase(rebase_state) in engine/rebase_policy.{hpp,cpp}
+      (pure, mirrors the server rules incl. segment-at-head in weak modes);
+      try_commit_pending rebases per predicate; base_block() = confirmed head in
+      weak modes / pending stacking in strict, pending fallback for bootstrap.
+      Tests: 4 predicate table cases + 3 engine cases (special-seen rebase with
+      tag change proof, data-add-seen rebase, allow_all identical-tag property).
+      Full suite 22/22 green.
 
 - 1.2 Mode-aware chain acceptance in sync_engine::check_chain_block               [2d]
       Today: requires parent_hash linkage and rejects "sequence already in use".
