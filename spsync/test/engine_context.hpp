@@ -19,7 +19,9 @@ namespace securepath::sync::test {
 class engine_context {
 public:
 
-	engine_context() {
+	explicit engine_context(sync_engine_config config = {})
+	: engine_config(std::move(config))
+	{
 		// own public key must be in the public key access for sync engine
 		pkeys.insert(root_user_key.public_key());
 		pdata.set_my_private_key(root_user_key);

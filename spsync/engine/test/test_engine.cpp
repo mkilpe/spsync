@@ -204,4 +204,114 @@ TEST_CASE("engine commit not accepted", "[unit]") {
 	CHECK(rec_handle->state() == record_state::pending_commit);
 }
 
+
+namespace {
+
+/// build a chain of one initial user change plus data changes in a source context and
+/// return the committed blocks so they can be fed to another engine in arbitrary order
+std::deque<chain_block> build_test_chain(test::engine_context& source, int data_changes) {
+	for(int i = 0; i != data_changes + 1; ++i) {
+		source.add_default_commit_response();
+	}
+	source.create_initial_record();
+	source.io.process_events();
+	for(int i = 0; i != data_changes; ++i) {
+		source.engine.sync_object_change(create_object_id(), metadata{});
+		source.io.process_events();
+	}
+	std::deque<chain_block> blocks;
+	for(sequence_number seq{1}; seq <= source.storage.last_block().sequence; ++seq) {
+		auto h = source.storage.find(seq);
+		auto block = h->record();
+		// the stored client blob keeps the predicted sequence and empty parent hash (see
+		// plan defect B8); bake in the server assigned block id so the chain is linked
+		block.set_sequence_and_parent_hash(h->block_id().sequence, h->parent_block_hash());
+		blocks.push_back(block);
+	}
+	return blocks;
+}
+
+void insert_test_key(test::engine_context& context) {
+	context.enc_keys.insert(encryption_key{sequence_number{1}, to_octet_vector("12345678901234567890123456789012")});
+}
+
+}
+
+// * weak modes accept authentic blocks out of order and with gaps
+TEST_CASE("engine weak mode accepts out of order blocks", "[unit]") {
+	auto mode = GENERATE(sync_mode::allow_all, sync_mode::require_special_seen, sync_mode::require_data_add_remove_seen);
+
+	test::engine_context source;
+	auto blocks = build_test_chain(source, 3);
+	REQUIRE(blocks.size() == 4);
+
+	test::engine_context target{sync_engine_config{.mode=mode}};
+	insert_test_key(target);
+
+	target.engine.on_record_received(blocks[0]); // root
+	target.engine.on_record_received(blocks[3]); // gap: 4 before 2 and 3
+	CHECK(target.storage.find(sequence_number{4}));
+	target.engine.on_record_received(blocks[2]);
+	CHECK(target.storage.find(sequence_number{3}));
+	target.engine.on_record_received(blocks[1]);
+
+	for(sequence_number seq{1}; seq <= sequence_number{4}; ++seq) {
+		auto h = target.storage.find(seq);
+		REQUIRE(h);
+		CHECK(h->state() == record_state::in_sync);
+	}
+	CHECK(target.storage.last_block().sequence == sequence_number{4});
+}
+
+// * strict mode still requires the chain to be contiguous
+TEST_CASE("engine strict mode keeps out of order blocks pending", "[unit]") {
+	test::engine_context source;
+	auto blocks = build_test_chain(source, 3);
+	REQUIRE(blocks.size() == 4);
+
+	test::engine_context target; // require_all_seen
+	insert_test_key(target);
+
+	target.engine.on_record_received(blocks[0]);
+	target.engine.on_record_received(blocks[3]);
+	// the gap keeps the block out of the chain
+	CHECK(!target.storage.find(sequence_number{4}));
+	CHECK(target.storage.find(sequence_number{4}, record_state::pending_sync));
+	target.engine.on_record_received(blocks[2]);
+	CHECK(!target.storage.find(sequence_number{3}));
+
+	// filling the gap promotes the pending blocks
+	target.engine.on_record_received(blocks[1]);
+	for(sequence_number seq{1}; seq <= sequence_number{4}; ++seq) {
+		auto h = target.storage.find(seq);
+		REQUIRE(h);
+		CHECK(h->state() == record_state::in_sync);
+	}
+}
+
+// * weak modes reject a different block for an already used sequence
+TEST_CASE("engine weak mode rejects conflicting sequence", "[unit]") {
+	test::engine_context source;
+	auto blocks = build_test_chain(source, 2);
+	REQUIRE(blocks.size() == 3);
+
+	test::engine_context target{sync_engine_config{.mode=sync_mode::allow_all}};
+	insert_test_key(target);
+
+	target.engine.on_record_received(blocks[0]);
+	target.engine.on_record_received(blocks[1]);
+
+	// a different (authentic) block claiming an already used sequence must not replace it
+	auto conflicting = blocks[2];
+	conflicting.set_sequence_and_parent_hash(sequence_number{2}, blocks[0].hash());
+	target.engine.on_record_received(conflicting);
+
+	auto h = target.storage.find(sequence_number{2});
+	REQUIRE(h);
+	CHECK(h->tag() == blocks[1].tag());
+	auto rejected = target.storage.find_tag(conflicting.tag());
+	REQUIRE(rejected);
+	CHECK(rejected->state() == record_state::invalid);
+}
+
 }

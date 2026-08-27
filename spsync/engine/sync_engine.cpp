@@ -103,6 +103,31 @@ public:
 	}
 
 	record_state check_chain_block(chain_block const& record, chain_block_id const& id) {
+		record_state state = config.mode == sync_mode::require_all_seen
+			? check_chain_block_strict(record, id)
+			: check_chain_block_weak(record, id);
+		LTRACE("check_chain_block returns state {}", state);
+		return state;
+	}
+
+	/**
+	 * Weak modes do not require a contiguous local chain: the server sequence is only a
+	 * cursor and the parent hash is informative. A block is acceptable when no different
+	 * block is already in sync for its sequence; gaps and out of order arrival are fine.
+	 */
+	record_state check_chain_block_weak(chain_block const& record, chain_block_id const& id) {
+		record_state state = record_state::invalid;
+		auto existing = records.find(record.sequence());
+		if(!existing) {
+			state = record_state::in_sync;
+		} else {
+			LWARN("different record block already in sync for the sequence [block id = {}, tag = {}, existing tag = {}]"
+				, id, to_hex(record.tag()), to_hex(existing->tag()));
+		}
+		return state;
+	}
+
+	record_state check_chain_block_strict(chain_block const& record, chain_block_id const& id) {
 		// needs to fulfil:
 		//  parent.seq + 1 == record.sequence()
 		//  parent.hash == record.parent_hash
@@ -143,7 +168,6 @@ public:
 				, id, to_hex(record.tag()));
 		}
 
-		LTRACE("check_chain_block returns state {}", state);
 		return state;
 	}
 

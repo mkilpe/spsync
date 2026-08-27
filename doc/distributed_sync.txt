@@ -110,6 +110,13 @@ B5  storage.cpp:24 hardcodes chain_sync_config{require_all_seen, only_tag}; the 
 B6  try_commit_pending: "//t: handle allow_all correctly" - in weak modes it recommits
     without rebasing even when the server demands a special record seen.
 
+B8  (found 2026-08-27 in 1.2) database_record::set_state updates the seq/hash/parent
+    columns but not the serialised record blob, so record() of a committed CLIENT record
+    returns the predicted sequence and an empty parent hash (server side blobs are
+    correct: they are serialised after assignment). Harmless for the engine today
+    (authenticated content is unaffected) but must be fixed before clients serve blocks
+    to peers (phase 4); until then callers bake in block_id()/parent_block_hash().
+
 B7  Server never verifies signatures (auth_mode only checked structurally on client).
     Server has no private key use at all (only in tests).
 
@@ -414,7 +421,7 @@ Everything here is client/engine work; the server already accepts weak-mode comm
       tag change proof, data-add-seen rebase, allow_all identical-tag property).
       Full suite 22/22 green.
 
-- 1.2 Mode-aware chain acceptance in sync_engine::check_chain_block               [2d]
++ 1.2 Mode-aware chain acceptance in sync_engine::check_chain_block -- done 2026-08-27 [2d]
       Today: requires parent_hash linkage and rejects "sequence already in use".
       Weak modes: a block is acceptable if its tag is unknown and it is authentic;
       sequence is recorded as the server cursor; parent_hash is informative only.
@@ -422,6 +429,13 @@ Everything here is client/engine work; the server already accepts weak-mode comm
       Strict mode: unchanged.
       Test: feed blocks out of order / with gaps in weak mode; all end in in_sync;
       strict mode still rejects.
+      Implemented: check_chain_block dispatches to _strict (unchanged) or _weak
+      (accept any authentic unknown block unless a different block already holds the
+      sequence; gaps/out-of-order fine, parent hash informative). engine_context
+      takes a sync_engine_config. Tests: weak accepts 1-4-3-2 immediately (all
+      three weak modes), strict keeps gapped blocks pending until the gap fills,
+      weak rejects a conflicting same-sequence block as invalid. Found defect B8
+      (stale client record blobs) along the way. Full suite 22/22 green.
 
 - 1.3 Rebase of existing objects  (B4)                                            [3d]
       update_record for data_change: when previous_oid_record_tag is non-empty, look up
