@@ -12,7 +12,9 @@ namespace securepath::groupchat {
 
 enum class msg_state {
 	pending,
-	in_sync
+	in_sync,
+	/// accepted by a server but not yet durable (mirrors record_state::acked, plan D8)
+	acked
 };
 
 struct message {

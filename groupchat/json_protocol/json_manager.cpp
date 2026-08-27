@@ -114,7 +114,8 @@ public:
 			{"date", time_to_string(md.sender_time)},
 			{"index", change.new_index},
 			{"oldindex", change.old_index},
-			{"state", change.state == msg_state::in_sync ? "in_sync" : "pending"},
+			{"state", change.state == msg_state::in_sync ? "in_sync"
+				: change.state == msg_state::acked ? "acked" : "pending"},
 			{"id", change.id.to_hex()},
 			{"sender", sender_to_object(md.sender)}};
 

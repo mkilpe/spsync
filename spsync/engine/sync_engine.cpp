@@ -69,6 +69,9 @@ public:
 	}
 
 	void update_record_commit_state(record_handle h, chain_block const& record, chain_block_id const& id) {
+		// a commit response is conceptually only an ack (record_state::acked); on a single
+		// server acked is durable, so the record moves acked -> in_sync in the same step.
+		// The replication work (plan phase 6) splits this into ack now, in_sync on commit.
 		auto state = check_chain_block(record, id);
 		if(record.check_matches_without_server_data(h->record()) && is_valid_state(state)) {
 			LINFO("setting state for record [block id = {}, parent block = {}, tag = {}, state = {}]",

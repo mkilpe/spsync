@@ -26,8 +26,16 @@ enum class record_state {
 	/// the record received from server but some blocks missing in between to form a chain
 	pending_sync,
 
-	/// synchronised with the server
-	in_sync
+	/// synchronised with the server (durable; on a single server this is set directly)
+	in_sync,
+
+	/**
+	 * accepted by a server but not yet durable (see plan D8: quorum in strict mode,
+	 * local durability in weak modes). On a single server the engine moves
+	 * acked -> in_sync in the same step. Values are stored in the database: only
+	 * append states, never renumber.
+	 */
+	acked
 };
 
 /// returns true if in good state, ie. not unknown or invalid

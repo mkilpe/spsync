@@ -8,7 +8,7 @@ bool is_valid_state(record_state state) {
 	return record_state::invalid < state;
 }
 
-char const* const state_name[] = {"unknown",  "invalid", "pending commit", "pending sync", "in sync"};
+char const* const state_name[] = {"unknown",  "invalid", "pending commit", "pending sync", "in sync", "acked"};
 
 std::ostream& operator<<(std::ostream& out, record_state state) {
 	int state_value = static_cast<int>(state);

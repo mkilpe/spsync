@@ -472,10 +472,17 @@ Everything here is client/engine work; the server already accepts weak-mode comm
       conflicting oid. Runs under allow_all and require_all_seen. Engine suite
       33 cases green (test-only step, no production change).
 
-- 1.5 record_state::acked  (D8, single-server trivial form)                       [1d]
++ 1.5 record_state::acked  (D8, single-server trivial form) -- done 2026-08-27    [1d]
       Add acked to the enum, DB and unique_seq_selector logic; on single server the
       engine moves acked->in_sync in the same step. No behaviour change yet; it makes
       the later split a data-only change. msg_state gets the same value.
+      Implemented: acked = 5 appended (db values stable, never renumber);
+      is_server_confirmed() helper - acked shares the unique sequence selector and
+      the set_record guard with in_sync; engine seam documented at
+      update_record_commit_state (phase 6 splits ack-now/durable-later there);
+      msg_state::acked + three-way json state string. Storage tests: state
+      round-trip, sequence uniqueness across both confirmed states, one-step
+      acked -> in_sync transition. Full build + suite 22/22 green.
 
 - 1.6 groupchat on weak mode                                                      [1d]
       New chats created with allow_all by default (messages are new oids, never

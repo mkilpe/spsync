@@ -441,4 +441,34 @@ TEST_CASE("record_storage pending commits with same seq", "[unit]") {
 	CHECK(storage.find_last(true)->block_id() == last_p);
 }
 
+
+TEST_CASE("record_storage acked state", "[unit]") {
+	remove_database_test_db();
+	auto db_conn = database::sqlite::create_sqlite_connection(db_name);
+	record_storage storage(db_conn);
+
+	test_block_creator creator;
+	auto block = creator.test_user_change();
+	auto h = storage.create(block, record_state::acked);
+	REQUIRE(h);
+	CHECK(h->state() == record_state::acked);
+	CHECK(is_valid_state(record_state::acked));
+
+	// acked records are found by their state and carry the server assigned sequence
+	CHECK(storage.find(block.sequence(), record_state::acked) == h);
+	CHECK(!storage.find(block.sequence()));
+
+	// acked shares the unique sequence selector with in_sync: no second record may
+	// claim the same sequence in either state
+	auto conflicting = creator.test_user_change();
+	conflicting.set_sequence_and_parent_hash(block.sequence(), octet_vector{});
+	CHECK_THROWS(storage.create(conflicting, record_state::acked));
+	CHECK_THROWS(storage.create(conflicting, record_state::in_sync));
+
+	// the single server transition: acked -> in_sync in the same step
+	h->set_state(record_state::in_sync);
+	CHECK(h->state() == record_state::in_sync);
+	CHECK(storage.find(block.sequence()) == h);
+}
+
 }

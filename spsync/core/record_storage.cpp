@@ -17,6 +17,12 @@ namespace {
 
 std::int64_t const seq_selector_value(1);
 
+/// acked and in_sync both carry a server assigned sequence; they share the unique
+/// sequence selector so no two such records can claim the same sequence
+bool is_server_confirmed(record_state state) {
+	return state == record_state::in_sync || state == record_state::acked;
+}
+
 void create_object_records(database::connection_ptr db, octet_vector const& tag, data_change_record const& rec) {
 	for(auto& obj : rec) {
 		auto q = db->prepare(
@@ -72,7 +78,7 @@ public:
 			q.bind(":seq", bid.sequence.value);
 			q.bind(":hash", bid.hash);
 			q.bind(":parent_hash", parent_block_hash);
-			if(state == record_state::in_sync) {
+			if(is_server_confirmed(state)) {
 				q.bind(":useq", seq_selector_value);
 			} else {
 				q.bind(":useq");
@@ -86,7 +92,7 @@ public:
 			//update just the state in database
 			auto q = db_->prepare("UPDATE record SET state = :state, unique_seq_selector = :useq WHERE key = :k;");
 			q.bind(":state", static_cast<std::int64_t>(state));
-			if(state == record_state::in_sync) {
+			if(is_server_confirmed(state)) {
 				q.bind(":useq", seq_selector_value);
 			} else {
 				q.bind(":useq");
@@ -113,7 +119,7 @@ public:
 	void set_record(chain_block const& rec) override {
 		std::unique_lock lock{mutex_};
 
-		if(state_ == record_state::in_sync) {
+		if(is_server_confirmed(state_)) {
 			throw make_error(sync::errc::constraint_violation, "trying to set record data for in sync record");
 		}
 
@@ -472,7 +478,7 @@ record_handle record_storage::insert_to_db(chain_block const& rec, record_state 
 	q.bind(":state", static_cast<std::int64_t>(state));
 	q.bind(":record", serialisation::asn_der_serialise(rec));
 	q.bind(":type", static_cast<std::int64_t>(type));
-	if(state == record_state::in_sync) {
+	if(is_server_confirmed(state)) {
 		q.bind(":useq", seq_selector_value);
 	} else {
 		q.bind(":useq");
