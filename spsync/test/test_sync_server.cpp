@@ -175,6 +175,20 @@ void test_sync_context::create_initial_record() {
 	}
 }
 
+void test_sync_context::commit_storm(int records_per_client, bool special_mid_storm) {
+	for(int i = 0; i != records_per_client; ++i) {
+		if(special_mid_storm && i == records_per_client/2) {
+			users delta{users_change_mode::delta};
+			delta.add(util::user_access{clients.front()->user, util::access_type::user_management_access});
+			clients.front()->engine.sync_user_change(encrypt_last_key_for_users(delta, clients.front()->cc));
+		}
+		for(auto&& c : clients) {
+			c->engine.sync_object_change(util::create_object_id(), metadata{});
+		}
+	}
+	while(handle_events()) {}
+}
+
 bool test_sync_context::compare_record_storages(sequence_number required_seq) const {
 	record_storage const& server_records = server.sync.records();
 	sequence_number last_seq = server_records.last_block().sequence;

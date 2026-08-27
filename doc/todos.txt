@@ -11,6 +11,8 @@
 * support signing records
 
 = client
+* groupchat::join_chat loads the chat connection but does not connect it; every caller
+  (json_manager, tests) has to connect it first - join_chat should do it (found 2026-08-27)
 * better interface to handle pending/in sync and error cases on client level
 * limit amount of chats (created+joined=limit)
 * remove chat

@@ -120,6 +120,13 @@ struct test_sync_context {
 	/// create initial record using the first client as owner and add other clients as members
 	void create_initial_record();
 
+	/**
+	 * The commit storm: every client commits records_per_client data changes round robin
+	 * interleaved without waiting for responses; when special_mid_storm is set the first
+	 * client also commits a user change halfway through. Handles events until quiet.
+	 */
+	void commit_storm(int records_per_client, bool special_mid_storm = false);
+
 	/// returns true if all client and server record storages have same in sync records and given sequence number as last sequence (or the given seq is invalid)
 	bool compare_record_storages(sequence_number = {}) const;
 

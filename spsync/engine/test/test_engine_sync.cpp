@@ -376,4 +376,39 @@ TEST_CASE("engine sync multi change record partial conflict", "[unit]") {
 	context.client(1).engine.set_output(nullptr);
 }
 
+
+// (16) the commit storm: every client commits a batch without waiting, in every mode;
+// this is the regression net for the whole weak/strict mode handling
+TEST_CASE("engine sync commit storm", "[unit]") {
+	auto mode = GENERATE(sync_mode::allow_all, sync_mode::require_special_seen,
+		sync_mode::require_data_add_remove_seen, sync_mode::require_all_seen);
+
+	int const clients = 5;
+	int const per_client = 10;
+	test::test_sync_context context(chain_sync_config{mode});
+	context.add_client(true, clients);
+	context.create_initial_record();
+	while(context.handle_events()) {}
+
+	context.commit_storm(per_client);
+	CHECK(context.compare_record_storages(sequence_number{1 + clients*per_client}));
+}
+
+// (17) the commit storm with a membership change dropped in halfway: the special record
+// forces every in-flight record behind it to rebase in the special/data-add modes
+TEST_CASE("engine sync commit storm with special record", "[unit]") {
+	auto mode = GENERATE(sync_mode::allow_all, sync_mode::require_special_seen,
+		sync_mode::require_data_add_remove_seen, sync_mode::require_all_seen);
+
+	int const clients = 5;
+	int const per_client = 10;
+	test::test_sync_context context(chain_sync_config{mode});
+	context.add_client(true, clients);
+	context.create_initial_record();
+	while(context.handle_events()) {}
+
+	context.commit_storm(per_client, true);
+	CHECK(context.compare_record_storages(sequence_number{2 + clients*per_client}));
+}
+
 }
