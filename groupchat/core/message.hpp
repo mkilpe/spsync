@@ -28,7 +28,11 @@ struct message {
 
 enum class msg_order {
 	index_ascending,
-	index_descending
+	index_descending,
+	/// order by the sender set message time; chunking with start_index stays index based,
+	/// the time orders only honour max_count
+	time_ascending,
+	time_descending
 };
 
 struct message_search {

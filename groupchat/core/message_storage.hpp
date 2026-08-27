@@ -59,6 +59,7 @@ public:
 	sync::sequence_number latest_sequence() const;
 private:
 	std::int64_t update_pending(message_id const& id);
+	std::deque<message> get_by_time(message_search) const;
 	void get_in_sync(message_search, std::deque<message>&) const;
 	void get_pending(message_search, std::deque<message>&) const;
 

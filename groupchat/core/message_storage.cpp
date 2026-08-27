@@ -3,6 +3,8 @@
 #include <securepath/serialisation/sequence.hpp>
 #include <spsync/client/record_util.hpp>
 
+#include <algorithm>
+
 namespace securepath::groupchat {
 
 /*
@@ -23,6 +25,7 @@ message_storage::message_storage(database::connection_ptr db)
 				"key INTEGER PRIMARY KEY,"
 				"id BLOB UNIQUE,"
 				"data BLOB,"
+				"stime INTEGER,"
 				"seq INTEGER);";
 		db->prepare(prepare_str).execute();
 	}
@@ -33,6 +36,7 @@ message_storage::message_storage(database::connection_ptr db)
 				"key INTEGER PRIMARY KEY,"
 				"id BLOB UNIQUE,"
 				"data BLOB,"
+				"stime INTEGER,"
 				"iid INTEGER);";
 		db->prepare(prepare_str).execute();
 	}
@@ -56,14 +60,16 @@ msg_change message_storage::insert(message_id const& id, msg_data const& md, msg
 
 	if(state == msg_state::in_sync) {
 		old_index = update_pending(id);
-		prep = "INSERT INTO sync_msg(id, data, seq) VALUES(:id, :data, :seq)";
+		prep = "INSERT INTO sync_msg(id, data, stime, seq) VALUES(:id, :data, :stime, :seq)";
 	} else {
-		prep = "INSERT INTO sync_pending_msg(id, data, iid) VALUES(:id, :data, :iid)";
+		prep = "INSERT INTO sync_pending_msg(id, data, stime, iid) VALUES(:id, :data, :stime, :iid)";
 		index_base = sync_max_index_;
 	}
 	auto q = db_->prepare(prep);
 	q.bind(":id", id.value());
 	q.bind(":data", serialisation::asn_der_serialise(md));
+	q.bind(":stime", static_cast<std::int64_t>(
+		std::chrono::duration_cast<std::chrono::milliseconds>(md.sender_time.time_since_epoch()).count()));
 	if(state == msg_state::in_sync) {
 		q.bind(":seq", md.seq.value);
 	} else {
@@ -109,8 +115,21 @@ std::int64_t message_storage::update_pending(message_id const& id) {
 	return sync_max_index_+pindex;
 }
 
+static bool is_time_order(msg_order order) {
+	return order == msg_order::time_ascending || order == msg_order::time_descending;
+}
+
 static std::string make_prep_string(std::string const& table, message_search s) {
 	std::string prep = "SELECT key, id, data FROM " + table;
+	if(is_time_order(s.order)) {
+		// time orders honour only max_count; chunking with start_index stays index based
+		char const* dir = s.order == msg_order::time_ascending ? "ASC" : "DESC";
+		prep += std::string(" ORDER BY stime ") + dir + ", key " + dir;
+		if(s.max_count) {
+			prep += " LIMIT " + std::to_string(s.max_count);
+		}
+		return prep;
+	}
 	if(s.order == msg_order::index_ascending) {
 		if(s.start_index) {
 			prep += " WHERE key >= " + std::to_string(s.start_index);
@@ -140,7 +159,7 @@ void message_storage::get_in_sync(message_search s, std::deque<message>& ret) co
 }
 
 void message_storage::get_pending(message_search s, std::deque<message>& ret) const {
-	if(s.start_index) {
+	if(s.start_index && !is_time_order(s.order)) {
 		s.start_index -= sync_max_index_;
 	}
 	auto q = db_->prepare(make_prep_string("sync_pending_msg", s));
@@ -154,6 +173,9 @@ void message_storage::get_pending(message_search s, std::deque<message>& ret) co
 }
 
 std::deque<message> message_storage::get(message_search s) const {
+	if(is_time_order(s.order)) {
+		return get_by_time(s);
+	}
 	std::deque<message> ret;
 
 	if(s.order == msg_order::index_ascending) {
@@ -178,6 +200,24 @@ std::deque<message> message_storage::get(message_search s) const {
 		} else {
 			get_in_sync(s, ret);
 		}
+	}
+	return ret;
+}
+
+std::deque<message> message_storage::get_by_time(message_search s) const {
+	// take the top max_count of each table by sender time and merge them in memory
+	s.start_index = 0;
+	std::deque<message> ret;
+	get_in_sync(s, ret);
+	get_pending(s, ret);
+	bool const ascending = s.order == msg_order::time_ascending;
+	std::ranges::sort(ret, [ascending](message const& l, message const& r) {
+			auto lt = std::tie(l.sender_time, l.index);
+			auto rt = std::tie(r.sender_time, r.index);
+			return ascending ? lt < rt : rt < lt;
+		});
+	if(s.max_count && ret.size() > s.max_count) {
+		ret.resize(s.max_count);
 	}
 	return ret;
 }

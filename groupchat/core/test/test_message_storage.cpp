@@ -259,4 +259,53 @@ TEST_CASE("message_storage sync test", "[unit]") {
 	REQUIRE(ms.get(message_search{}).size() == 12);
 }
 
+
+TEST_CASE("message_storage sender time order", "[unit]") {
+	std::remove("message_storage_time.db");
+	message_storage s(database::sqlite::create_sqlite_connection("message_storage_time.db"));
+
+	sync::sequence_number impl_seq{0};
+	auto make_msg = [&impl_seq](std::string text, int minutes) mutable
+		{
+			msg_data d;
+			d.message = std::move(text);
+			d.sender_time = serialisation::time_point{} + std::chrono::minutes(minutes);
+			d.seq = ++impl_seq;
+			return d;
+		};
+
+	// arrival (index) order differs from the sender time order, across both tables
+	s.insert(new_message_id(), make_msg("t3", 3), msg_state::in_sync);
+	s.insert(new_message_id(), make_msg("t1", 1), msg_state::in_sync);
+	s.insert(new_message_id(), make_msg("t4", 4), msg_state::pending);
+	s.insert(new_message_id(), make_msg("t2", 2), msg_state::pending);
+
+	{
+		auto list = s.get(message_search{.order=msg_order::time_ascending});
+		REQUIRE(list.size() == 4);
+		CHECK(list[0].data == "t1");
+		CHECK(list[1].data == "t2");
+		CHECK(list[2].data == "t3");
+		CHECK(list[3].data == "t4");
+	}
+	{
+		auto list = s.get(message_search{.order=msg_order::time_descending});
+		REQUIRE(list.size() == 4);
+		CHECK(list[0].data == "t4");
+		CHECK(list[3].data == "t1");
+	}
+	{
+		auto list = s.get(message_search{.max_count=2, .order=msg_order::time_descending});
+		REQUIRE(list.size() == 2);
+		CHECK(list[0].data == "t4");
+		CHECK(list[1].data == "t3");
+	}
+	// index ordering is still available unchanged
+	{
+		auto list = s.get(message_search{.order=msg_order::index_ascending});
+		REQUIRE(list.size() == 4);
+		CHECK(list[0].data == "t3");
+	}
+}
+
 }

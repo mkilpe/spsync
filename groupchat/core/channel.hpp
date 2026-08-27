@@ -12,10 +12,15 @@ namespace securepath::groupchat {
 
 class groupchat;
 
-/// The storage modes every chat channel operates with; the storage is created with these
-/// and every joining client states them as its expectation.
+/**
+ * The storage modes every chat channel operates with; the storage is created with these and
+ * every joining client states them as its expectation. Chats run in the weak
+ * require_special_seen mode (plan 1.6/Q1): messages are new object ids and never conflict
+ * with each other, while membership/key changes are special records the server serialises -
+ * a message that has not seen the newest membership change is rebased once by the engine.
+ */
 inline sync::storage_modes channel_storage_modes() {
-	return {sync::sync_mode::require_all_seen, sync::auth_mode::sign_records};
+	return {sync::sync_mode::require_special_seen, sync::auth_mode::sign_records};
 }
 
 class channel : public sync::client_sync

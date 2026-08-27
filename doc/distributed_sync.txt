@@ -484,12 +484,24 @@ Everything here is client/engine work; the server already accepts weak-mode comm
       round-trip, sequence uniqueness across both confirmed states, one-step
       acked -> in_sync transition. Full build + suite 22/22 green.
 
-- 1.6 groupchat on weak mode                                                      [1d]
++ 1.6 groupchat on weak mode -- done 2026-08-27                                   [1d]
       New chats created with allow_all by default (messages are new oids, never
       conflict). message_storage: expose ordering by sender_time in message_search
       (index order stays available). Membership changes stay special records so
       require_special_seen semantics apply to them (server rule, not chat code).
       Test: N cli clients, random send interleaving, all see the same message set.
+      Implemented with one resolution: chats use require_special_seen, NOT allow_all
+      (the Q1 recommendation wins over this step's headline): messages are new oids
+      and never conflict either way, but only require_special_seen makes the server
+      serialise membership/key changes and rebase messages that missed one - in
+      allow_all a message could commit blind to a key rotation. channel_storage_modes()
+      = {require_special_seen, sign_records} documents this at the definition.
+      message_storage: stime column on both tables, msg_order time_ascending/
+      time_descending (per-table top-k by time + in-memory merge; start_index
+      chunking stays index based). Tests: cross-table time ordering, max_count,
+      index order unchanged. The interleaving convergence net is 1.7's commit storm;
+      the mode flip itself is exercised by every existing groupchat/json system test.
+      Full build + suite 22/22 green.
 
 - 1.7 System test: concurrent clients                                             [1d]
       test_sync_context(mode): add a 'commit storm' helper: k clients each commit m
