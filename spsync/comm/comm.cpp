@@ -5,9 +5,10 @@
 
 namespace securepath::sync {
 
-comm::comm(network_connection_impl* nc_impl, storage_id sid, record_storage& s, sync::progress& p)
+comm::comm(network_connection_impl* nc_impl, storage_id sid, record_storage& s, sync::progress& p, std::optional<storage_modes> expected_modes)
 : nc_impl_(nc_impl)
 , sid_(std::move(sid))
+, expected_modes_(expected_modes)
 , storage_(s)
 , progress_(p)
 {
@@ -88,7 +89,7 @@ void comm::handle(protocol::notify_record const& p) {
 }
 
 request_handle comm::fetch_sequence_number() {
-	return nc_impl_->fetch_sequence_number(sid_);
+	return nc_impl_->fetch_sequence_number(sid_, expected_modes_);
 }
 
 request_handle comm::fetch_records(sequence_number start, sequence_number end) {

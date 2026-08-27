@@ -57,7 +57,7 @@ public:
 	void connect_to_storage(storage_id const& sid) {
 		assert(!sid.empty());
 
-		storage_connection sconn{net.create_storage_connection(sid, storage, progress)};
+		storage_connection sconn{net.create_storage_connection(sid, storage, progress, storage_modes{engine_config.mode, engine_config.auth_mode})};
 		engine = std::make_unique<sync_engine>(event_loop(), sconn.input(), cc, engine_config);
 
 		//after this the events will be received
@@ -308,6 +308,40 @@ TEST_CASE("multi client test", "[system]") {
 	}
 
 	WAIT_CHECK(check_commit_records_equal(sequence_number{101}, clients), 60s);
+}
+
+
+// (5) a client expecting different storage modes is rejected by the server
+TEST_CASE("storage mode mismatch", "[system]") {
+	event_system::single_thread_event_loop single_thread_event_loop;
+	test::test_context net_context;
+
+	net_context.add_client(2);
+	net_context.add_client_keys_for_server();
+	net_context.share_client_keys();
+
+	test::test_server server(net_context.server_context());
+	server.run();
+	std::this_thread::sleep_for(1s);
+
+	test_client client1(net_context.client_context(0), single_thread_event_loop, 0);
+	client1.connect();
+	client1.wait_for_connection();
+	auto sid = client1.create_remote_storage();
+	client1.wait_for_storage_created();
+	client1.create_initial_record({net_context.key_id(1)});
+
+	WAIT_CHECK(client1.storage.last_block().sequence == sequence_number{1}, 2s);
+
+	// the storage was created with the default modes; a client expecting allow_all must be rejected
+	test_client client2(net_context.client_context(1), single_thread_event_loop, 1);
+	client2.engine_config.mode = sync_mode::allow_all;
+	client2.connect();
+	client2.wait_for_connection();
+	client2.connect_to_storage(sid);
+
+	std::this_thread::sleep_for(1s);
+	CHECK(client2.storage.last_block().sequence == sequence_number{});
 }
 
 }

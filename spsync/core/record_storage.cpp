@@ -418,6 +418,36 @@ sequence_number record_storage::highest_sequence_number() const {
 	return ret;
 }
 
+sequence_number record_storage::last_special_sequence() const {
+	auto q = impl_->db->prepare("SELECT max(seq) FROM record WHERE state = :state AND (type = :t1 OR type = :t2);");
+	q.bind(":state", static_cast<std::int64_t>(record_state::in_sync));
+	q.bind(":t1", static_cast<std::int64_t>(user_change_record_tag));
+	q.bind(":t2", static_cast<std::int64_t>(segment_record_tag));
+
+	sequence_number ret;
+	auto res = q.execute();
+	if(res) {
+		ret = sequence_number{res.value<std::uint64_t>(0).value_or(0)};
+	}
+	return ret;
+}
+
+sequence_number record_storage::last_data_add_sequence() const {
+	// an add is a data change entry without a previous oid record tag (see create_object_records)
+	auto q = impl_->db->prepare(
+		"SELECT max(record.seq) FROM record, record_objects"
+		" WHERE record.tag = record_objects.tag AND record.state = :state"
+		" AND ifnull(length(record_objects.prev_tag), 0) = 0;");
+	q.bind(":state", static_cast<std::int64_t>(record_state::in_sync));
+
+	sequence_number ret;
+	auto res = q.execute();
+	if(res) {
+		ret = sequence_number{res.value<std::uint64_t>(0).value_or(0)};
+	}
+	return ret;
+}
+
 record_handle record_storage::find_internal(record_internal_id iid) const {
 	auto q = impl_->db->prepare(
 		"SELECT key, tag, seq, hash, parent_hash, state FROM record"

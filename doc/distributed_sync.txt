@@ -119,7 +119,7 @@ Milestones
 
   M0  securepath library consolidated + modernised; spsync builds on
       it, crypto reworked post-quantum; B1/B2/B5 fixed; per-storage
-      mode configurable                                                 (phase 0)
+      mode configurable                    DONE 2026-08-26  (phase 0)
   M1  weak mode works end-to-end, one server, N concurrent clients,
       rebase of existing objects, conflicts surfaced to app            (phase 1)
   M2  authenticity hardened: digest signing, op_id, mandatory signing
@@ -346,18 +346,18 @@ been modernised inside other projects; the rest exist only in sp. State on 2026-
       - 891 files show as modified = mode-only (100644->100755); decide whether
         to commit the modes or `chmod -R a-x` and `git config core.fileMode false`.
 
-- 0.2 Replay-derived cursors in chain_sync  (B1)                                  [0.5d]
++ 0.2 Replay-derived cursors in chain_sync  (B1) -- done 2026-08-26                                  [0.5d]
       chain_sync ctor: scan record table for the last block of each class
       (data add/remove vs user_change/segment) and set the cursors. Add
       record_storage::find_last_of_type(record_type_tag) or a single query.
       Test: commit in require_special_seen mode, destroy chain_sync, reopen on same
       db, verify out-of-sync is still enforced. Run all four modes.
 
-- 0.3 Pure check_rules  (B2)                                                      [0.5d]
++ 0.3 Pure check_rules  (B2) -- done 2026-08-26 (rule_result{err,type})                                                      [0.5d]
       check_rules(...) returns struct { error err; rec_type type; }; set_and_save_block
       takes the type as argument. Remove the mutable member.
 
-- 0.4 Separate validate from apply in chain_sync                                  [1d]
++ 0.4 Separate validate from apply in chain_sync -- done 2026-08-26                                  [1d]
       error      validate(chain_block const&) const      // reads state only
       chain_block apply(chain_block const&)               // mutates, no checks
       commit_block(b) = validate + apply under lock (behaviour unchanged).
@@ -365,7 +365,7 @@ been modernised inside other projects; the rest exist only in sp. State on 2026-
       applies; apply must re-validate since the head can move in between).
       Test: existing test_chain_sync passes unchanged.
 
-- 0.5 Per-storage configuration  (B5)                                             [1d]
++ 0.5 Per-storage configuration  (B5) -- done 2026-08-26                                             [1d]
       storage_config table in storage.db: sync_mode, auth_mode, created_by, created_at,
       replication (none|weak|strict, phase 3+), peers (phase 3+).
       create_storage packet gains sync_mode + auth_mode (protocol v2 fields; both
@@ -374,8 +374,16 @@ been modernised inside other projects; the rest exist only in sp. State on 2026-
       against the server's mode on connect (server_hello carries it, or
       request_sequence_number reply does).
       Test: create with each mode, reopen, mode persists; mismatching client rejected.
+      Implemented: storage_config table (immutable modes, created_at); create_storage +
+      request_sequence_number/response_sequence_number carry wire-encoded modes
+      (0 = unset, enum+1); server rejects with new errc storage_mode_mismatch;
+      client_sync states its engine config modes as the expectation.
+      Finding: the enforcement immediately caught a real inconsistency - groupchat
+      channels ran with auth_mode::sign_records while their storages were created
+      only_tag; chats now create their storage with channel_storage_modes()
+      (require_all_seen + sign_records, single shared definition in channel.hpp).
 
-- 0.6 Doc: update server_api.txt and dimensions.txt with the decisions above.     [0.5d]
++ 0.6 Doc: server_api.txt and dimensions.txt updated. -- done 2026-08-26     [0.5d]
 
 
 Phase 1  Weak mode, single server  (M1)

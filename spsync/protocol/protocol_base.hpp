@@ -2,6 +2,7 @@
 #define SPSYNC_PROTOCOL_PROTOCOL_BASE_HEADER
 
 #include "types.hpp"
+#include <spsync/core/sync_mode.hpp>
 #include <spsync/util/format.hpp>
 #include <securepath/network/net_error.hpp>
 

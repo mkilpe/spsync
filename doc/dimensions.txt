@@ -19,3 +19,8 @@ Require segment end after certain time/amount of records?
 
 q: how to configure the server? should one be able to decide which mode he uses when creating a storage?
 	* yes, but don't allow to change it after storage has been created
+update 2026-08: the mode (and auth mode) is chosen when the storage is created
+(create_storage carries it, wire encoded), persisted in the storage database
+(storage_config table) and immutable afterwards. The client states its expected
+modes in request_sequence_number and the server rejects a mismatch with
+storage_mode_mismatch; the response carries the storage's actual modes.

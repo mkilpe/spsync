@@ -16,11 +16,19 @@ class connection;
 /// Contains what is needed to manipulate a single record storage
 class storage {
 public:
-	storage(protocol::storage_id id, storage_config config);
+	/**
+	 * Open (or create) the record storage. The modes are persisted in the storage database on
+	 * first creation and are immutable afterwards; when create_modes is given and an existing
+	 * storage has different modes, construction throws storage_mode_mismatch.
+	 */
+	storage(protocol::storage_id id, storage_config config, std::optional<storage_modes> create_modes = {});
 	virtual ~storage() = default;
 
 	/// Id of this record storage
 	protocol::storage_id id() const { return id_; }
+
+	/// The persisted modes of this storage
+	storage_modes modes() const { return modes_; }
 
 	/// forwarded to chain_sync
 	sequence_number current_sequence_number() const;
@@ -40,6 +48,7 @@ private:
 	mutable std::mutex mutex_;
 	storage_config config_;
 	protocol::storage_id id_;
+	storage_modes modes_;
 
 	std::unique_ptr<chain_sync> sync_;
 	std::unordered_map<void const*, std::weak_ptr<connection>> listeners_;

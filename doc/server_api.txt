@@ -14,3 +14,10 @@ Space saving strategies (parameterised)
 * remove chain history, always segment by segment
 	* problem is that server cannot know what is the size of the object and what records it needs to be rebuilt (this info is in encrypted headers and might depends on higher layer)
 * when cutting chain, give hash of the new root to people who are invited as they cannot calculate the whole chain any more
+update 2026-08 (per-storage modes):
+ * create_storage: + mode, amode (wire encoded: 0 = server default, else enum+1)
+ * request_sequence_number: + expected_mode, expected_amode (0 = no check)
+ * response_sequence_number: + mode, amode of the storage
+ * new error: storage_mode_mismatch
+ * server persists modes per storage in storage.db table storage_config;
+   immutable after creation

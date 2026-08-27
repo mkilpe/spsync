@@ -100,7 +100,7 @@ struct chat_connection::impl
 				throw make_error(crypto::errc::no_such_key, "cannot create chat, member key missing");
 			}
 		}
-		auto cid = net.create_storage();
+		auto cid = net.create_storage(channel_storage_modes());
 		auto ret = channels.emplace(cid, std::make_unique<channel>(ccontext, cid));
 		ret.first->second->set_data(std::move(name), std::move(members));
 		ccontext.channels.add(cid, ccontext.sync_server);

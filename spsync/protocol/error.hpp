@@ -16,6 +16,7 @@ enum class errc {
 	record_out_of_sync,
 	invalid_client_key,
 	invalid_state,
+	storage_mode_mismatch,
 	end_of_list
 };
 

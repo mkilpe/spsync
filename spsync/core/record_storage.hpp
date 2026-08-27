@@ -52,6 +52,12 @@ public:
 	/// highest sequence number of record received from server with state in_sync or pending_sync
 	sequence_number highest_sequence_number() const;
 
+	/// highest in sync sequence of user change or segment records (used to replay server mode cursors)
+	sequence_number last_special_sequence() const;
+
+	/// highest in sync sequence of data change records that add an object (no previous record tag)
+	sequence_number last_data_add_sequence() const;
+
 
 	// -- pending commit --
 

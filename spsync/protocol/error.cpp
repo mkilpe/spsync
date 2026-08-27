@@ -14,6 +14,7 @@ namespace {
 		, "record out of sync"
 		, "invalid client key"
 		, "invalid state"
+		, "storage mode mismatch"
 		};
 
 	using category_type = def_error_category<errc>;

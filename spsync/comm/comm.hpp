@@ -2,6 +2,7 @@
 #define SPSYNC_COMM_COMM_HEADER
 
 #include "interface.hpp"
+#include <spsync/core/sync_mode.hpp>
 #include <spsync/protocol/server_protocol.hpp>
 
 #include <memory>
@@ -17,7 +18,7 @@ class network_connection_impl;
  */
 class comm : public comm_input {
 public:
-	comm(network_connection_impl* nc_impl, storage_id, record_storage&, sync::progress&);
+	comm(network_connection_impl* nc_impl, storage_id, record_storage&, sync::progress&, std::optional<storage_modes> expected_modes = {});
 	~comm();
 
 	/// set the handler for incoming event from network
@@ -49,6 +50,7 @@ protected:
 private:
 	network_connection_impl* const nc_impl_{};
 	storage_id const sid_;
+	std::optional<storage_modes> const expected_modes_;
 	record_storage& storage_;
 	sync::progress& progress_;
 	event_system::event_handler* output_{};

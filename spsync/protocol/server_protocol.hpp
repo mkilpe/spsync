@@ -52,18 +52,24 @@ struct storage_management_reply : reply_base {
 struct response_sequence_number : reply_base {
 	using reply_base::reply_base;
 
-	response_sequence_number(storage_request_base const& p, sequence_number seq)
+	response_sequence_number(storage_request_base const& p, sequence_number seq, std::uint32_t mode = 0, std::uint32_t amode = 0)
 	: reply_base(p)
 	, sequence(seq)
+	, mode(mode)
+	, amode(amode)
 	{
 	}
 
 	sequence_number sequence;
 
+	/// the modes of the storage, wire encoded (0 = unknown)
+	std::uint32_t mode{0};
+	std::uint32_t amode{0};
+
 	template<typename S>
 	void serialise(S& s) {
 		serialisation::sequence<S> seq(s);
-		seq & static_cast<reply_base&>(*this) & sequence;
+		seq & static_cast<reply_base&>(*this) & sequence & mode & amode;
 	}
 };
 

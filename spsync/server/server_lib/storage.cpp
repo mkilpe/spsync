@@ -5,11 +5,47 @@
 #include <securepath/log/log.hpp>
 #include <securepath/util/conversions.hpp>
 
+#include <spsync/protocol/error.hpp>
+
+#include <ctime>
 #include <filesystem>
 
 namespace securepath::sync {
+namespace {
 
-storage::storage(protocol::storage_id id, storage_config config)
+storage_modes load_or_create_modes(database::connection& db, std::optional<storage_modes> const& requested, std::string const& log_id) {
+	if(!db.has_table("storage_config")) {
+		db.prepare("CREATE TABLE storage_config("
+			"key INTEGER PRIMARY KEY CHECK(key = 1),"
+			"sync_mode INTEGER,"
+			"auth_mode INTEGER,"
+			"created_at INTEGER);").execute();
+	}
+	auto q = db.prepare("SELECT sync_mode, auth_mode FROM storage_config WHERE key = 1;");
+	auto res = q.execute();
+	if(res) {
+		storage_modes persisted{
+			sync_mode(res.value<std::int64_t>(0).value_or(0)),
+			auth_mode(res.value<std::int64_t>(1).value_or(0))};
+		if(requested && *requested != persisted) {
+			LOG_WARN("storage exists with different modes (rsid={})", log_id);
+			throw make_error(protocol::errc::storage_mode_mismatch, "storage exists with different modes");
+		}
+		return persisted;
+	}
+	storage_modes m = requested.value_or(storage_modes{});
+	auto ins = db.prepare("INSERT INTO storage_config(key, sync_mode, auth_mode, created_at) VALUES(1, :m, :a, :c);");
+	ins.bind(":m", static_cast<std::int64_t>(m.mode));
+	ins.bind(":a", static_cast<std::int64_t>(m.auth));
+	ins.bind(":c", static_cast<std::int64_t>(std::time(nullptr)));
+	ins.execute();
+	LOG_INFO("storage modes persisted [mode={}, auth={}] (rsid={})", int(m.mode), int(m.auth), log_id);
+	return m;
+}
+
+}
+
+storage::storage(protocol::storage_id id, storage_config config, std::optional<storage_modes> create_modes)
 : config_(std::move(config))
 , id_(std::move(id))
 {
@@ -21,8 +57,8 @@ storage::storage(protocol::storage_id id, storage_config config)
 	std::filesystem::create_directories(path);
 
 	auto db_conn = database::sqlite::create_sqlite_connection(db);
-	//t: read from db
-	chain_sync_config sync_config{sync_mode::require_all_seen, auth_mode::only_tag, to_hex(id_)};
+	modes_ = load_or_create_modes(*db_conn, create_modes, to_hex(id_));
+	chain_sync_config sync_config{modes_.mode, modes_.auth, to_hex(id_)};
 
 	sync_ = std::make_unique<chain_sync>(db_conn, sync_config);
 }

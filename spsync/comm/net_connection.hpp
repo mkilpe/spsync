@@ -2,6 +2,7 @@
 #define SPSYNC_COMM_NET_CONNECTION_HEADER
 
 #include <spsync/comm/interface.hpp>
+#include <spsync/core/sync_mode.hpp>
 #include <securepath/network/encryption/context.hpp>
 #include <securepath/event_system/event_loop.hpp>
 
@@ -65,11 +66,12 @@ public:
 	void close();
 
 	/// Create storage on the server, one should wait for the on_create_storage event to see if the network call succeeded
-	storage_id create_storage();
+	storage_id create_storage(std::optional<storage_modes> modes = {});
 	void destroy_storage(storage_id const&);
 
 	/// Create storage connection, returns storage connection helper. Nothing is received before the attach on the returned object is called.
-	storage_connection create_storage_connection(storage_id, record_storage&, sync::progress&);
+	/// When expected_modes is set, the server rejects the connection flow with storage_mode_mismatch if the storage modes differ.
+	storage_connection create_storage_connection(storage_id, record_storage&, sync::progress&, std::optional<storage_modes> expected_modes = {});
 
 	/// This will destroy the underlying comm_input, so make sure nothing is using it any more when this is called
 	void detach(storage_id const& id);

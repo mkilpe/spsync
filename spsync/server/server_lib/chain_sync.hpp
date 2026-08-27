@@ -28,7 +28,11 @@ struct chain_sync_config {
 };
 
 /**
- * Server side block chain handler
+ * Server side block chain handler.
+ *
+ * The mode enforcement cursors are derived from the record storage by replay on construction,
+ * so enforcement survives restarts. validate() and apply() are separated so that a replication
+ * layer can validate on the leader and apply deterministically on every replica.
  */
 class chain_sync {
 public:
@@ -40,30 +44,46 @@ public:
 	/// get the records [start, end], returns only maximum of config.max_returned_records at once
 	std::deque<chain_block> get_records(sequence_number start, sequence_number end) const;
 
-	/// try to commit chain block
+	/// check whether the block could be committed in the current state, without changing anything
+	error validate(chain_block const&) const;
+
+	/**
+	 * Append the block to the chain. The caller is expected to have validated the block;
+	 * apply only classifies it (for the mode cursors) and saves it.
+	 */
+	chain_block apply(chain_block const&);
+
+	/// try to commit chain block (validate + apply)
 	util::result<chain_block> commit_block(chain_block const&);
 
 	record_storage& records() { return records_; }
 	record_storage const& records() const { return records_; }
 
 private:
-	chain_block set_and_save_block(chain_block block);
-	error can_block_be_committed(chain_block const& block) const;
-	error check_rules(data_change_record const& rec) const;
-	error check_rules(user_change_record const& rec) const;
-	error check_rules(segment_record const& rec) const;
-	error check_rules_add(data_change_record const& rec, single_change const& change) const;
-	error check_rules_existing(data_change_record const& rec, single_change const& change) const;
+	enum class rec_type { none = 0, data_add_remove, special };
+	struct rule_result {
+		error err;
+		rec_type type{rec_type::none};
+	};
+
+	/// duplicate check + rule evaluation + classification; does not change any state
+	rule_result evaluate(chain_block const& block) const;
+
+	chain_block set_and_save_block(chain_block block, rec_type type);
+	rule_result check_rules(data_change_record const& rec) const;
+	rule_result check_rules(user_change_record const& rec) const;
+	rule_result check_rules(segment_record const& rec) const;
+	error check_rules_add(data_change_record const& rec) const;
+	error check_rules_existing(data_change_record const& rec) const;
 	error check_rules_special_seen(chain_block_id const& last_seen_block) const;
 private:
 	chain_sync_config config_;
 	record_storage records_;
 	chain_block_id last_block_;
 
+	// enforcement cursors, replayed from the storage on construction and advanced on apply
 	sequence_number last_data_add_remove_;
 	sequence_number last_user_change_or_segment_;
-
-	mutable enum class rec_type { none, data_add_remove, special } current_record_{rec_type::none};
 };
 
 }

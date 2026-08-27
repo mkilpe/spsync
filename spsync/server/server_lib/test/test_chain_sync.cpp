@@ -178,4 +178,65 @@ TEST_CASE("chain_sync require data add remove config", "[unit]") {
 }
 
 
+
+// (5) mode cursors are replayed from the database on reopen (defect B1)
+TEST_CASE("chain_sync special cursor replay on reopen", "[unit]") {
+	remove_database_test_db();
+	test_block_creator creator;
+	test_block_creator stale;
+	{
+		chain_sync sync(database::sqlite::create_sqlite_connection(db_name), chain_sync_config{sync_mode::require_special_seen});
+		CHECK(sync.commit_block(creator.test_user_change()));
+		stale = creator; // has seen only the first special record
+		CHECK(sync.commit_block(creator.test_user_change()));
+	}
+	{
+		chain_sync sync(database::sqlite::create_sqlite_connection(db_name), chain_sync_config{sync_mode::require_special_seen});
+		CHECK(sync.current_sequence_number() == creator.last_server_seq);
+		// a client that has not seen the newest special record must still be rejected after restart
+		CHECK(check_result_error(sync.commit_block(stale.test_user_change()), protocol::errc::record_out_of_sync));
+		CHECK(sync.commit_block(creator.test_data_change()));
+	}
+}
+
+// (6) data add cursor is replayed from the database on reopen (defect B1)
+TEST_CASE("chain_sync data add cursor replay on reopen", "[unit]") {
+	remove_database_test_db();
+	test_block_creator creator;
+	test_block_creator stale;
+	{
+		chain_sync sync(database::sqlite::create_sqlite_connection(db_name), chain_sync_config{sync_mode::require_data_add_remove_seen});
+		CHECK(sync.commit_block(creator.test_user_change()));
+		stale = creator; // has seen only the first record
+		CHECK(sync.commit_block(creator.test_data_change()));
+	}
+	{
+		chain_sync sync(database::sqlite::create_sqlite_connection(db_name), chain_sync_config{sync_mode::require_data_add_remove_seen});
+		// a client that has not seen the add at seq 2 must still be rejected after restart
+		CHECK(check_result_error(sync.commit_block(stale.test_data_change()), protocol::errc::record_out_of_sync));
+		CHECK(sync.commit_block(creator.test_data_change()));
+	}
+}
+
+// (7) validate/apply split behaves like commit_block
+TEST_CASE("chain_sync validate and apply", "[unit]") {
+	remove_database_test_db();
+	chain_sync sync(database::sqlite::create_sqlite_connection(db_name), chain_sync_config{sync_mode::require_all_seen});
+
+	test_block_creator creator;
+	auto b1 = creator.test_user_change();
+	CHECK(!sync.validate(b1));
+	auto committed = sync.apply(b1);
+	CHECK(committed.sequence() == sequence_number{1});
+	CHECK(sync.current_sequence_number() == sequence_number{1});
+
+	// after apply the same block is a duplicate
+	CHECK(bool(sync.validate(b1)));
+	CHECK(check_result_error(sync.commit_block(b1), protocol::errc::record_already_committed));
+
+	auto b2 = creator.test_data_change();
+	CHECK(!sync.validate(b2));
+	CHECK(sync.commit_block(b2));
+}
+
 }

@@ -6,10 +6,17 @@
 #include "message_storage.hpp"
 
 #include <spsync/client/client_sync.hpp>
+#include <spsync/core/sync_mode.hpp>
 
 namespace securepath::groupchat {
 
 class groupchat;
+
+/// The storage modes every chat channel operates with; the storage is created with these
+/// and every joining client states them as its expectation.
+inline sync::storage_modes channel_storage_modes() {
+	return {sync::sync_mode::require_all_seen, sync::auth_mode::sign_records};
+}
 
 class channel : public sync::client_sync
 {

@@ -39,12 +39,20 @@ struct client_hello : protocol_base {
 
 /// Create storage with specific storage id
 struct create_storage : storage_request_base {
-	using storage_request_base::storage_request_base;
+	create_storage(call_id cid = 0, storage_id sid = {}, std::uint32_t mode = 0, std::uint32_t amode = 0)
+	: storage_request_base(cid, std::move(sid))
+	, mode(mode)
+	, amode(amode)
+	{}
+
+	/// requested storage modes, wire encoded (0 = server default); immutable after creation
+	std::uint32_t mode{0};
+	std::uint32_t amode{0};
 
 	template<typename S>
 	void serialise(S& s) {
 		serialisation::sequence<S> seq(s);
-		seq & static_cast<storage_request_base&>(*this);
+		seq & static_cast<storage_request_base&>(*this) & mode & amode;
 	}
 };
 
@@ -74,12 +82,21 @@ struct storage_management : storage_request_base {
 
 /// request the current sequence number for storage
 struct request_sequence_number : storage_request_base {
-	using storage_request_base::storage_request_base;
+	request_sequence_number(call_id cid = 0, storage_id sid = {}, std::uint32_t expected_mode = 0, std::uint32_t expected_amode = 0)
+	: storage_request_base(cid, std::move(sid))
+	, expected_mode(expected_mode)
+	, expected_amode(expected_amode)
+	{}
+
+	/// the modes the client expects the storage to have, wire encoded (0 = no check);
+	/// the server replies with storage_mode_mismatch when they differ from the storage
+	std::uint32_t expected_mode{0};
+	std::uint32_t expected_amode{0};
 
 	template<typename S>
 	void serialise(S& s) {
 		serialisation::sequence<S> seq(s);
-		seq & static_cast<storage_request_base&>(*this);
+		seq & static_cast<storage_request_base&>(*this) & expected_mode & expected_amode;
 	}
 };
 

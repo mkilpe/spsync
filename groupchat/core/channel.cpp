@@ -29,7 +29,7 @@ channel::channel(chat_conn_context& context, chat_id const& cid, database::conne
 	context.context,
 	context.callback.event_loop(),
 	db,
-	sync::sync_engine_config{.auth_mode=sync::auth_mode::sign_records, .log_id=to_hex(cid)})
+	sync::sync_engine_config{.mode=channel_storage_modes().mode, .auth_mode=channel_storage_modes().auth, .log_id=to_hex(cid)})
 , ccontext_(context)
 , chat_id_(cid)
 , messages_(db)

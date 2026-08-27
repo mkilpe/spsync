@@ -58,9 +58,10 @@ void network_connection::close() {
 	impl_->close();
 }
 
-storage_id network_connection::create_storage() {
+storage_id network_connection::create_storage(std::optional<storage_modes> modes) {
 	storage_id id = crypto::random_octet_vector(16);
-	impl_->send(protocol::create_storage{++impl_->call_id, id});
+	auto [wm, wa] = to_wire(modes);
+	impl_->send(protocol::create_storage{++impl_->call_id, id, wm, wa});
 	return id;
 }
 
@@ -68,8 +69,8 @@ void network_connection::destroy_storage(storage_id const&) {
 	assert(0 && "not implemented");
 }
 
-storage_connection network_connection::create_storage_connection(storage_id id, record_storage& storage, sync::progress& progress) {
-	auto p = std::make_unique<comm>(&*impl_, id, storage, progress);
+storage_connection network_connection::create_storage_connection(storage_id id, record_storage& storage, sync::progress& progress, std::optional<storage_modes> expected_modes) {
+	auto p = std::make_unique<comm>(&*impl_, id, storage, progress, expected_modes);
 	std::unique_lock lock{impl_->mutex};
 	auto ret = impl_->comms.insert(std::make_pair(id, std::move(p)));
 	if(!ret.second || impl_->attached_comms.count(id)) {

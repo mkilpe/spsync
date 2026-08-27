@@ -47,7 +47,7 @@ void connection::handle(protocol::create_storage const& p) {
 	LOG_TRACE("create_storage for user {}", id_);
 	securepath::error error;
 	try {
-		auto handle = context_.acquire_sync(p.sid);
+		auto handle = context_.acquire_sync(p.sid, modes_from_wire(p.mode, p.amode));
 		syncs_.emplace(p.sid, handle);
 		handle->add_listener(shared_from_this());
 	} catch(securepath::error const& err) {
@@ -74,10 +74,18 @@ void connection::handle(protocol::request_sequence_number const& p) {
 	LOG_TRACE("request_sequence_number for user {}", id_);
 	securepath::error error;
 	sequence_number seq;
+	storage_modes smodes{};
 	try {
 		auto handle = find_storage(p.sid);
 		if(handle) {
-			seq = handle->current_sequence_number();
+			smodes = handle->modes();
+			auto expected = modes_from_wire(p.expected_mode, p.expected_amode);
+			if(expected && *expected != smodes) {
+				LOG_INFO("storage mode mismatch for user {} (sid={})", id_, to_hex(p.sid));
+				error = make_error(protocol::errc::storage_mode_mismatch);
+			} else {
+				seq = handle->current_sequence_number();
+			}
 		} else {
 			LOG_WARN("no such storage: {}", to_hex(p.sid));
 			error = make_error(protocol::errc::no_such_storage);
@@ -92,7 +100,8 @@ void connection::handle(protocol::request_sequence_number const& p) {
 	if(error) {
 		send_packet(protocol::response_sequence_number{p, error});
 	} else {
-		send_packet(protocol::response_sequence_number{p, seq});
+		auto [wm, wa] = to_wire(std::optional<storage_modes>{smodes});
+		send_packet(protocol::response_sequence_number{p, seq, wm, wa});
 	}
 }
 
