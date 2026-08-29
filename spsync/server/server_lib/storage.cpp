@@ -14,19 +14,25 @@ namespace securepath::sync {
 namespace {
 
 storage_modes load_or_create_modes(database::connection& db, std::optional<storage_modes> const& requested, std::string const& log_id) {
+	if(requested && !valid_storage_modes(*requested)) {
+		LOG_WARN("replicated storage requires signed records (rsid={})", log_id);
+		throw make_error(protocol::errc::invalid_storage_modes, "replicated storage requires sign_records");
+	}
 	if(!db.has_table("storage_config")) {
 		db.prepare("CREATE TABLE storage_config("
 			"key INTEGER PRIMARY KEY CHECK(key = 1),"
 			"sync_mode INTEGER,"
 			"auth_mode INTEGER,"
+			"replication INTEGER,"
 			"created_at INTEGER);").execute();
 	}
-	auto q = db.prepare("SELECT sync_mode, auth_mode FROM storage_config WHERE key = 1;");
+	auto q = db.prepare("SELECT sync_mode, auth_mode, replication FROM storage_config WHERE key = 1;");
 	auto res = q.execute();
 	if(res) {
 		storage_modes persisted{
 			sync_mode(res.value<std::int64_t>(0).value_or(0)),
-			auth_mode(res.value<std::int64_t>(1).value_or(0))};
+			auth_mode(res.value<std::int64_t>(1).value_or(0)),
+			replication_mode(res.value<std::int64_t>(2).value_or(0))};
 		if(requested && *requested != persisted) {
 			LOG_WARN("storage exists with different modes (rsid={})", log_id);
 			throw make_error(protocol::errc::storage_mode_mismatch, "storage exists with different modes");
@@ -34,9 +40,10 @@ storage_modes load_or_create_modes(database::connection& db, std::optional<stora
 		return persisted;
 	}
 	storage_modes m = requested.value_or(storage_modes{});
-	auto ins = db.prepare("INSERT INTO storage_config(key, sync_mode, auth_mode, created_at) VALUES(1, :m, :a, :c);");
+	auto ins = db.prepare("INSERT INTO storage_config(key, sync_mode, auth_mode, replication, created_at) VALUES(1, :m, :a, :r, :c);");
 	ins.bind(":m", static_cast<std::int64_t>(m.mode));
 	ins.bind(":a", static_cast<std::int64_t>(m.auth));
+	ins.bind(":r", static_cast<std::int64_t>(m.replication));
 	ins.bind(":c", static_cast<std::int64_t>(std::time(nullptr)));
 	ins.execute();
 	LOG_INFO("storage modes persisted [mode={}, auth={}] (rsid={})", int(m.mode), int(m.auth), log_id);

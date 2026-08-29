@@ -18,6 +18,7 @@ enum class errc {
 	invalid_state,
 	storage_mode_mismatch,
 	unknown_signer,
+	invalid_storage_modes,
 	end_of_list
 };
 

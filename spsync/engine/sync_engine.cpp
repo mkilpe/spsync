@@ -479,9 +479,19 @@ public:
 #define LINFO(format, ...) LOG_INFO(format " (rsid={})" __VA_OPT__(,) __VA_ARGS__, impl_->config.log_id)
 #define LWARN(format, ...) LOG_WARN(format " (rsid={})" __VA_OPT__(,) __VA_ARGS__, impl_->config.log_id)
 
+namespace {
+
+void check_engine_config(sync_engine_config const& config) {
+	if(!valid_storage_modes(storage_modes{config.mode, config.auth_mode, config.replication})) {
+		throw make_error(errc::invalid_configuration, "replicated storage requires sign_records");
+	}
+}
+
+}
+
 sync_engine::sync_engine(event_system::event_loop& loop, comm_input& comm, crypto_context& cc, sync_engine_config config)
 : comm_output(loop)
-, impl_(std::make_unique<impl>(comm, cc, std::move(config)))
+, impl_((check_engine_config(config), std::make_unique<impl>(comm, cc, std::move(config))))
 {
 }
 
@@ -496,6 +506,7 @@ void sync_engine::set_output(engine_output* output) {
 }
 
 void sync_engine::set_config(sync_engine_config config) {
+	check_engine_config(config);
 	std::unique_lock lock{impl_->mutex};
 	impl_->config = std::move(config);
 }

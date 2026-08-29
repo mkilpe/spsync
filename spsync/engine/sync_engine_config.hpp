@@ -31,6 +31,10 @@ struct sync_engine_config {
 	/// what to do when an object changed underneath a pending record
 	conflict_policy conflicts{conflict_policy::rebase_on_top};
 
+	/// the replication mode the storage is expected to have (plan 2.4: replication
+	/// requires sign_records, the engine refuses an invalid combination)
+	replication_mode replication{replication_mode::none};
+
 	/// this is id for the repository, it is only used for logging to help trace/debug things if set
 	std::string log_id;
 };

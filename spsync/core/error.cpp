@@ -12,6 +12,7 @@ namespace {
 		, "constraint violation"
 		, "invalid record state"
 		, "not authentic"
+		, "invalid configuration"
 		};
 
 	static_assert(sizeof(errors)/sizeof(*errors)

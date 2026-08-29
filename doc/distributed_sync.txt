@@ -591,9 +591,18 @@ sends without the group key.
       verification, after the groupchat mode mismatch in 0.5).
       Full build + suite 22/22 green. B7 is CLOSED.
 
-- 2.4 Mandatory signing for replicated storages                                   [0.5d]
++ 2.4 Mandatory signing for replicated storages -- done 2026-08-29                [0.5d]
       storage_config.replication != none requires auth_mode::sign_records; refuse to
       create otherwise. Engine refuses to join a replicated storage in only_tag.
+      Implemented: replication_mode{none,weak,strict} added to storage_modes (third
+      wire field on create_storage/request_sequence_number/response_sequence_number,
+      persisted replication column, part of the immutability + mismatch checks);
+      one rule valid_storage_modes() in sync_mode.hpp; server refuses creation with
+      new errc::invalid_storage_modes; the engine throws errc::invalid_configuration
+      from its ctor and set_config (fail fast, no silent downgrade);
+      sync_engine_config gains .replication and client_sync states it as part of the
+      expectation. Tests: storage refusal/persistence/mismatch, engine refusal.
+      Full build + suite 22/22 green.
 
 - 2.5 Server signed sequence assignment  (D7, first use)                          [1d]
       block_envelope { chain_block block; server_id origin; uint64 term{0};

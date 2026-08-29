@@ -60,8 +60,8 @@ void network_connection::close() {
 
 storage_id network_connection::create_storage(std::optional<storage_modes> modes) {
 	storage_id id = crypto::random_octet_vector(16);
-	auto [wm, wa] = to_wire(modes);
-	impl_->send(protocol::create_storage{++impl_->call_id, id, wm, wa});
+	auto [wm, wa, wr] = to_wire(modes);
+	impl_->send(protocol::create_storage{++impl_->call_id, id, wm, wa, wr});
 	return id;
 }
 

@@ -48,7 +48,7 @@ struct client_sync::impl : engine_output {
 	}
 
 	void init(storage_id const& sid, network_connection& conn) {
-		storage_connection sconn{conn.create_storage_connection(sid, storage, progress, storage_modes{config.mode, config.auth_mode})};
+		storage_connection sconn{conn.create_storage_connection(sid, storage, progress, storage_modes{config.mode, config.auth_mode, config.replication})};
 		engine = std::make_unique<sync_engine>(event_loop(), sconn.input(), crypto, config);
 		engine->set_output(this);
 

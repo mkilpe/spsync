@@ -314,4 +314,14 @@ TEST_CASE("engine weak mode rejects conflicting sequence", "[unit]") {
 	CHECK(rejected->state() == record_state::invalid);
 }
 
+
+// * the engine refuses a replicated configuration without signing (plan 2.4)
+TEST_CASE("engine refuses replication without signing", "[unit]") {
+	CHECK_THROWS(test::engine_context{sync_engine_config{
+		.auth_mode=sync::auth_mode::only_tag, .replication=replication_mode::weak}});
+	// with signing the configuration is accepted
+	test::engine_context ok{sync_engine_config{
+		.auth_mode=sync::auth_mode::sign_records, .replication=replication_mode::weak}};
+}
+
 }

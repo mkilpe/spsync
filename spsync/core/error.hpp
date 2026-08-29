@@ -12,6 +12,7 @@ enum class errc {
 	constraint_violation,
 	invalid_record_state,
 	not_authentic,
+	invalid_configuration,
 	end_of_list
 };
 

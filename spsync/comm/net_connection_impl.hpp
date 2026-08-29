@@ -114,8 +114,8 @@ struct network_connection_impl : network::encrypted_connection {
 
 	request_handle fetch_sequence_number(storage_id id, std::optional<storage_modes> expected_modes = {}) {
 		auto h = ++call_id;
-		auto [wm, wa] = to_wire(expected_modes);
-		send(protocol::request_sequence_number{h, std::move(id), wm, wa});
+		auto [wm, wa, wr] = to_wire(expected_modes);
+		send(protocol::request_sequence_number{h, std::move(id), wm, wa, wr});
 		return h;
 	}
 
