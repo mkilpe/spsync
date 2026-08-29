@@ -2,6 +2,7 @@
 #define SPSYNC_COMM_TYPES_HEADER
 
 #include <spsync/core/record_interface.hpp>
+#include <spsync/core/records/block_envelope.hpp>
 #include <spsync/util/result.hpp>
 
 #include <cstdint>
@@ -32,6 +33,8 @@ struct commit_response {
 	sequence_number server_max_sequence;
 	/// result of the commit request
 	result<chain_block> data;
+	/// the server signed sequence assignment for the committed record
+	std::optional<block_envelope> envelope;
 };
 
 }

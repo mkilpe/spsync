@@ -471,4 +471,21 @@ TEST_CASE("record_storage acked state", "[unit]") {
 	CHECK(storage.find(block.sequence()) == h);
 }
 
+
+TEST_CASE("record_storage assignment round-trip", "[unit]") {
+	remove_database_test_db();
+	auto db_conn = database::sqlite::create_sqlite_connection(db_name);
+	record_storage storage(db_conn);
+
+	test_block_creator creator;
+	auto h = storage.create(creator.test_user_change(), record_state::in_sync);
+	REQUIRE(h);
+	CHECK(h->assignment().empty());
+
+	octet_vector env = securepath::test::random_octet_vector(64);
+	h->set_assignment(env);
+	CHECK(h->assignment() == env);
+	CHECK(storage.find_tag(h->tag())->assignment() == env);
+}
+
 }

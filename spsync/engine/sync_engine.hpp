@@ -39,7 +39,7 @@ public:
 	virtual void on_data_response(request_handle, result<record_data_handle> const&);
 	virtual void on_commit_response(request_handle, commit_response const&);
 	virtual void on_data_uploaded(request_handle, std::optional<error>);
-	virtual void on_record_received(chain_block const&);
+	virtual void on_record_received(chain_block const&, std::optional<block_envelope> const& = {});
 
 	// --- engine_input interface, see interface.hpp ---
 	virtual record_handle sync_object_change(object_id, metadata, record_data_handle = {});

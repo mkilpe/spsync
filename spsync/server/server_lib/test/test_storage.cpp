@@ -3,6 +3,11 @@
 
 #include <spsync/protocol/error.hpp>
 #include <spsync/server/server_lib/storage.hpp>
+#include <spsync/test/test_block_creator.hpp>
+
+#include <securepath/crypto/key_generation.hpp>
+#include <securepath/crypto/private_data_cache.hpp>
+#include <securepath/crypto/public_key_cache.hpp>
 
 #include <filesystem>
 
@@ -58,6 +63,39 @@ TEST_CASE("replicated storage requires signed records", "[unit]") {
 	}
 	// a different replication mode for an existing storage is a mismatch
 	CHECK_THROWS(storage(sid, cfg, storage_modes{sync_mode::require_all_seen, auth_mode::sign_records, replication_mode::strict}));
+
+	std::filesystem::remove_all(root);
+}
+
+
+TEST_CASE("storage signs the sequence assignment", "[unit]") {
+	std::string const root = "test-storage-root-env";
+	std::filesystem::remove_all(root);
+	protocol::storage_id sid = securepath::test::random_octet_vector(8);
+	storage_config cfg{root};
+
+	crypto::public_key_cache keys;
+	crypto::private_data_cache pdata;
+	auto server_key = crypto::generate_private_key();
+	pdata.set_my_private_key(server_key);
+	keys.insert(server_key.public_key());
+
+	storage s(sid, cfg, storage_modes{}, &keys, &pdata);
+	test::test_block_creator creator;
+	auto outcome = s.commit_block(creator.test_user_change());
+	REQUIRE(outcome.block);
+	REQUIRE(outcome.envelope);
+	CHECK(outcome.envelope->is_signed());
+	CHECK(outcome.envelope->origin() == server_key.id());
+	CHECK(!outcome.envelope->verify(sid, keys));
+
+	// without a signing key there is no envelope (fresh chain, fresh creator)
+	std::filesystem::remove_all(root);
+	storage s2(sid, cfg);
+	test::test_block_creator creator2;
+	auto outcome2 = s2.commit_block(creator2.test_user_change());
+	REQUIRE(outcome2.block);
+	CHECK(!outcome2.envelope);
 
 	std::filesystem::remove_all(root);
 }

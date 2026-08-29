@@ -3,6 +3,10 @@
 
 #include "storage_server_context.hpp"
 
+#include <spsync/core/records/block_envelope.hpp>
+
+#include <optional>
+
 #include <spsync/protocol/client_protocol.hpp>
 #include <securepath/crypto/public_key_id.hpp>
 
@@ -26,7 +30,7 @@ public:
 	void handle(protocol::request_data const&);
 	void handle(protocol::request_commit const&);
 
-	void notify(protocol::storage_id const& sid, chain_block const&);
+	void notify(protocol::storage_id const& sid, chain_block const&, std::optional<block_envelope> const&);
 
 private:
 	virtual void send(octet_span s) = 0;

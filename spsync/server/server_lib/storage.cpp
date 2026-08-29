@@ -7,6 +7,8 @@
 
 #include <spsync/protocol/error.hpp>
 
+#include <securepath/crypto/private_data_access.hpp>
+
 #include <ctime>
 #include <filesystem>
 
@@ -53,9 +55,10 @@ storage_modes load_or_create_modes(database::connection& db, std::optional<stora
 }
 
 storage::storage(protocol::storage_id id, storage_config config, std::optional<storage_modes> create_modes,
-	crypto::public_key_access* keys)
+	crypto::public_key_access* keys, crypto::private_data_access* private_data)
 : config_(std::move(config))
 , id_(std::move(id))
+, private_data_(private_data)
 {
 	std::string path = config_.storage_root_path() + "/" + to_hex(id_);
 	std::string db = path + "/storage.db";
@@ -81,13 +84,26 @@ std::deque<chain_block> storage::get_records(sequence_number start, sequence_num
 	return sync_->get_records(start, end);
 }
 
-util::result<chain_block> storage::commit_block(chain_block const& cb) {
-	std::unique_lock l{mutex_};
-	auto res = sync_->commit_block(cb);
-	if(res) {
-		notify_listeners(res.value());
+std::optional<block_envelope> storage::make_envelope(chain_block const& block) const {
+	std::optional<block_envelope> env;
+	if(private_data_) {
+		auto key = private_data_->my_private_key();
+		if(key) {
+			env = block_envelope{block, key->id()};
+			env->sign(id_, *key);
+		}
 	}
-	return res;
+	return env;
+}
+
+storage::commit_outcome storage::commit_block(chain_block const& cb) {
+	std::unique_lock l{mutex_};
+	commit_outcome outcome{sync_->commit_block(cb)};
+	if(outcome.block) {
+		outcome.envelope = make_envelope(outcome.block.value());
+		notify_listeners(outcome.block.value(), outcome.envelope);
+	}
+	return outcome;
 }
 
 void storage::add_listener(std::shared_ptr<connection> const& p) {
@@ -95,11 +111,11 @@ void storage::add_listener(std::shared_ptr<connection> const& p) {
 	listeners_[&*p] = p;
 }
 
-void storage::notify_listeners(chain_block const& c) {
+void storage::notify_listeners(chain_block const& c, std::optional<block_envelope> const& env) {
 	for(auto it = listeners_.begin(); it != listeners_.end(); ) {
 		auto p = it->second.lock();
 		if(p) {
-			p->notify(id_, c);
+			p->notify(id_, c, env);
 			++it;
 		} else {
 			it = listeners_.erase(it);

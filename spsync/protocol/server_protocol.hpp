@@ -2,6 +2,7 @@
 #define SPSYNC_PROTOCOL_SERVER_PROTOCOL_HEADER
 
 #include "protocol_base.hpp"
+#include <spsync/core/records/block_envelope.hpp>
 
 namespace securepath::sync::protocol {
 inline namespace v1 {
@@ -109,35 +110,41 @@ struct response_data : reply_base {
 struct response_commit : reply_base {
 	using reply_base::reply_base;
 
-	response_commit(storage_request_base const& p, sequence_number max, chain_block r)
+	response_commit(storage_request_base const& p, sequence_number max, chain_block r, std::optional<block_envelope> env = {})
 	: reply_base(p)
 	, server_max_sequence(max)
 	, record(std::move(r))
+	, envelope(std::move(env))
 	{}
 
 	sequence_number server_max_sequence;
 	std::optional<chain_block> record;
+	/// the server signed sequence assignment (when the server has a signing key)
+	std::optional<block_envelope> envelope;
 
 	template<typename S>
 	void serialise(S& s) {
 		serialisation::sequence<S> seq(s);
-		seq & static_cast<reply_base&>(*this) & server_max_sequence & record;
+		seq & static_cast<reply_base&>(*this) & server_max_sequence & record & envelope;
 	}
 };
 
 struct notify_record {
-	notify_record(storage_id sid = {}, chain_block r = {})
+	notify_record(storage_id sid = {}, chain_block r = {}, std::optional<block_envelope> env = {})
 	: sid(std::move(sid))
 	, record(std::move(r))
+	, envelope(std::move(env))
 	{}
 
 	storage_id sid;
 	chain_block record;
+	/// the server signed sequence assignment (when the server has a signing key)
+	std::optional<block_envelope> envelope;
 
 	template<typename S>
 	void serialise(S& s) {
 		serialisation::sequence<S> seq(s);
-		seq & sid & record;
+		seq & sid & record & envelope;
 	}
 };
 

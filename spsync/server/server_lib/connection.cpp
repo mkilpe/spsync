@@ -142,11 +142,14 @@ void connection::handle(protocol::request_commit const& p) {
 	LOG_TRACE("request_commit for user {}", id_);
 	securepath::error error;
 	util::result<chain_block> result;
+	std::optional<block_envelope> envelope;
 	sequence_number server_max;
 	try {
 		auto handle = find_storage(p.sid);
 		if(handle) {
-			result = handle->commit_block(p.record);
+			auto outcome = handle->commit_block(p.record);
+			result = std::move(outcome.block);
+			envelope = std::move(outcome.envelope);
 			server_max = handle->current_sequence_number();
 		} else {
 			LOG_WARN("no such storage: {}", to_hex(p.sid));
@@ -160,14 +163,14 @@ void connection::handle(protocol::request_commit const& p) {
 		result = make_error(securepath::errc::unknown_error);
 	}
 	if(result) {
-		send_packet(protocol::response_commit{p, server_max, std::move(result.value())});
+		send_packet(protocol::response_commit{p, server_max, std::move(result.value()), std::move(envelope)});
 	} else {
 		send_packet(protocol::response_commit{p, std::move(result.get_error())});
 	}
 }
 
-void connection::notify(protocol::storage_id const& sid, chain_block const& c) {
-	send_packet(protocol::notify_record{sid, c});
+void connection::notify(protocol::storage_id const& sid, chain_block const& c, std::optional<block_envelope> const& env) {
+	send_packet(protocol::notify_record{sid, c, env});
 }
 
 }

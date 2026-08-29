@@ -165,6 +165,8 @@ TEST_CASE("connection test", "[system]") {
 	}
 
 	WAIT_CHECK(client.storage.last_block().sequence == sequence_number{6}, 2s);
+	// the server signed sequence assignment was stored with the committed records
+	WAIT_CHECK(!client.storage.find(sequence_number{1})->assignment().empty(), 2s);
 }
 
 // (2) connect two clients, first creates storage, second one joins it

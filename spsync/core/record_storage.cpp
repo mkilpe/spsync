@@ -142,6 +142,24 @@ public:
 		return record_key_;
 	}
 
+	void set_assignment(octet_vector const& env) override {
+		auto q = db_->prepare("UPDATE record SET envelope = :e WHERE key = :k;");
+		q.bind(":e", env);
+		q.bind(":k", record_key_);
+		q.execute();
+	}
+
+	octet_vector assignment() const override {
+		auto q = db_->prepare("SELECT envelope FROM record WHERE key = :k;");
+		q.bind(":k", record_key_);
+		auto res = q.execute();
+		octet_vector ret;
+		if(res) {
+			ret = res.value<octet_vector>(0).value_or(octet_vector{});
+		}
+		return ret;
+	}
+
 	void update_record(chain_block const& rec) {
 		LOG_TRACE("updating record to storage {} [bid={}, parent_h={}]", to_hex(rec.tag()), rec.id(), to_hex(rec.parent_hash()));
 
@@ -235,6 +253,7 @@ struct record_storage::impl {
 				"record BLOB,"
 				"type INTEGER, "
 				"op_id BLOB UNIQUE,"
+				"envelope BLOB,"
 				"unique_seq_selector INTEGER DEFAULT NULL,"
 				"UNIQUE(seq, unique_seq_selector));").execute();
 		}

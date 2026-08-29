@@ -259,7 +259,7 @@ public:
 		}
 	}
 
-	void handle_incoming_record(chain_block const& record) {
+	void handle_incoming_record(chain_block const& record, std::optional<block_envelope> const& envelope = {}) {
 		chain_block_id id{record.id()};
 		LINFO("received record block [block id = {}, tag = {}]", id, to_hex(record.tag()));
 
@@ -275,6 +275,12 @@ public:
 				}
 			} else {
 				LTRACE("record block already known [block id = {}, tag = {}]", id, to_hex(record.tag()));
+			}
+			if(envelope) {
+				// keep the server signed assignment with the record (equivocation evidence)
+				if(auto h = records.find_tag(record.tag())) {
+					h->set_assignment(serialisation::asn_der_serialise(*envelope));
+				}
 			}
 		} else {
 			LWARN("server sent invalid record block");
@@ -589,6 +595,9 @@ void sync_engine::on_commit_response(request_handle req_handle, commit_response 
 			auto handle = impl_->records.find_tag(block.tag());
 			if(handle) {
 				impl_->update_record_commit_state(handle, block, id);
+				if(res.envelope) {
+					handle->set_assignment(serialisation::asn_der_serialise(*res.envelope));
+				}
 				impl_->try_commit_pending();
 			} else {
 				LWARN("commit reply with unknown tag [block id = {}, tag = {}]", id, to_hex(block.tag()));
@@ -626,10 +635,10 @@ void sync_engine::on_data_uploaded(request_handle req_handle, std::optional<erro
 	assert(not "implemented");
 }
 
-void sync_engine::on_record_received(chain_block const& block) {
+void sync_engine::on_record_received(chain_block const& block, std::optional<block_envelope> const& envelope) {
 	std::unique_lock lock{impl_->mutex};
 	LINFO("on_record_received [seq = {}]", block.sequence());
-	impl_->handle_incoming_record(block);
+	impl_->handle_incoming_record(block, envelope);
 }
 
 

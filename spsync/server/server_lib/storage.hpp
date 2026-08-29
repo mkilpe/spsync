@@ -2,12 +2,17 @@
 #define SPSYNC_SERVER_STORAGE_HEADER
 
 #include "chain_sync.hpp"
+#include <spsync/core/records/block_envelope.hpp>
 #include "storage_config.hpp"
 
 #include <spsync/protocol/protocol_base.hpp>
 
 #include <mutex>
 #include <unordered_map>
+
+namespace securepath::crypto {
+	class private_data_access;
+}
 
 namespace securepath::sync {
 
@@ -22,7 +27,7 @@ public:
 	 * storage has different modes, construction throws storage_mode_mismatch.
 	 */
 	storage(protocol::storage_id id, storage_config config, std::optional<storage_modes> create_modes = {},
-		crypto::public_key_access* keys = nullptr);
+		crypto::public_key_access* keys = nullptr, crypto::private_data_access* private_data = nullptr);
 	virtual ~storage() = default;
 
 	/// Id of this record storage
@@ -37,19 +42,28 @@ public:
 	/// forwarded to chain_sync
 	std::deque<chain_block> get_records(sequence_number start, sequence_number end) const;
 
-	/// forwarded to chain_sync
-	util::result<chain_block> commit_block(chain_block const&);
+	struct commit_outcome {
+		util::result<chain_block> block;
+		/// the signed sequence assignment; set when the server has a signing key
+		std::optional<block_envelope> envelope;
+	};
+
+	/// forwarded to chain_sync; on success the envelope is signed once and shared by the
+	/// commit response and the listener notifications
+	commit_outcome commit_block(chain_block const&);
 
 	void add_listener(std::shared_ptr<connection> const&);
 
 private:
-	void notify_listeners(chain_block const& c);
+	std::optional<block_envelope> make_envelope(chain_block const&) const;
+	void notify_listeners(chain_block const& c, std::optional<block_envelope> const&);
 
 private:
 	mutable std::mutex mutex_;
 	storage_config config_;
 	protocol::storage_id id_;
 	storage_modes modes_;
+	crypto::private_data_access* private_data_{};
 
 	std::unique_ptr<chain_sync> sync_;
 	std::unordered_map<void const*, std::weak_ptr<connection>> listeners_;

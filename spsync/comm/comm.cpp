@@ -75,6 +75,7 @@ void comm::handle(protocol::response_commit const& p) {
 		}
 	}
 	arg.server_max_sequence = p.server_max_sequence;
+	arg.envelope = p.envelope;
 
 	output_->emit<comm_events::on_commit_response>(p.cid, std::move(arg));
 }
@@ -85,7 +86,7 @@ void comm::handle(protocol::response_data const& p) {
 
 void comm::handle(protocol::notify_record const& p) {
 	assert(output_);
-	output_->emit<comm_events::on_record_received>(p.record);
+	output_->emit<comm_events::on_record_received>(p.record, p.envelope);
 }
 
 request_handle comm::fetch_sequence_number() {

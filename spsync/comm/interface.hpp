@@ -61,8 +61,9 @@ struct comm_output : event_system::event_handler {
 	/// called when all data for a record has been uploaded or error occurred
 	virtual void on_data_uploaded(request_handle, std::optional<error>) = 0;
 
-	/// called when new record is received from the server
-	virtual void on_record_received(chain_block const&) = 0;
+	/// called when new record is received from the server, with the server signed
+	/// assignment when one was sent
+	virtual void on_record_received(chain_block const&, std::optional<block_envelope> const& = {}) = 0;
 
 	/// this converts events to above virtual calls
 	void handle_event(std::unique_ptr<event_system::event_base> ev) override;
@@ -92,7 +93,7 @@ struct on_data_uploaded {
 	typedef void type(request_handle, std::optional<error>);
 };
 struct on_record_received {
-	typedef void type(chain_block const&);
+	typedef void type(chain_block const&, std::optional<block_envelope> const&);
 };
 }
 }

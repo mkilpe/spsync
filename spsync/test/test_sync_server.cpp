@@ -33,7 +33,7 @@ bool test_sync_server_client::handle_events() {
 		while(last_pushed_record_ < server_->sync.current_sequence_number()) {
 			auto recs = server_->sync.get_records(last_pushed_record_+1, server_->sync.current_sequence_number());
 			for(auto&& rec : recs) {
-				output_->on_record_received(rec);
+				output_->on_record_received(rec, {});
 				ret = true;
 			}
 			last_pushed_record_ += recs.size();

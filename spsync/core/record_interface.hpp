@@ -85,6 +85,12 @@ public:
 	/// Set the record data, this used in case the record is changed due to being out of sync
 	virtual void set_record(chain_block const&) = 0;
 
+	/// Store the serialised server signed sequence assignment (block_envelope) for this record
+	virtual void set_assignment(octet_vector const&) = 0;
+
+	/// The serialised server signed sequence assignment, empty when none was received
+	virtual octet_vector assignment() const = 0;
+
 	/// Locally unique id for this record. This id stays the same when updating records in case of conflicting state and so can be used to track non-committed records
 	/// This is strictly increasing as function of created records
 	virtual record_internal_id internal_id() const = 0;

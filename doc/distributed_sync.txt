@@ -604,7 +604,7 @@ sends without the group key.
       expectation. Tests: storage refusal/persistence/mismatch, engine refusal.
       Full build + suite 22/22 green.
 
-- 2.5 Server signed sequence assignment  (D7, first use)                          [1d]
++ 2.5 Server signed sequence assignment  (D7, first use) -- done 2026-08-29      [1d]
       block_envelope { chain_block block; server_id origin; uint64 term{0};
                        signature over (storage_id, origin, term, seq, block hash) }
       response_commit and notify_record carry the envelope (new optional field via
@@ -613,6 +613,20 @@ sends without the group key.
       Client stores the envelope with the record (new blob column).
       This is what makes equivocation *provable* later: two envelopes from one origin
       with equal (storage, term, seq) and different hashes.
+      Implemented: block_envelope in core/records (block, origin key id, term=0,
+      ML-DSA signature over sha3-512("spsync-assign" || length-prefixed storage_id,
+      origin || term || seq || block hash); verify checks signer == origin);
+      storage::commit_block returns {block, envelope} - signed once, shared by the
+      commit response and notify_record; optional envelope fields appended to
+      response_commit/notify_record; commit_response and on_record_received carry it
+      client side (defaulted param keeps direct callers source compatible); the
+      client stores the serialised envelope in a new record column
+      (set_assignment/assignment). Client side envelope verification is deferred to
+      its consumers (5.4 evidence, 2.6 uses the cheaper back-reference check).
+      Tests: envelope sign/verify/binding (storage id, term), storage signs with a
+      wired key and not without, record storage round-trip, system test asserts the
+      client stored the assignment for a committed record. Full suite green
+      (21/22 in the gate + the fixed server_lib suite rerun, same production code).
 
 - 2.6 Client cross-check of authenticated back references                         [0.5d]
       On incoming record: if we hold an in_sync block at rec.last_seen_block().sequence
