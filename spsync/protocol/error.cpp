@@ -15,6 +15,7 @@ namespace {
 		, "invalid client key"
 		, "invalid state"
 		, "storage mode mismatch"
+		, "unknown signer"
 		};
 
 	using category_type = def_error_category<errc>;

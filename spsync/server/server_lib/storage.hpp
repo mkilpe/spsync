@@ -21,7 +21,8 @@ public:
 	 * first creation and are immutable afterwards; when create_modes is given and an existing
 	 * storage has different modes, construction throws storage_mode_mismatch.
 	 */
-	storage(protocol::storage_id id, storage_config config, std::optional<storage_modes> create_modes = {});
+	storage(protocol::storage_id id, storage_config config, std::optional<storage_modes> create_modes = {},
+		crypto::public_key_access* keys = nullptr);
 	virtual ~storage() = default;
 
 	/// Id of this record storage

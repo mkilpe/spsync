@@ -22,6 +22,10 @@
 * provide side channel for storages groups to send non-stored packets to each others (eg. "writing a message" in gc)
 
 = server
+* commit throughput is sqlite-fsync bound (~85 signed commits/s per storage, measured
+  2026-08-29 on 9950X); WAL + synchronous=NORMAL or commit batching moves it towards the
+  crypto ceiling (~2850/s single-threaded). ML-DSA-65 verify itself is 114us.
+  Benchmark: test_spsync_server_lib "[.performance]" (hidden tag, not run by ctest)
 * update and check user access rights for storage when handling records
 * improve event handling (i.e. try to remove blocking mutexes with strands etc)
 * gather statistics

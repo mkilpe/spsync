@@ -6,9 +6,15 @@
 #include <spsync/core/records/data_change_record.hpp>
 #include <spsync/util/result.hpp>
 
+#include <securepath/crypto/public_key_id.hpp>
 #include <securepath/database/connection.hpp>
 
 #include <memory>
+#include <optional>
+
+namespace securepath::crypto {
+	class public_key_access;
+}
 
 namespace securepath::sync {
 
@@ -36,7 +42,12 @@ struct chain_sync_config {
  */
 class chain_sync {
 public:
-	chain_sync(database::connection_ptr, chain_sync_config config = {});
+	/**
+	 * keys: the public keys the server knows, used to verify record signatures when the
+	 * auth mode is sign_records (plan 2.3/B7); without it only the structural presence
+	 * of a signature is enforced (unit test setups).
+	 */
+	chain_sync(database::connection_ptr, chain_sync_config config = {}, crypto::public_key_access* keys = nullptr);
 
 	/// returns the latest sequence number
 	sequence_number current_sequence_number() const;
@@ -64,11 +75,15 @@ private:
 	struct rule_result {
 		error err;
 		rec_type type{rec_type::none};
+		/// the verified signer of the record (set under sign_records); the access rights
+		/// hook for phase 7
+		std::optional<crypto::public_key_id> signer;
 	};
 
 	/// duplicate check + rule evaluation + classification; does not change any state
 	rule_result evaluate(chain_block const& block) const;
 
+	error verify_signature(chain_block const& block, std::optional<crypto::public_key_id>& signer) const;
 	chain_block set_and_save_block(chain_block block, rec_type type);
 	rule_result check_rules(data_change_record const& rec) const;
 	rule_result check_rules(user_change_record const& rec) const;
@@ -78,6 +93,7 @@ private:
 	error check_rules_special_seen(chain_block_id const& last_seen_block) const;
 private:
 	chain_sync_config config_;
+	crypto::public_key_access* keys_{};
 	record_storage records_;
 	chain_block_id last_block_;
 

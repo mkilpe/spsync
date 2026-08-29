@@ -140,7 +140,7 @@ public:
 		auto it = storages_.find(id);
 		if(it == storages_.end()) {
 			LOG_TRACE("creating storage object (id={})", to_hex(id));
-			std::shared_ptr<storage> p = std::make_shared<storage>(id, default_storage_config_, create_modes);
+			std::shared_ptr<storage> p = std::make_shared<storage>(id, default_storage_config_, create_modes, &context_.public_keys());
 			it = storages_.emplace(id, std::move(p)).first;
 		} else if(create_modes && it->second->modes() != *create_modes) {
 			throw make_error(protocol::errc::storage_mode_mismatch, "storage exists with different modes");

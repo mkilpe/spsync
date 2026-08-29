@@ -122,7 +122,7 @@ test_sync_context::test_sync_context(chain_sync_config config)
 
 void test_sync_context::add_client(bool connect, int num) {
 	for(int i = 0; i != num; ++i) {
-		clients.push_back(std::make_unique<test_sync_server_client_context>(clients.size()+1, mode));
+		clients.push_back(std::make_unique<test_sync_server_client_context>(clients.size()+1, mode, amode));
 		if(connect) {
 			clients.back()->io.connect(server);
 		}

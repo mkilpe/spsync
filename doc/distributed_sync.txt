@@ -571,12 +571,25 @@ sends without the group key.
       tag, rebase preserves op (conflict test extended), digest binding.
       Full build + suite 22/22 green.
 
-- 2.3 Server-side signature verification  (B7)                                    [2d]
++ 2.3 Server-side signature verification  (B7) -- done 2026-08-29                 [2d]
       auth_mode::sign_records: chain_sync::validate verifies content_auth against the
       public keys the server knows (it already runs unknown_user_key_server and has
       public_key.db). Unknown signer -> reject with a new errc::unknown_signer; the
       client can push the key first (key server exists).
       Access check hook: validate() gets the signer id; phase 7 enforces rights.
+      Implemented: chain_sync takes a public_key_access*; under sign_records evaluate()
+      verifies before the rules run - unsigned -> invalid_record, unknown key ->
+      new errc::unknown_signer, bad signature -> invalid_record; the verified signer
+      is stored in rule_result (the phase 7 rights hook). Wired from the storage
+      server context (same key store the key server registers into - confirmed:
+      encrypted_net_base owns the caches, construct_context() wraps them). Without
+      keys wired only signature presence is enforced (unit setups).
+      Tests: unsigned/unknown/registered/transplanted-signature scenarios in
+      test_chain_sync; test_block_creator can sign. Enforcement immediately caught
+      a harness bug: add_client dropped the auth mode, so sign_records engine tests
+      had never actually signed (second latent inconsistency surfaced by real
+      verification, after the groupchat mode mismatch in 0.5).
+      Full build + suite 22/22 green. B7 is CLOSED.
 
 - 2.4 Mandatory signing for replicated storages                                   [0.5d]
       storage_config.replication != none requires auth_mode::sign_records; refuse to

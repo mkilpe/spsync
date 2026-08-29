@@ -8,6 +8,9 @@
 
 #include <spsync/test/test_block_creator.hpp>
 
+#include <securepath/crypto/key_generation.hpp>
+#include <securepath/crypto/public_key_cache.hpp>
+
 // + (1) basic test for committing with 'all seen' mode
 // + (2) basic test for committing with 'allow all' mode
 // + (3) basic test for committing with 'require special' mode
@@ -258,6 +261,37 @@ TEST_CASE("chain_sync op id dedup", "[unit]") {
 
 	// a fresh operation is fine
 	CHECK(sync.commit_block(creator.test_data_change()));
+}
+
+
+// (9) signature verification under sign_records (plan 2.3, defect B7)
+TEST_CASE("chain_sync signature verification", "[unit]") {
+	remove_database_test_db();
+	crypto::public_key_cache keys;
+	chain_sync sync(database::sqlite::create_sqlite_connection(db_name),
+		chain_sync_config{sync_mode::allow_all, auth_mode::sign_records}, &keys);
+
+	test_block_creator creator;
+
+	// an unsigned record is rejected
+	CHECK(check_result_error(sync.commit_block(creator.test_user_change()), protocol::errc::invalid_record));
+
+	// a signer the server does not know is rejected
+	auto key = crypto::generate_private_key();
+	creator.signer = key;
+	CHECK(check_result_error(sync.commit_block(creator.test_user_change()), protocol::errc::unknown_signer));
+
+	// after the key is registered the records are accepted
+	keys.insert(key.public_key());
+	CHECK(sync.commit_block(creator.test_user_change()));
+	CHECK(sync.commit_block(creator.test_data_change()));
+
+	// a signature transplanted from another record must not verify
+	auto b1 = creator.test_data_change();
+	auto b2 = creator.test_data_change();
+	auto transplanted = b2.to_auth_record<data_change_record>();
+	transplanted.auth = b1.auth();
+	CHECK(check_result_error(sync.commit_block(chain_block{transplanted}), protocol::errc::invalid_record));
 }
 
 }

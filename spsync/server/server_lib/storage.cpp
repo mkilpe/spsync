@@ -45,7 +45,8 @@ storage_modes load_or_create_modes(database::connection& db, std::optional<stora
 
 }
 
-storage::storage(protocol::storage_id id, storage_config config, std::optional<storage_modes> create_modes)
+storage::storage(protocol::storage_id id, storage_config config, std::optional<storage_modes> create_modes,
+	crypto::public_key_access* keys)
 : config_(std::move(config))
 , id_(std::move(id))
 {
@@ -60,7 +61,7 @@ storage::storage(protocol::storage_id id, storage_config config, std::optional<s
 	modes_ = load_or_create_modes(*db_conn, create_modes, to_hex(id_));
 	chain_sync_config sync_config{modes_.mode, modes_.auth, to_hex(id_)};
 
-	sync_ = std::make_unique<chain_sync>(db_conn, sync_config);
+	sync_ = std::make_unique<chain_sync>(db_conn, sync_config, keys);
 }
 
 sequence_number storage::current_sequence_number() const {

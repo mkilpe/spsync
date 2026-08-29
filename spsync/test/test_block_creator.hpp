@@ -6,6 +6,7 @@
 #include <spsync/core/records/user_change_record.hpp>
 #include <spsync/core/records/segment_record.hpp>
 
+#include <securepath/crypto/private_key.hpp>
 #include <securepath/test_frame/test_utils.hpp>
 
 namespace securepath::sync::test {
@@ -20,7 +21,10 @@ struct test_block_creator {
 	}
 
 	template<typename Record>
-	chain_block next_block(auth_record<Record> const& test_record) {
+	chain_block next_block(auth_record<Record> test_record) {
+		if(signer) {
+			test_record.auth.sign(*signer, serialisation::asn_der_serialise_choice<record_types>(test_record.record));
+		}
 		chain_block block{test_record};
 		block.set_sequence_and_parent_hash(last_server_seq, last_chain_hash);
 		last_chain_hash = block.hash();
@@ -68,6 +72,9 @@ struct test_block_creator {
 	*/
 	/// when set, the next record base uses this operation id (single shot)
 	std::optional<octet_vector> force_op_id;
+
+	/// when set, created records are signed with this key
+	std::optional<crypto::private_key> signer;
 
 	sequence_number last_server_seq{};
 	record_tag last_tag{};

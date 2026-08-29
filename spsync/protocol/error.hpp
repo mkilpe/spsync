@@ -17,6 +17,7 @@ enum class errc {
 	invalid_client_key,
 	invalid_state,
 	storage_mode_mismatch,
+	unknown_signer,
 	end_of_list
 };
 

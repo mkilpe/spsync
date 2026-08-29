@@ -6,10 +6,14 @@
 
 #include <spsync/protocol/error.hpp>
 
+#include <securepath/crypto/error.hpp>
+#include <securepath/crypto/public_key_access.hpp>
+
 namespace securepath::sync {
 
-chain_sync::chain_sync(database::connection_ptr db, chain_sync_config config)
+chain_sync::chain_sync(database::connection_ptr db, chain_sync_config config, crypto::public_key_access* keys)
 : config_(std::move(config))
+, keys_(keys)
 , records_(db)
 , last_block_(records_.last_block())
 , last_data_add_remove_(records_.last_data_add_sequence())
@@ -49,10 +53,38 @@ chain_block chain_sync::set_and_save_block(chain_block block, rec_type type) {
 	return block;
 }
 
+error chain_sync::verify_signature(chain_block const& block, std::optional<crypto::public_key_id>& signer) const {
+	auto auth = block.auth();
+	if(!auth.has_signature()) {
+		LOG_WARN("record is not signed in sign_records mode [tag={}] (rsid={})", to_hex(block.tag()), config_.log_id);
+		return make_error(protocol::errc::invalid_record, "record is not signed");
+	}
+	if(keys_) {
+		auto err = auth.verify(*keys_, block.record_bytes());
+		if(err) {
+			if(err.code() == make_error_code(crypto::errc::no_such_key)) {
+				LOG_INFO("record signer is unknown [tag={}] (rsid={})", to_hex(block.tag()), config_.log_id);
+				return make_error(protocol::errc::unknown_signer);
+			}
+			LOG_WARN("record signature is not authentic [tag={}] (rsid={})", to_hex(block.tag()), config_.log_id);
+			return make_error(protocol::errc::invalid_record, "record signature is not authentic");
+		}
+	}
+	signer = auth.signature_issuer();
+	// t: phase 7 checks the signer's access rights for this storage here
+	return {};
+}
+
 chain_sync::rule_result chain_sync::evaluate(chain_block const& block) const {
 	rule_result r;
 	auto handle = records_.find_tag(block.tag());
 	if(!handle) {
+		if(config_.auth_mode == auth_mode::sign_records) {
+			r.err = verify_signature(block, r.signer);
+			if(r.err) {
+				return r;
+			}
+		}
 		r = block.deserialise_record<rule_result>([this](auto const& rec) {
 				// the op id survives rebases: a rebased duplicate of an already committed
 				// operation is rejected even though its tag differs (plan 2.2/D6)
