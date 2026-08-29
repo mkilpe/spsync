@@ -49,6 +49,9 @@ public:
 	/// find record that has the given tag
 	record_handle find_tag(octet_vector const&) const;
 
+	/// find record that has the given operation id (see record_base::op_id)
+	record_handle find_op_id(octet_vector const&) const;
+
 	/// highest sequence number of record received from server with state in_sync or pending_sync
 	sequence_number highest_sequence_number() const;
 
@@ -89,7 +92,7 @@ public:
 private:
 	template<typename RecordType>
 	record_handle create_impl(RecordType const& r, chain_block const& rec, record_state state);
-	record_handle insert_to_db(chain_block const&, record_state, record_type_tag type);
+	record_handle insert_to_db(chain_block const&, record_state, record_type_tag type, octet_vector const& op_id);
 private:
 	class impl;
 	std::unique_ptr<impl> impl_;

@@ -269,11 +269,14 @@ TEST_CASE("engine sync object conflict rebase", "[unit]") {
 	context.client(0).engine.sync_object_change(oid, metadata{});
 	auto h = context.client(1).engine.sync_object_change(oid, metadata{});
 	auto original_tag = h->tag();
+	auto original_op = h->record().deserialise_to<data_change_record>().op_id();
 	while(context.handle_events()) {}
 
 	CHECK(context.compare_record_storages(sequence_number{4}));
 	CHECK(h->tag() != original_tag);
 	CHECK(context.server.sync.records().find_tag(h->tag()));
+	// the rebase preserved the operation id
+	CHECK(h->record().deserialise_to<data_change_record>().op_id() == original_op);
 	WAIT_CHECK(observer.conflicts == 1, 2s);
 	context.client(1).engine.set_output(nullptr);
 }

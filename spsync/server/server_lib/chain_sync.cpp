@@ -53,7 +53,14 @@ chain_sync::rule_result chain_sync::evaluate(chain_block const& block) const {
 	rule_result r;
 	auto handle = records_.find_tag(block.tag());
 	if(!handle) {
-		r = block.deserialise_record<rule_result>([this](auto const& rec){ return check_rules(rec); });
+		r = block.deserialise_record<rule_result>([this](auto const& rec) {
+				// the op id survives rebases: a rebased duplicate of an already committed
+				// operation is rejected even though its tag differs (plan 2.2/D6)
+				if(!rec.op_id().empty() && records_.find_op_id(rec.op_id())) {
+					return rule_result{make_error(protocol::errc::record_already_committed)};
+				}
+				return check_rules(rec);
+			});
 	} else {
 		r.err = make_error(protocol::errc::record_already_committed);
 	}

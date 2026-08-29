@@ -539,15 +539,21 @@ Phase 2  Authenticity hardening  (M2)
 Prerequisite for any second server: a replica must be able to verify what a peer
 sends without the group key.
 
-- 2.1 Sign a digest, not the GCM tag  (D5, D11)                                   [1d]
++ 2.1 Sign a digest, not the GCM tag  (D5, D11) -- done 2026-08-27                [1d]
       content_auth: ML-DSA-65 signature (context "spsync-record") over
       sha3-512(record_ bytes || gcm_tag) (record_ is the
       asn_der serialised record choice; both sides already have it). Keep gcm_tag_ as
       is. content_auth has trailing_data; add a 'digest_version' field. Verifier
       accepts v0 (tag-signed) only for storages created before the change
       (storage_config.created_at) - or simply drop v0 since nothing is deployed.
+      Implemented: sign/verify take the serialised record bytes; digest =
+      sha3-512("spsync-record" || record || gcm_tag), digest_version = 1 (v0
+      dropped, nothing deployed); signing moved from authentication_tag() into the
+      creators' result() via make_auth() (the record must exist to be signed);
+      chain_block::record_bytes() exposes the verification input. Test proves a
+      signature does not transplant to different record bytes.
 
-- 2.2 op_id in record_base  (D6)                                                  [1d]
++ 2.2 op_id in record_base  (D6) -- done 2026-08-27                               [1d]
       record_base gains op_id (16 random bytes), inside the authenticated base.
       record_creator_base generates it; update_record (rebase) copies it.
       record table: op_id column, UNIQUE; chain_sync::can_block_be_committed checks
@@ -555,6 +561,15 @@ sends without the group key.
       internal_id for wire-level identity.
       Test: rebase keeps op_id; server rejects a rebased duplicate of an already
       committed op.
+      Implemented: op_id set at creation (the base is GCM-authenticated in the
+      creator ctor, so a rebase passes the original op into the creator); op_id
+      BLOB UNIQUE column + record_storage::find_op_id; chain_sync rejects a
+      rebased duplicate by op before the rules run; the engine additionally ADOPTS
+      the server committed earlier form of its own pending record on an op race
+      (find_pending_by_op/adopt_committed in handle_incoming_record) - this closes
+      the double-apply race from the analysis. Tests: server op dedup with fresh
+      tag, rebase preserves op (conflict test extended), digest binding.
+      Full build + suite 22/22 green.
 
 - 2.3 Server-side signature verification  (B7)                                    [2d]
       auth_mode::sign_records: chain_sync::validate verifies content_auth against the

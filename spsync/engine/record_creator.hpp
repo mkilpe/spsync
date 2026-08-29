@@ -16,11 +16,26 @@ namespace securepath::sync {
  */
 class record_creator_base {
 public:
-	/// construct to create the record_base which is common to all records and initialise encryption+authentication
-	record_creator_base(encryption_key const& key, chain_block_id last_seen, std::optional<crypto::private_key> = std::nullopt);
+	/**
+	 * Construct to create the record_base which is common to all records and initialise
+	 * encryption+authentication. op_id: the stable operation id; empty generates a new
+	 * one, a rebase passes the original (the base is authenticated at construction, so
+	 * the op id cannot change afterwards).
+	 */
+	record_creator_base(encryption_key const& key, chain_block_id last_seen, std::optional<crypto::private_key> = std::nullopt, octet_vector op_id = {});
 
 	/// Returns authentication tag for the record, this can be called only once after constructing the record has been done
 	util::content_auth authentication_tag();
+
+	/// sign auth over the serialised record when a signer was given
+	template<typename Record>
+	util::content_auth make_auth(Record const& record) {
+		auto auth = authentication_tag();
+		if(signer_) {
+			auth.sign(*signer_, serialisation::asn_der_serialise_choice<record_types>(record));
+		}
+		return auth;
+	}
 
 protected:
 	record_base base_;

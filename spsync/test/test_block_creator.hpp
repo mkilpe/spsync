@@ -14,7 +14,9 @@ namespace securepath::sync::test {
 struct test_block_creator {
 
 	record_base next_record_base() {
-		return record_base{chain_block_id{last_server_seq++, last_chain_hash}, octet_vector{}, sequence_number{1}};
+		auto op = force_op_id.value_or(securepath::test::random_octet_vector(16));
+		force_op_id.reset();
+		return record_base{chain_block_id{last_server_seq++, last_chain_hash}, octet_vector{}, sequence_number{1}, std::move(op)};
 	}
 
 	template<typename Record>
@@ -64,6 +66,9 @@ struct test_block_creator {
 
 	}
 	*/
+	/// when set, the next record base uses this operation id (single shot)
+	std::optional<octet_vector> force_op_id;
+
 	sequence_number last_server_seq{};
 	record_tag last_tag{};
 	octet_vector last_chain_hash{};

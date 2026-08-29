@@ -48,7 +48,7 @@ TEST_CASE("data_change_record_creator single", "[unit]") {
 		crypto::public_key_cache keys;
 		keys.insert(signer->public_key());
 		CHECK(rec.auth.has_signature());
-		CHECK(!rec.auth.verify(keys));
+		CHECK(!rec.auth.verify(keys, serialisation::asn_der_serialise_choice<record_types>(rec.record)));
 	} else {
 		CHECK(!rec.auth.has_signature());
 	}

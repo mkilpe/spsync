@@ -234,6 +234,7 @@ struct record_storage::impl {
 				"state INTEGER,"
 				"record BLOB,"
 				"type INTEGER, "
+				"op_id BLOB UNIQUE,"
 				"unique_seq_selector INTEGER DEFAULT NULL,"
 				"UNIQUE(seq, unique_seq_selector));").execute();
 		}
@@ -386,6 +387,14 @@ record_handle record_storage::find(sequence_number seq, record_state state) cons
 	return impl_->load_record(q.execute());
 }
 
+record_handle record_storage::find_op_id(octet_vector const& op_id) const {
+	auto q = impl_->db->prepare(
+		"SELECT key, tag, seq, hash, parent_hash, state FROM record"
+		" WHERE op_id = :o;");
+	q.bind(":o", op_id);
+	return impl_->load_record(q.execute());
+}
+
 record_handle record_storage::find_tag(octet_vector const& tag) const {
 	auto q = impl_->db->prepare(
 		"SELECT key, tag, seq, hash, parent_hash, state FROM record"
@@ -462,10 +471,15 @@ record_handle record_storage::find_internal(record_internal_id iid) const {
 	return impl_->load_record(q.execute());
 }
 
-record_handle record_storage::insert_to_db(chain_block const& rec, record_state state, record_type_tag type) {
+record_handle record_storage::insert_to_db(chain_block const& rec, record_state state, record_type_tag type, octet_vector const& op_id) {
 	auto q = impl_->db->prepare(
-		"INSERT INTO record(tag, seq, hash, parent_hash, state, record, type, unique_seq_selector)"
-		" VALUES(:tag, :seq, :hash, :parent_hash, :state, :record, :type, :useq);");
+		"INSERT INTO record(tag, seq, hash, parent_hash, state, record, type, op_id, unique_seq_selector)"
+		" VALUES(:tag, :seq, :hash, :parent_hash, :state, :record, :type, :op, :useq);");
+	if(op_id.empty()) {
+		q.bind(":op");
+	} else {
+		q.bind(":op", op_id);
+	}
 
 	q.bind(":tag", rec.tag());
 	if(!rec.parent_hash().empty()) {
@@ -492,7 +506,7 @@ record_handle record_storage::insert_to_db(chain_block const& rec, record_state 
 template<typename RecordType>
 record_handle record_storage::create_impl(RecordType const& r, chain_block const& rec, record_state state) {
 	database::transaction tact(*impl_->db);
-	auto handle = insert_to_db(rec, state, RecordType::tag);
+	auto handle = insert_to_db(rec, state, RecordType::tag, r.op_id());
 	if(handle) {
 		if constexpr(std::is_same_v<std::decay_t<decltype(r)>, data_change_record>) {
 			create_object_records(impl_->db, rec.tag(), r);
@@ -513,7 +527,7 @@ record_handle record_storage::create(auth_record<data_change_record> const& rec)
 	LOG_TRACE("creating record to storage [tag={}]", to_hex(rec.auth.tag()));
 
 	database::transaction tact(*impl_->db);
-	auto handle = insert_to_db(chain_block(rec, rec.record.last_seen_block().sequence + 1), record_state::pending_commit, data_change_record_tag);
+	auto handle = insert_to_db(chain_block(rec, rec.record.last_seen_block().sequence + 1), record_state::pending_commit, data_change_record_tag, rec.record.op_id());
 	if(handle) {
 		create_object_records(impl_->db, rec.auth.tag(), rec.record);
 	}

@@ -103,6 +103,9 @@ public:
 	/// get the authentication part for the record
 	util::content_auth auth() const { return auth_; }
 
+	/// the serialised record bytes (what the content_auth signature covers together with the tag)
+	octet_vector const& record_bytes() const { return record_; }
+
 	/// the block hash that is used for the parent hash
 	octet_vector hash() const {
 		return crypto::hash(serialisation::asn_der_serialise(*this), crypto::hash_algorithm::sha3_512);

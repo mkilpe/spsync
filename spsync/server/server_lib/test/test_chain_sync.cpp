@@ -239,4 +239,25 @@ TEST_CASE("chain_sync validate and apply", "[unit]") {
 	CHECK(sync.commit_block(b2));
 }
 
+
+// (8) a rebased duplicate (same op id, different tag) of a committed record is rejected
+TEST_CASE("chain_sync op id dedup", "[unit]") {
+	remove_database_test_db();
+	chain_sync sync(database::sqlite::create_sqlite_connection(db_name), chain_sync_config{sync_mode::allow_all});
+
+	test_block_creator creator;
+	CHECK(sync.commit_block(creator.test_user_change()));
+
+	auto op = securepath::test::random_octet_vector(16);
+	creator.force_op_id = op;
+	CHECK(sync.commit_block(creator.test_data_change()));
+
+	// the "rebased" form: same operation id, everything else fresh
+	creator.force_op_id = op;
+	CHECK(check_result_error(sync.commit_block(creator.test_data_change()), protocol::errc::record_already_committed));
+
+	// a fresh operation is fine
+	CHECK(sync.commit_block(creator.test_data_change()));
+}
+
 }

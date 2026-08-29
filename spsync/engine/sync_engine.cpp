@@ -233,6 +233,32 @@ public:
 		return config.auth_mode != auth_mode::sign_records || record.auth().has_signature();
 	}
 
+	/// our own pending record the server committed in an earlier form: same op id,
+	/// different tag (the response of the original commit lost a race with a rebase)
+	record_handle find_pending_by_op(chain_block const& record) const {
+		auto op = record.deserialise_record<octet_vector>([](auto const& rec){ return rec.op_id(); });
+		record_handle h;
+		if(!op.empty()) {
+			h = records.find_op_id(op);
+			if(h && h->state() != record_state::pending_commit) {
+				h = nullptr;
+			}
+		}
+		return h;
+	}
+
+	void adopt_committed(record_handle h, chain_block const& record, chain_block_id const& id) {
+		LINFO("adopting committed form of own pending record [block id = {}, tag = {}]", id, to_hex(record.tag()));
+		auto state = check_chain_block(record, id);
+		if(is_valid_state(state)) {
+			h->set_record(record);
+			h->set_state(state, id, record.parent_hash());
+			if(state == record_state::in_sync) {
+				notify_on_record(h);
+			}
+		}
+	}
+
 	void handle_incoming_record(chain_block const& record) {
 		chain_block_id id{record.id()};
 		LINFO("received record block [block id = {}, tag = {}]", id, to_hex(record.tag()));
@@ -240,9 +266,13 @@ public:
 		if(id.is_valid() && is_structurally_valid(record)) {
 			auto handle = records.find_tag(record.tag());
 			if(!handle) {
-				record.deserialise_record([&](auto const& rec) {
-						this->handle_block(record, id, rec);
-					});
+				if(auto own = find_pending_by_op(record)) {
+					adopt_committed(own, record, id);
+				} else {
+					record.deserialise_record([&](auto const& rec) {
+							this->handle_block(record, id, rec);
+						});
+				}
 			} else {
 				LTRACE("record block already known [block id = {}, tag = {}]", id, to_hex(record.tag()));
 			}
@@ -260,7 +290,7 @@ public:
 			signer = my_private_key(crypto.private_data());
 		}
 
-		data_change_record_creator creator(key, last_block, signer);
+		data_change_record_creator creator(key, last_block, signer, ver.base().op_id());
 		for(auto const& r : ver.headers()) {
 			auto data = r.data;
 			if(!data.previous_oid_record_tag.empty()) {
@@ -287,7 +317,7 @@ public:
 			signer = my_private_key(crypto.private_data());
 		}
 
-		user_change_record_creator creator(key, last_block, signer);
+		user_change_record_creator creator(key, last_block, signer, ver.base().op_id());
 		creator.set_data(ver.header(), ver.data());
 		return creator.result();
 	}
@@ -301,7 +331,7 @@ public:
 			signer = my_private_key(crypto.private_data());
 		}
 
-		segment_record_creator creator(key, last_block, signer);
+		segment_record_creator creator(key, last_block, signer, ver.base().op_id());
 		//f: implement
 		return creator.result();
 	}
