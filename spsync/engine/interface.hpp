@@ -57,6 +57,16 @@ struct engine_output : event_system::event_handler {
 	virtual void on_user_changed(record_handle) {}
 
 	/**
+	 * Called when the server is suspected of showing two different histories (plan 2.6,
+	 * strict mode): the incoming record's authenticated back reference names a block we
+	 * hold in sync under a different hash for the same sequence. local is our record at
+	 * that sequence, remote the incoming block whose last_seen_block disagrees. The
+	 * engine stops committing to the storage (D10: detection halts, never heals); the
+	 * application decides what to do - see doc/distributed_sync.txt phase 5.
+	 */
+	virtual void on_fork_suspected(record_handle local, chain_block remote) {}
+
+	/**
 	 * Called when an object changed underneath a pending record (per conflicting object).
 	 * local is the own pending record, remote the newest record for the object. With
 	 * conflict_policy::rebase_on_top the local record has been rebuilt on top of remote;
@@ -81,6 +91,9 @@ struct on_user_changed {
 };
 struct on_object_conflict {
 	typedef void type(record_handle, record_handle);
+};
+struct on_fork_suspected {
+	typedef void type(record_handle, chain_block);
 };
 }
 

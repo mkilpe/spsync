@@ -31,6 +31,10 @@ public:
 	{}
 
 	request_handle commit_record(record_handle h) {
+		if(fork_suspected) {
+			LWARN("not committing, fork suspected for this storage [tag = {}]", to_hex(h->tag()));
+			return request_handle{};
+		}
 		pushing_pending_commit = comm.commit_record(h);
 		LINFO("trying to commit record to server [tag = {}, request handle = {}]", to_hex(h->tag()), pushing_pending_commit);
 		return pushing_pending_commit;
@@ -183,10 +187,35 @@ public:
 		return state == record_state::in_sync;
 	}
 
+	/**
+	 * Strict mode cross-check of the authenticated back reference (plan 2.6): the record's
+	 * author saw a different block than we hold in sync for the same sequence - the server
+	 * showed two histories. Emitted once; commits to this storage stop (D10).
+	 * Weak modes get a tag based variant with phase 4.3.
+	 */
+	template<typename Record>
+	void check_fork(chain_block const& record, Record const& rec) {
+		if(config.mode == sync_mode::require_all_seen && !fork_suspected) {
+			auto const& ls = rec.last_seen_block();
+			if(ls.is_valid()) {
+				auto ours = records.find(ls.sequence);
+				if(ours && ours->block_id().hash != ls.hash) {
+					fork_suspected = true;
+					LWARN("fork suspected: incoming record refers to a different block for sequence {} [ours = {}, referred = {}]"
+						, ls.sequence, to_hex(ours->block_id().hash), to_hex(ls.hash));
+					if(output) {
+						output->emit<engine_events::on_fork_suspected>(ours, record);
+					}
+				}
+			}
+		}
+	}
+
 	template<typename Record>
 	void verify_block(encryption_key const& enc_key, chain_block const& record, chain_block_id const& id, Record const& rec) {
 		record_verifier<Record> ver(enc_key, rec, record.auth());
 		if(ver.is_authentic()) {
+			check_fork(record, rec);
 			update_server_seq(record.sequence());
 			if(handle_block_chain(record, id)) {
 				check_pending_records(id);
@@ -431,7 +460,7 @@ public:
 	}
 
 	void try_commit_pending() {
-		if(!pushing_pending_commit) {
+		if(!pushing_pending_commit && !fork_suspected) {
 			//t: can we optimise when we are trying to push commits again
 			// ie. pushing currently even if we just did and something came in meanwhile
 			LTRACE("trying to commit pending records");
@@ -475,6 +504,8 @@ public:
 	sequence_number server_seq;
 	// if we have ongoing committing going for pending record
 	request_handle pushing_pending_commit{};
+	// set when the server is suspected of showing two histories; commits stop (plan 2.6)
+	bool fork_suspected{};
 };
 
 // redefine to use the impl for normal members

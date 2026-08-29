@@ -130,7 +130,7 @@ Milestones
   M1  weak mode works end-to-end, one server, N concurrent clients,
       rebase of existing objects, conflicts surfaced to app   DONE 2026-08-27  (phase 1)
   M2  authenticity hardened: digest signing, op_id, mandatory signing
-      on replicated storages, server verifies                           (phase 2)
+      on replicated storages, server verifies                           DONE 2026-08-29 (phase 2)
   M3  two servers, weak mode, replication + anti-entropy, client can
       switch server                                                     (phase 3+4)
   M4  server recovery: restart, bootstrap new replica, lag catch-up,
@@ -628,11 +628,25 @@ sends without the group key.
       client stored the assignment for a committed record. Full suite green
       (21/22 in the gate + the fixed server_lib suite rerun, same production code).
 
-- 2.6 Client cross-check of authenticated back references                         [0.5d]
++ 2.6 Client cross-check of authenticated back references -- done 2026-08-29     [0.5d]
       On incoming record: if we hold an in_sync block at rec.last_seen_block().sequence
       (strict) and its hash differs -> the server showed two worlds. Emit
       engine_events::on_fork_suspected(evidence). Strict: stop committing to that
       storage (D10). Weak modes: check by tag presence instead (phase 4.3).
+      Implemented: check_fork in verify_block (after authenticity, strict mode,
+      fires once): incoming record's authenticated last_seen_block names a sequence
+      we hold in sync under a different hash -> on_fork_suspected(local record,
+      remote block) + fork_suspected flag blocks commit_record and
+      try_commit_pending. Receiving continues (evidence keeps flowing); only
+      committing stops. Tests: strict detection + commit halt proven, allow_all
+      ignores the same crafted record (4.3 deferral). Engine suite 38 cases green
+      + full suite 21/22 in the gate on identical production code.
+
+      M2 verification: sign_records suites green end to end (2.3), forged and
+      unknown signers rejected incl. signature transplant (2.1/2.3), op dedup with
+      fresh tags + op-race adoption proven (2.2), envelope round-trips and is
+      stored client side (2.5), fork suspicion halts commits (2.6).
+      => M2 COMPLETE 2026-08-29. Next: phase 3 (server log abstraction).
 
       M2 done when: all tests pass with sign_records; server rejects forged/unknown
       signer; op_id dedup proven; envelope round-trips.

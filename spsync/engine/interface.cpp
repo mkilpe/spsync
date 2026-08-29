@@ -12,6 +12,7 @@ void engine_output::handle_event(std::unique_ptr<event_system::event_base> ev) {
 			, event_dest<engine_events::on_object_data_changed>(&engine_output::on_object_data_changed)
 			, event_dest<engine_events::on_user_changed>(&engine_output::on_user_changed)
 			, event_dest<engine_events::on_object_conflict>(&engine_output::on_object_conflict)
+			, event_dest<engine_events::on_fork_suspected>(&engine_output::on_fork_suspected)
 			);
 }
 

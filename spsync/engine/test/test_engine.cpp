@@ -1,4 +1,7 @@
 #include <spsync/test/engine_context.hpp>
+#include <spsync/engine/record_creator.hpp>
+
+#include <atomic>
 
 #include <spsync/core/records/data_change_record.hpp>
 #include <spsync/core/records/user_change_record.hpp>
@@ -322,6 +325,92 @@ TEST_CASE("engine refuses replication without signing", "[unit]") {
 	// with signing the configuration is accepted
 	test::engine_context ok{sync_engine_config{
 		.auth_mode=sync::auth_mode::sign_records, .replication=replication_mode::weak}};
+}
+
+
+namespace {
+
+struct fork_observer : sync::engine_output {
+	using engine_output::engine_output;
+	~fork_observer() { stop_handler(); }
+
+	void on_fork_suspected(sync::record_handle local, sync::chain_block remote) override {
+		last_local = local;
+		++forks;
+	}
+
+	std::atomic<int> forks{0};
+	sync::record_handle last_local;
+};
+
+}
+
+// * strict mode: a record referring to a different block for a sequence we hold in sync
+// raises the fork suspicion and stops commits (plan 2.6)
+TEST_CASE("engine fork suspicion in strict mode", "[unit]") {
+	test::engine_context source;
+	auto blocks = build_test_chain(source, 2);
+	REQUIRE(blocks.size() == 3);
+
+	test::engine_context target; // require_all_seen
+	insert_test_key(target);
+	fork_observer observer{target.single_thread_event_loop};
+	target.engine.set_output(&observer);
+
+	for(auto&& b : blocks) {
+		target.engine.on_record_received(b);
+	}
+	CHECK(target.storage.last_block().sequence == sequence_number{3});
+
+	// an authentic record whose author saw a different block at sequence 2
+	encryption_key key{sequence_number{1}, to_octet_vector("12345678901234567890123456789012")};
+	octet_vector wrong_hash = securepath::test::random_octet_vector(64);
+	data_change_record_creator creator(key, chain_block_id{sequence_number{2}, wrong_hash});
+	creator.add_change(create_object_id(), {}, metadata{});
+	chain_block forked{creator.result()};
+	forked.set_sequence_and_parent_hash(sequence_number{4}, blocks[2].hash());
+	target.engine.on_record_received(forked);
+
+	WAIT_CHECK(observer.forks == 1, 2s);
+	REQUIRE(observer.last_local);
+	CHECK(observer.last_local->block_id().sequence == sequence_number{2});
+
+	// receiving continues (the forked record is stored, evidence keeps flowing)...
+	CHECK(target.storage.last_block().sequence == sequence_number{4});
+
+	// ...but commits to this storage stop
+	auto h = target.engine.sync_object_change(create_object_id(), metadata{});
+	target.io.process_events();
+	CHECK(h->state() == record_state::pending_commit);
+	CHECK(target.storage.last_block().sequence == sequence_number{4});
+	target.engine.set_output(nullptr);
+}
+
+// * weak modes do not run the strict back reference check (tag based variant is phase 4.3)
+TEST_CASE("engine fork check not in weak mode", "[unit]") {
+	test::engine_context source;
+	auto blocks = build_test_chain(source, 2);
+
+	test::engine_context target{sync_engine_config{.mode=sync_mode::allow_all}};
+	insert_test_key(target);
+	fork_observer observer{target.single_thread_event_loop};
+	target.engine.set_output(&observer);
+
+	for(auto&& b : blocks) {
+		target.engine.on_record_received(b);
+	}
+	encryption_key key{sequence_number{1}, to_octet_vector("12345678901234567890123456789012")};
+	octet_vector wrong_hash = securepath::test::random_octet_vector(64);
+	data_change_record_creator creator(key, chain_block_id{sequence_number{2}, wrong_hash});
+	creator.add_change(create_object_id(), {}, metadata{});
+	chain_block forked{creator.result()};
+	forked.set_sequence_and_parent_hash(sequence_number{4}, blocks[2].hash());
+	target.engine.on_record_received(forked);
+	CHECK(target.storage.find(sequence_number{4}));
+
+	std::this_thread::sleep_for(200ms);
+	CHECK(observer.forks == 0);
+	target.engine.set_output(nullptr);
 }
 
 }
