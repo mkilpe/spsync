@@ -45,7 +45,6 @@ public:
 	}
 
 	bool operator==(users const&) const;
-	bool operator!=(users const&) const;
 
 	using const_iterator = std::deque<util::user_access>::const_iterator;
 	const_iterator begin() const;

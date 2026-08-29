@@ -1,5 +1,7 @@
 #include "record_storage.hpp"
 
+#include <utility>
+
 #include <securepath/database/util.hpp>
 #include <securepath/serialisation/util.hpp>
 #include <securepath/util/conversions.hpp>
@@ -74,7 +76,7 @@ public:
 		if(bid.is_valid()) {
 			//update state in database
 			auto q = db_->prepare("UPDATE record SET state = :state, seq = :seq, hash = :hash, parent_hash = :parent_hash, unique_seq_selector = :useq WHERE key = :k;");
-			q.bind(":state", static_cast<std::int64_t>(state));
+			q.bind(":state", std::to_underlying(state));
 			q.bind(":seq", bid.sequence.value);
 			q.bind(":hash", bid.hash);
 			q.bind(":parent_hash", parent_block_hash);
@@ -91,7 +93,7 @@ public:
 		} else {
 			//update just the state in database
 			auto q = db_->prepare("UPDATE record SET state = :state, unique_seq_selector = :useq WHERE key = :k;");
-			q.bind(":state", static_cast<std::int64_t>(state));
+			q.bind(":state", std::to_underlying(state));
 			if(is_server_confirmed(state)) {
 				q.bind(":useq", seq_selector_value);
 			} else {
@@ -335,8 +337,8 @@ chain_block_id record_storage::last_block(bool allow_local) const {
 		" seq = (SELECT max(seq) FROM record WHERE state = :state1 OR state = :state2)"
 		" AND (state = :state1 OR state = :state2)"
 		" ORDER BY key DESC LIMIT 1;");
-	q.bind(":state1", static_cast<std::int64_t>(record_state::in_sync));
-	q.bind(":state2", static_cast<std::int64_t>(allow_local ? record_state::pending_commit : record_state::in_sync));
+	q.bind(":state1", std::to_underlying(record_state::in_sync));
+	q.bind(":state2", std::to_underlying(allow_local ? record_state::pending_commit : record_state::in_sync));
 
 	chain_block_id id;
 	auto res = q.execute();
@@ -354,8 +356,8 @@ record_handle record_storage::find_last(bool allow_local) const {
 		" seq = (SELECT max(seq) FROM record WHERE state = :state1 OR state = :state2)"
 		" AND (state = :state1 OR state = :state2)"
 		" ORDER BY key DESC LIMIT 1;");
-	q.bind(":state1", static_cast<std::int64_t>(record_state::in_sync));
-	q.bind(":state2", static_cast<std::int64_t>(allow_local ? record_state::pending_commit : record_state::in_sync));
+	q.bind(":state1", std::to_underlying(record_state::in_sync));
+	q.bind(":state2", std::to_underlying(allow_local ? record_state::pending_commit : record_state::in_sync));
 	return impl_->load_record(q.execute());
 }
 
@@ -363,7 +365,7 @@ record_handle record_storage::find_root() const {
 	auto q = impl_->db->prepare(
 		"SELECT key, tag, seq, hash, parent_hash, state FROM record WHERE seq = :seq AND state = :state;");
 	q.bind(":seq", static_cast<std::uint64_t>(1));
-	q.bind(":state", static_cast<std::int64_t>(record_state::in_sync));
+	q.bind(":state", std::to_underlying(record_state::in_sync));
 	return impl_->load_record(q.execute());
 }
 
@@ -373,7 +375,7 @@ record_handle record_storage::find_last(object_id const& oid) const {
 		" WHERE record.tag = record_objects.tag AND record_objects.oid = :o AND"
 		" state = :state ORDER BY record.seq DESC LIMIT 1");
 
-	q.bind(":state", static_cast<std::int64_t>(record_state::in_sync));
+	q.bind(":state", std::to_underlying(record_state::in_sync));
 	q.bind(":o", oid.value());
 	return impl_->load_record(q.execute());
 }
@@ -384,7 +386,7 @@ record_handle record_storage::find_first(object_id const& oid) const {
 		" WHERE record.tag = record_objects.tag AND record_objects.oid = :o AND"
 		" state = :state ORDER BY record.seq ASC LIMIT 1");
 
-	q.bind(":state", static_cast<std::int64_t>(record_state::in_sync));
+	q.bind(":state", std::to_underlying(record_state::in_sync));
 	q.bind(":o", oid.value());
 	return impl_->load_record(q.execute());
 }
@@ -394,7 +396,7 @@ record_handle record_storage::find(octet_vector const& hash, record_state state)
 		"SELECT key, tag, seq, hash, parent_hash, state FROM record"
 		" WHERE hash = :h AND state = :state;");
 	q.bind(":h", hash);
-	q.bind(":state", static_cast<std::int64_t>(state));
+	q.bind(":state", std::to_underlying(state));
 	return impl_->load_record(q.execute());
 }
 
@@ -402,7 +404,7 @@ record_handle record_storage::find(sequence_number seq, record_state state) cons
 	auto q = impl_->db->prepare(
 		"SELECT key, tag, seq, hash, parent_hash, state FROM record WHERE seq = :seq AND state = :state;");
 	q.bind(":seq", static_cast<std::uint64_t>(seq.value));
-	q.bind(":state", static_cast<std::int64_t>(state));
+	q.bind(":state", std::to_underlying(state));
 	return impl_->load_record(q.execute());
 }
 
@@ -426,7 +428,7 @@ record_handle record_storage::find_first_pending_commit() const {
 	auto q = impl_->db->prepare(
 		"SELECT key, tag, seq, hash, parent_hash, state FROM record WHERE state = :state"
 		" ORDER BY key ASC LIMIT 1");
-	q.bind(":state", static_cast<std::int64_t>(record_state::pending_commit));
+	q.bind(":state", std::to_underlying(record_state::pending_commit));
 	return impl_->load_record(q.execute());
 }
 
@@ -434,15 +436,15 @@ record_handle record_storage::find_next_pending_commit(record_handle h) const {
 	auto q = impl_->db->prepare(
 		"SELECT key, tag, seq, hash, parent_hash, state FROM record WHERE state = :state AND key > :key"
 		" ORDER BY key ASC LIMIT 1");
-	q.bind(":state", static_cast<std::int64_t>(record_state::pending_commit));
+	q.bind(":state", std::to_underlying(record_state::pending_commit));
 	q.bind(":key", h->internal_id());
 	return impl_->load_record(q.execute());
 }
 
 sequence_number record_storage::highest_sequence_number() const {
 	auto q = impl_->db->prepare("SELECT max(seq) FROM record WHERE state = :state1 OR state = :state2;");
-	q.bind(":state1", static_cast<std::int64_t>(record_state::in_sync));
-	q.bind(":state2", static_cast<std::int64_t>(record_state::pending_sync));
+	q.bind(":state1", std::to_underlying(record_state::in_sync));
+	q.bind(":state2", std::to_underlying(record_state::pending_sync));
 
 	sequence_number ret;
 	auto res = q.execute();
@@ -454,9 +456,9 @@ sequence_number record_storage::highest_sequence_number() const {
 
 sequence_number record_storage::last_special_sequence() const {
 	auto q = impl_->db->prepare("SELECT max(seq) FROM record WHERE state = :state AND (type = :t1 OR type = :t2);");
-	q.bind(":state", static_cast<std::int64_t>(record_state::in_sync));
-	q.bind(":t1", static_cast<std::int64_t>(user_change_record_tag));
-	q.bind(":t2", static_cast<std::int64_t>(segment_record_tag));
+	q.bind(":state", std::to_underlying(record_state::in_sync));
+	q.bind(":t1", std::to_underlying(user_change_record_tag));
+	q.bind(":t2", std::to_underlying(segment_record_tag));
 
 	sequence_number ret;
 	auto res = q.execute();
@@ -472,7 +474,7 @@ sequence_number record_storage::last_data_add_sequence() const {
 		"SELECT max(record.seq) FROM record, record_objects"
 		" WHERE record.tag = record_objects.tag AND record.state = :state"
 		" AND ifnull(length(record_objects.prev_tag), 0) = 0;");
-	q.bind(":state", static_cast<std::int64_t>(record_state::in_sync));
+	q.bind(":state", std::to_underlying(record_state::in_sync));
 
 	sequence_number ret;
 	auto res = q.execute();
@@ -508,9 +510,9 @@ record_handle record_storage::insert_to_db(chain_block const& rec, record_state 
 	}
 	q.bind(":seq", rec.sequence().value);
 	q.bind(":hash", rec.hash());
-	q.bind(":state", static_cast<std::int64_t>(state));
+	q.bind(":state", std::to_underlying(state));
 	q.bind(":record", serialisation::asn_der_serialise(rec));
-	q.bind(":type", static_cast<std::int64_t>(type));
+	q.bind(":type", std::to_underlying(type));
 	if(is_server_confirmed(state)) {
 		q.bind(":useq", seq_selector_value);
 	} else {

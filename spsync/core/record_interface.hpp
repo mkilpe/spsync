@@ -13,7 +13,7 @@ namespace securepath::sync {
 
 using record_internal_id = std::uint64_t;
 
-enum class record_state {
+enum class record_state : std::int64_t {
 	unknown = 0,
 
 	/// the record is invalid, e.g. the aes gcm tag doesn't match

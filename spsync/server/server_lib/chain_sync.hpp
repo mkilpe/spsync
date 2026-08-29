@@ -55,7 +55,7 @@ public:
 	std::deque<chain_block> get_records(sequence_number start, sequence_number end) const;
 
 	/// check whether the block could be committed in the current state, without changing anything
-	error validate(chain_block const&) const;
+	[[nodiscard]] error validate(chain_block const&) const;
 
 	/**
 	 * Append the block to the chain. The caller is expected to have validated the block;

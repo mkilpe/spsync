@@ -1,4 +1,6 @@
 #include "storage.hpp"
+
+#include <utility>
 #include "connection.hpp"
 
 #include <securepath/database/sqlite/connection.hpp>
@@ -43,9 +45,9 @@ storage_modes load_or_create_modes(database::connection& db, std::optional<stora
 	}
 	storage_modes m = requested.value_or(storage_modes{});
 	auto ins = db.prepare("INSERT INTO storage_config(key, sync_mode, auth_mode, replication, created_at) VALUES(1, :m, :a, :r, :c);");
-	ins.bind(":m", static_cast<std::int64_t>(m.mode));
-	ins.bind(":a", static_cast<std::int64_t>(m.auth));
-	ins.bind(":r", static_cast<std::int64_t>(m.replication));
+	ins.bind(":m", std::to_underlying(m.mode));
+	ins.bind(":a", std::to_underlying(m.auth));
+	ins.bind(":r", std::to_underlying(m.replication));
 	ins.bind(":c", static_cast<std::int64_t>(std::time(nullptr)));
 	ins.execute();
 	LOG_INFO("storage modes persisted [mode={}, auth={}] (rsid={})", int(m.mode), int(m.auth), log_id);

@@ -101,8 +101,4 @@ bool operator==(encryption_key const& left, encryption_key const& right) {
 	return left.key_seq == right.key_seq && left.key == right.key;
 }
 
-bool operator!=(encryption_key const& left, encryption_key const& right) {
-	return !(left == right);
-}
-
 }

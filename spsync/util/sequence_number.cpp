@@ -36,30 +36,6 @@ sequence_number& sequence_number::operator-=(int v) {
 	return *this;
 }
 
-bool operator==(sequence_number const& left, sequence_number const& right) {
-	return left.value == right.value;
-}
-
-bool operator!=(sequence_number const& left, sequence_number const& right) {
-	return !(left == right);
-}
-
-bool operator<(sequence_number const& left, sequence_number const& right) {
-	return left.value < right.value;
-}
-
-bool operator>(sequence_number const& left, sequence_number const& right) {
-	return left.value > right.value;
-}
-
-bool operator<=(sequence_number const& left, sequence_number const& right) {
-	return left.value <= right.value;
-}
-
-bool operator>=(sequence_number const& left, sequence_number const& right) {
-	return left.value >= right.value;
-}
-
 sequence_number operator+(sequence_number const& seq, std::uint64_t v) {
 	return sequence_number{seq.value + v};
 }

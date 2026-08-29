@@ -34,7 +34,7 @@ struct rebase_state {
  *   require_data_add_remove_seen as above, plus a newer data add for adding records
  *   allow_all                    never (object id conflicts are handled separately)
  */
-bool needs_rebase(rebase_state const&);
+[[nodiscard]] bool needs_rebase(rebase_state const&);
 
 }
 

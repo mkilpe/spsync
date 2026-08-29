@@ -41,7 +41,6 @@ private:
 
 
 bool operator==(user_id const& left, user_id const& right);
-bool operator!=(user_id const& left, user_id const& right);
 bool operator<(user_id const& left, user_id const& right);
 
 std::ostream& operator<<(std::ostream&, user_id const&);
@@ -105,7 +104,6 @@ struct user_access {
 };
 
 bool operator==(user_access const& l, user_access const& r);
-bool operator!=(user_access const& l, user_access const& r);
 
 std::ostream& operator<<(std::ostream&, user_access const&);
 

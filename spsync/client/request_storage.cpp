@@ -1,5 +1,7 @@
 #include "request_storage.hpp"
 
+#include <utility>
+
 namespace securepath::sync::client {
 
 request_storage::request_storage(database::connection_ptr db)
@@ -35,7 +37,7 @@ std::deque<db_request> request_storage::enumerate(std::optional<request_state> s
 	qstr += " ORDER BY time DESC";
 	auto q = db_->prepare(qstr);
 	if(state) {
-		q.bind(":state", static_cast<std::int64_t>(*state));
+		q.bind(":state", std::to_underlying(*state));
 	}
 
 	auto res = q.execute();
@@ -71,14 +73,14 @@ std::optional<db_request> request_storage::find(request_id id) const {
 void request_storage::change_state(request_id id, request_state state) {
 	auto q = db_->prepare("UPDATE requests SET state = :state, time = :time WHERE key = :id;");
 	q.bind(":id", id);
-	q.bind(":state", static_cast<std::int64_t>(state));
+	q.bind(":state", std::to_underlying(state));
 	q.bind(":time", clock_type::now());
 	q.execute();
 }
 
 request_id request_storage::add(request_data const& d, packet_transport::transport_payload const& payload) {
 	auto q = db_->prepare("INSERT INTO requests(state, data, payload, time) VALUES(:state, :data, :payload, :time);");
-	q.bind(":state", static_cast<std::int64_t>(request_state::waiting_for_verification));
+	q.bind(":state", std::to_underlying(request_state::waiting_for_verification));
 	q.bind(":data", serialisation::asn_der_serialise(d));
 	q.bind(":payload", serialisation::asn_der_serialise(payload));
 	q.bind(":time", clock_type::now());

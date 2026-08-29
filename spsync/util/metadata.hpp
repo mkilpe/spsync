@@ -59,7 +59,6 @@ public:
 	bool empty() const;
 
 	bool operator==(metadata const& m) const;
-	bool operator!=(metadata const& m) const;
 private:
 	std::map<key_type, octet_vector> data_;
 	serialisation::trailing_data trailing_data_;

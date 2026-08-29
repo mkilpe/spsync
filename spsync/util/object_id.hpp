@@ -42,7 +42,6 @@ private:
 object_id create_object_id();
 
 bool operator==(object_id const& left, object_id const& right);
-bool operator!=(object_id const& left, object_id const& right);
 bool operator<(object_id const& left, object_id const& right);
 
 std::ostream& operator<<(std::ostream&, object_id const&);

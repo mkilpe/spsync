@@ -11,20 +11,20 @@ namespace securepath::sync {
  *	- allow all at any time
  *	- require all up-to-date always
  */
-enum class sync_mode {
+enum class sync_mode : std::int64_t {
 	allow_all,
     require_special_seen,
     require_data_add_remove_seen,
 	require_all_seen
 };
 
-enum class auth_mode {
+enum class auth_mode : std::int64_t {
     only_tag,
     sign_records
 };
 
 /// how a storage is replicated between servers (plan phases 3+); part of the immutable modes
-enum class replication_mode {
+enum class replication_mode : std::int64_t {
 	none = 0,
 	weak,
 	strict
@@ -43,7 +43,7 @@ struct storage_modes {
  * A replicated storage requires signed records (plan 2.4/D5): a replica must be able to
  * verify what a peer sends without the group key.
  */
-constexpr bool valid_storage_modes(storage_modes const& m) {
+[[nodiscard]] constexpr bool valid_storage_modes(storage_modes const& m) {
 	return m.replication == replication_mode::none || m.auth == auth_mode::sign_records;
 }
 

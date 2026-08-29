@@ -33,7 +33,7 @@ public:
 	void sign(octet_vector const& storage_id, crypto::private_key const& key);
 
 	/// verify the assignment signature; also checks that the signer is the stated origin
-	error verify(octet_vector const& storage_id, crypto::public_key_access const& keys) const;
+	[[nodiscard]] error verify(octet_vector const& storage_id, crypto::public_key_access const& keys) const;
 
 	template<typename Ar>
 	void serialise(Ar& ar) {

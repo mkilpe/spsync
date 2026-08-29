@@ -31,8 +31,4 @@ bool metadata::operator==(metadata const& m) const {
 	return data_ == m.data_ && trailing_data_ == m.trailing_data_;
 }
 
-bool metadata::operator!=(metadata const& m) const {
-	return !(*this == m);
-}
-
 }

@@ -1,4 +1,6 @@
 #include "client_sync.hpp"
+
+#include <utility>
 #include <securepath/crypto/public_key_access.hpp>
 #include "record_util.hpp"
 
@@ -154,7 +156,7 @@ struct client_sync::impl : engine_output {
 		}
 		auto q = db->prepare("INSERT INTO members(key_id, status) VALUES(:id, :status);");
 		q.bind(":id", uid.public_key_id().data());
-		q.bind(":status", static_cast<std::int64_t>(status));
+		q.bind(":status", std::to_underlying(status));
 		q.execute();
 	}
 
@@ -172,7 +174,7 @@ struct client_sync::impl : engine_output {
 	void set_member_status(util::user_id const& uid, member_status status) {
 		auto q = db->prepare("UPDATE members SET status = :status WHERE key_id = :id;");
 		q.bind(":id", uid.public_key_id().data());
-		q.bind(":status", static_cast<std::int64_t>(status));
+		q.bind(":status", std::to_underlying(status));
 		q.execute();
 	}
 

@@ -12,7 +12,7 @@ namespace securepath::sync::util {
  * Result for operation or request, contains either error or the result data
  */
 template<typename DataType>
-class result {
+class [[nodiscard]] result {
 public:
 	using data_type = DataType;
 

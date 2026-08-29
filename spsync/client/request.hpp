@@ -31,7 +31,7 @@ struct request_data {
 	}
 };
 
-enum class request_state {
+enum class request_state : std::int64_t {
 	waiting_for_verification = 0,
 	verification_succeeded,
 	querying_key_failed,

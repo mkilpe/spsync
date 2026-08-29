@@ -35,10 +35,6 @@ bool operator==(object_id const& left, object_id const& right) {
 	return left.value() == right.value();
 }
 
-bool operator!=(object_id const& left, object_id const& right) {
-	return !(left == right);
-}
-
 bool operator<(object_id const& left, object_id const& right) {
 	return left.value() < right.value();
 }

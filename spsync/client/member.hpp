@@ -10,7 +10,7 @@
 namespace securepath::sync {
 
 /// Status of the member
-enum class member_status {
+enum class member_status : std::int64_t {
 	member = 0,     /// member of the group, has committed user change
 	pending_add,    /// locally added member that is waiting to be committed
 	pending_remove  /// locally removed member that is waiting to be committed

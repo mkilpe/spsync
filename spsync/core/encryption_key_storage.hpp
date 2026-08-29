@@ -60,7 +60,6 @@ private:
 };
 
 bool operator==(encryption_key const& left, encryption_key const& right);
-bool operator!=(encryption_key const& left, encryption_key const& right);
 
 }
 

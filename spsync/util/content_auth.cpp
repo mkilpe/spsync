@@ -76,8 +76,4 @@ bool content_auth::operator==(content_auth const& auth) const {
 		trailing_data_ == auth.trailing_data_;
 }
 
-bool content_auth::operator!=(content_auth const& auth) const {
-	return !(*this == auth);
-}
-
 }

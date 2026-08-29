@@ -88,10 +88,6 @@ bool users::operator==(users const& u) const {
 	return mode_ == u.mode_ && users_ == u.users_ && trailing_data_ == u.trailing_data_;
 }
 
-bool users::operator!=(users const& u) const {
-	return !(*this == u);
-}
-
 std::ostream& operator<<(std::ostream& out, users const& u) {
 	bool first = true;
 	out << "{mode=" << u.mode() << " users: ";

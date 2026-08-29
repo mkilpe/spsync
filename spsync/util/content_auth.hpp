@@ -32,10 +32,9 @@ public:
 	std::optional<crypto::public_key_id> signature_issuer() const;
 
 	/// verify the signature against the digest of the serialised record and the tag
-	error verify(crypto::public_key_access const&, octet_span record_bytes) const;
+	[[nodiscard]] error verify(crypto::public_key_access const&, octet_span record_bytes) const;
 
 	bool operator==(content_auth const& auth) const;
-	bool operator!=(content_auth const& auth) const;
 
 	template<typename Ar>
 	void serialise(Ar& ar) {

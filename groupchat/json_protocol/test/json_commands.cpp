@@ -96,8 +96,8 @@ std::vector<json_chat> list_chats(std::string str) {
 	CHECK_NOTHROW([&]{
 		auto obj = json::parse(str).as_object();
 		auto arr = extract<json::array>(obj, "data");
-		for(auto it = arr.begin(); it != arr.end(); ++it) {
-			auto obj = it->as_object();
+		for(auto const& v : arr) {
+			auto obj = v.as_object();
 			res.push_back(json_chat{
 				extract<std::string>(obj, "name"),
 				extract<std::string>(obj, "id")});
@@ -186,8 +186,8 @@ static json_message plain_message(json::object const& obj) {
 std::vector<json_message> list_plain_messages(json::array const& msg_arr) {
 	std::vector<json_message> res;
 	CHECK_NOTHROW([&]{
-		for(auto it = msg_arr.begin(); it != msg_arr.end(); ++it) {
-			auto obj = it->as_object();
+		for(auto const& v : msg_arr) {
+			auto obj = v.as_object();
 			res.push_back(plain_message(obj));
 		}
 	}());
@@ -281,8 +281,8 @@ std::vector<json_request> list_requests(std::string str) {
 	CHECK_NOTHROW([&]{
 		auto obj = json::parse(str).as_object();
 		auto arr = extract<json::array>(obj, "data");
-		for(auto it = arr.begin(); it != arr.end(); ++it) {
-			res.push_back(plain_request(it->as_object()));
+		for(auto const& v : arr) {
+			res.push_back(plain_request(v.as_object()));
 		}
 	}());
 	return res;
