@@ -2,6 +2,7 @@
 
 #include <format>
 #include <sstream>
+#include <string>
 
 namespace securepath::sync::util {
 
@@ -30,6 +31,16 @@ std::string fmt_stream(T const& v) {
 }
 
 }
+
+/// native formatter for a type with a std::string to_string(type) function; the
+/// ostream operator stays as a one line legacy shim over the same to_string
+#define SPSYNC_FORMAT_VIA_TO_STRING(...) \
+template<> struct std::formatter<__VA_ARGS__> : std::formatter<std::string> { \
+	template<typename FormatContext> \
+	auto format(__VA_ARGS__ const& v, FormatContext& ctx) const { \
+		return std::formatter<std::string>::format(to_string(v), ctx); \
+	} \
+};
 
 #define SPSYNC_FORMAT_VIA_OSTREAM(...) \
 template<> struct std::formatter<__VA_ARGS__> : securepath::sync::util::ostream_formatter { \

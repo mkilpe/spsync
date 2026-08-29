@@ -40,6 +40,7 @@ enum class record_state : std::int64_t {
 /// returns true if in good state, ie. not unknown or invalid
 bool is_valid_state(record_state);
 
+std::string to_string(record_state);
 std::ostream& operator<<(std::ostream&, record_state);
 
 /**
@@ -100,5 +101,5 @@ using record_handle = std::shared_ptr<record_interface>;
 }
 
 
-SPSYNC_FORMAT_VIA_OSTREAM(securepath::sync::record_state)
+SPSYNC_FORMAT_VIA_TO_STRING(securepath::sync::record_state)
 

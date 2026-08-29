@@ -1,4 +1,6 @@
 #include "chat_connection.hpp"
+
+#include <flat_map>
 #include "channel.hpp"
 #include "events.hpp"
 
@@ -127,7 +129,7 @@ struct chat_connection::impl
 	chat_conn_context ccontext;
 	std::promise<void> connect_promise;
 
-	std::map<sync::storage_id, std::unique_ptr<channel>> channels;
+	std::flat_map<sync::storage_id, std::unique_ptr<channel>> channels;
 	sync::network_connection net;
 };
 

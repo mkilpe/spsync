@@ -121,8 +121,8 @@ void channel::create_initial_record() {
 	send_user_change(std::move(initial), std::move(header));
 }
 
-message channel::send_message(std::string const& msg) {
-	message_data chat_msg{msg, clock_type::now()};
+message channel::send_message(std::string_view msg) {
+	message_data chat_msg{std::string{msg}, clock_type::now()};
 	sync::metadata header;
 	header.insert(groupchat_message_id, chat_msg);
 	auto msg_id = sync::util::create_object_id();
@@ -135,7 +135,7 @@ message channel::send_message(std::string const& msg) {
 	auto change = messages_.insert(msg_id, data, msg_state::pending);
 
 	return message{
-		msg,
+		chat_msg.message,
 		my_key_id_,
 		msg_id,
 		chat_msg.sender_time,

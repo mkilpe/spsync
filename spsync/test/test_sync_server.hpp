@@ -58,7 +58,7 @@ private:
 	test_sync_server* server_{};
 	sequence_number last_pushed_record_;
 	request_handle req_handle{};
-	std::deque<std::function<void()>> events_;
+	std::deque<std::move_only_function<void()>> events_;
 };
 
 /**

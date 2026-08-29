@@ -37,4 +37,4 @@ std::ostream& operator<<(std::ostream&, member_status);
 
 }
 
-SPSYNC_FORMAT_VIA_OSTREAM(securepath::sync::member_status)
+SPSYNC_FORMAT_VIA_TO_STRING(securepath::sync::member_status)

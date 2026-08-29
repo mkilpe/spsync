@@ -1,4 +1,6 @@
 #include "groupchat.hpp"
+
+#include <flat_map>
 #include "channel.hpp"
 #include "events.hpp"
 
@@ -204,10 +206,10 @@ struct groupchat::impl
 	event_system::event_handler& callback;
 
 	server_id last_id{};
-	std::map<host_port, server_id> hp_map;
+	std::flat_map<host_port, server_id> hp_map;
 
 	channel_list channels;
-	std::map<server_id, std::shared_ptr<chat_connection>> connections;
+	std::flat_map<server_id, std::shared_ptr<chat_connection>> connections;
 
 	sync::client::contact_handler cconn;
 	sync::util::config& config;

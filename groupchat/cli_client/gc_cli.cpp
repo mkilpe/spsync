@@ -257,7 +257,7 @@ void gc_cli::manage_window(std::vector<std::wstring_view> const& args) {
 	}
 }
 
-void gc_cli::send_message(std::string const& message) {
+void gc_cli::send_message(std::string_view message) {
 	int ch = win_->current_channel();
 	if(ch) {
 		auto cid = gc_->map_to_cid(ch);
@@ -270,7 +270,7 @@ void gc_cli::send_message(std::string const& message) {
 			auto conn = gc_->load(*hp);
 			auto& channel = conn->get(*cid);
 			channel.send_message(message);
-			win_->add_message(ch, "--> " + message);
+			win_->add_message(ch, std::format("--> {}", message));
 		}
 	}
 }

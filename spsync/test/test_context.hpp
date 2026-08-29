@@ -39,9 +39,7 @@ public:
 	~test_context() {
 		guard_.reset();
 		io_.stop();
-		for(auto& t : threads_) {
-			t.join();
-		}
+		// the jthreads join on destruction
 	}
 
 	test_context(test_context const&) = delete;
@@ -119,7 +117,7 @@ private:
 
 	endpoint server_{io_, pki_.root.public_key()};
 	std::deque<std::unique_ptr<endpoint>> clients_;
-	std::vector<std::thread> threads_;
+	std::vector<std::jthread> threads_;
 };
 
 }

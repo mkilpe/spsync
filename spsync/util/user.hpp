@@ -43,6 +43,7 @@ private:
 bool operator==(user_id const& left, user_id const& right);
 bool operator<(user_id const& left, user_id const& right);
 
+std::string to_string(user_id const&);
 std::ostream& operator<<(std::ostream&, user_id const&);
 
 class user : public metadata {
@@ -69,6 +70,7 @@ private:
 	serialisation::trailing_data trailing_data_;
 };
 
+std::string to_string(user const&);
 std::ostream& operator<<(std::ostream&, user const&);
 
 /// User access type to storage
@@ -85,6 +87,7 @@ enum class access_type {
 serialisation::serialiser& serialise(serialisation::serialiser& s, access_type const& v);
 serialisation::deserialiser& serialise(serialisation::deserialiser& s, access_type& v);
 
+std::string to_string(access_type const&);
 std::ostream& operator<<(std::ostream&, access_type const&);
 
 
@@ -105,13 +108,14 @@ struct user_access {
 
 bool operator==(user_access const& l, user_access const& r);
 
+std::string to_string(user_access const&);
 std::ostream& operator<<(std::ostream&, user_access const&);
 
 }
 
 
-SPSYNC_FORMAT_VIA_OSTREAM(securepath::sync::util::user_id)
-SPSYNC_FORMAT_VIA_OSTREAM(securepath::sync::util::user)
-SPSYNC_FORMAT_VIA_OSTREAM(securepath::sync::util::access_type)
-SPSYNC_FORMAT_VIA_OSTREAM(securepath::sync::util::user_access)
+SPSYNC_FORMAT_VIA_TO_STRING(securepath::sync::util::user_id)
+SPSYNC_FORMAT_VIA_TO_STRING(securepath::sync::util::user)
+SPSYNC_FORMAT_VIA_TO_STRING(securepath::sync::util::access_type)
+SPSYNC_FORMAT_VIA_TO_STRING(securepath::sync::util::user_access)
 

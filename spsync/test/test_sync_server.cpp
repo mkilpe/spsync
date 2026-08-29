@@ -40,7 +40,7 @@ bool test_sync_server_client::handle_events() {
 		}
 	}
 	// take the events out in case handling an event adds another event
-	std::deque<std::function<void()>> events;
+	std::deque<std::move_only_function<void()>> events;
 	events.swap(events_);
 
 	for(auto&& event : events) {

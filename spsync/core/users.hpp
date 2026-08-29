@@ -19,6 +19,7 @@ enum class users_change_mode {
 serialisation::serialiser& serialise(serialisation::serialiser& s, users_change_mode const& v);
 serialisation::deserialiser& serialise(serialisation::deserialiser& s, users_change_mode& v);
 
+std::string to_string(users_change_mode const&);
 std::ostream& operator<<(std::ostream&, users_change_mode const&);
 
 /**
@@ -60,11 +61,12 @@ private:
 	serialisation::trailing_data trailing_data_;
 };
 
+std::string to_string(users const&);
 std::ostream& operator<<(std::ostream&, users const&);
 
 }
 
 
-SPSYNC_FORMAT_VIA_OSTREAM(securepath::sync::users)
-SPSYNC_FORMAT_VIA_OSTREAM(securepath::sync::users_change_mode)
+SPSYNC_FORMAT_VIA_TO_STRING(securepath::sync::users)
+SPSYNC_FORMAT_VIA_TO_STRING(securepath::sync::users_change_mode)
 

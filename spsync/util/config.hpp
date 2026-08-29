@@ -30,7 +30,7 @@ public:
 	/** Sets value, allows to set/overwrite leaf values if only_leaf is true (throw if trying to overwrite branch)
 	 *  Otherwise allow to overwrite whole branches of tree which can be dangerous if not used carefully
 	 */
-	void set(std::string const& option, json::value const&, bool only_leaf = true);
+	void set(std::string_view option, json::value const&, bool only_leaf = true);
 
 	/// Find option if it exists
 	std::optional<json::value> find(std::string_view option) const;
@@ -42,14 +42,14 @@ public:
 	json::value get_default(std::string_view option, json::value const& def) const;
 
 	/// remove value of config option
-	void remove(std::string const& option);
+	void remove(std::string_view option);
 
 	/// Get broadcast event handler to listen changes
 	event_system::broadcast_event_handler& change_notification();
 protected:
 	void load();
-	void update_db(std::string const& key, json::value const& v);
-	void remove_db(std::string const& key, json::value const& v);
+	void update_db(std::string_view key, json::value const& v);
+	void remove_db(std::string_view key, json::value const& v);
 	void set_impl(std::string_view key, json::value const& v, bool overwrite);
 private:
 	mutable std::mutex mutex_;

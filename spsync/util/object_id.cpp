@@ -39,9 +39,12 @@ bool operator<(object_id const& left, object_id const& right) {
 	return left.value() < right.value();
 }
 
+std::string to_string(object_id const& id) {
+	return id.is_valid() ? id.to_hex() : "<invalid object id>";
+}
+
 std::ostream& operator<<(std::ostream& out, object_id const& id) {
-	std::string res = id.is_valid() ? id.to_hex() : "<invalid object id>";
-	return out << res;
+	return out << to_string(id);
 }
 
 }

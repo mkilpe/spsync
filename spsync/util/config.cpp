@@ -53,11 +53,11 @@ void config::load() {
 	}
 }
 
-void config::update_db(std::string const& key, json::value const& v) {
+void config::update_db(std::string_view key, json::value const& v) {
 	// recursively write objects to database as single non-object entities
 	if(v.is_object()) {
 		for(auto value : v.as_object()) {
-			std::string next_key = key;
+			std::string next_key{key};
 			if(!next_key.empty()) {
 				next_key += ".";
 			}
@@ -74,10 +74,10 @@ void config::update_db(std::string const& key, json::value const& v) {
 	}
 }
 
-void config::remove_db(std::string const& key, json::value const& v) {
+void config::remove_db(std::string_view key, json::value const& v) {
 	if(v.is_object()) {
 		for(auto value : v.as_object()) {
-			std::string next_key = key;
+			std::string next_key{key};
 			if(!next_key.empty()) {
 				next_key += ".";
 			}
@@ -118,7 +118,7 @@ void config::set_impl(std::string_view key, json::value const& v, bool overwrite
 	}
 }
 
-void config::set(std::string const& option, json::value const& v, bool only_leaf) {
+void config::set(std::string_view option, json::value const& v, bool only_leaf) {
 	LOG_TRACE("config set [{} = {}]", option, json::serialize(v));
 	std::unique_lock l{mutex_};
 	set_impl(option, v, !only_leaf);
@@ -161,7 +161,7 @@ json::value config::get_default(std::string_view option, json::value const& def)
 	return v.value_or(def);
 }
 
-void config::remove(std::string const& option) {
+void config::remove(std::string_view option) {
 	std::unique_lock l{mutex_};
 	json::object* cur = &root_;
 	auto key_parts = split_view(option, ".");

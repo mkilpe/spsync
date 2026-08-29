@@ -44,10 +44,11 @@ object_id create_object_id();
 bool operator==(object_id const& left, object_id const& right);
 bool operator<(object_id const& left, object_id const& right);
 
+std::string to_string(object_id const&);
 std::ostream& operator<<(std::ostream&, object_id const&);
 
 }
 
 
-SPSYNC_FORMAT_VIA_OSTREAM(securepath::sync::util::object_id)
+SPSYNC_FORMAT_VIA_TO_STRING(securepath::sync::util::object_id)
 

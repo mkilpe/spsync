@@ -10,13 +10,13 @@ public:
 	request_handle req_handle{};
 
 	// save per action responses
-	std::deque<std::function<void()>> event_queue;
-	std::deque<std::function<fetch_record_sig>> fetch_records_queue;
-	std::deque<std::function<fetch_data_sig>> fetch_data_queue;
-	std::deque<std::function<commit_sig>> commit_queue;
+	std::deque<std::move_only_function<void()>> event_queue;
+	std::deque<std::move_only_function<fetch_record_sig>> fetch_records_queue;
+	std::deque<std::move_only_function<fetch_data_sig>> fetch_data_queue;
+	std::deque<std::move_only_function<commit_sig>> commit_queue;
 
 	// generic actions which are handled before the above specific ones
-	std::deque<std::function<void(comm_output&)>> action_queue;
+	std::deque<std::move_only_function<void(comm_output&)>> action_queue;
 };
 
 comm_test_interface::comm_test_interface(sync::progress& p, record_storage& s)
@@ -34,19 +34,19 @@ void comm_test_interface::set_output(comm_output& output) {
 	impl_->output = &output;
 }
 
-void comm_test_interface::add_fetch_records_response(std::function<fetch_record_sig> f) {
+void comm_test_interface::add_fetch_records_response(std::move_only_function<fetch_record_sig> f) {
 	impl_->fetch_records_queue.push_back(std::move(f));
 }
 
-void comm_test_interface::add_fetch_data_response(std::function<fetch_data_sig> f) {
+void comm_test_interface::add_fetch_data_response(std::move_only_function<fetch_data_sig> f) {
 	impl_->fetch_data_queue.push_back(std::move(f));
 }
 
-void comm_test_interface::add_commit_record_response(std::function<commit_sig> f) {
+void comm_test_interface::add_commit_record_response(std::move_only_function<commit_sig> f) {
 	impl_->commit_queue.push_back(std::move(f));
 }
 
-void comm_test_interface::add_action(std::function<void(comm_output&)> f) {
+void comm_test_interface::add_action(std::move_only_function<void(comm_output&)> f) {
 	impl_->action_queue.push_back(std::move(f));
 }
 
@@ -62,12 +62,12 @@ bool comm_test_interface::process_event() {
 	bool ret = false;
 	assert(impl_->output);
 	if(!impl_->action_queue.empty()) {
-		auto func = impl_->action_queue.front();
+		auto func = std::move(impl_->action_queue.front());
 		impl_->action_queue.pop_front();
 		func(*impl_->output);
 		ret = true;
 	} else if(!impl_->event_queue.empty()) {
-		auto func = impl_->event_queue.front();
+		auto func = std::move(impl_->event_queue.front());
 		impl_->event_queue.pop_front();
 		func();
 		ret = true;

@@ -1,5 +1,7 @@
 #include "users.hpp"
 
+#include <format>
+
 #include <securepath/serialisation/enum.hpp>
 
 #include <cassert>
@@ -15,16 +17,18 @@ serialisation::deserialiser& serialise(serialisation::deserialiser& s, users_cha
 	return securepath::serialisation::serialise(s, v);
 }
 
-std::ostream& operator<<(std::ostream& out, users_change_mode const& mode) {
-	char const* const strings[] = {"full", "delta"};
+std::string to_string(users_change_mode const& mode) {
 	if(mode == users_change_mode::full) {
-		out << "full";
-	} else if(mode == users_change_mode::delta) {
-		out << "delta";
-	} else {
-		out << "unknown";
+		return "full";
 	}
-	return out;
+	if(mode == users_change_mode::delta) {
+		return "delta";
+	}
+	return "unknown";
+}
+
+std::ostream& operator<<(std::ostream& out, users_change_mode const& mode) {
+	return out << to_string(mode);
 }
 
 users::users(users_change_mode mode)
@@ -88,19 +92,23 @@ bool users::operator==(users const& u) const {
 	return mode_ == u.mode_ && users_ == u.users_ && trailing_data_ == u.trailing_data_;
 }
 
-std::ostream& operator<<(std::ostream& out, users const& u) {
+std::string to_string(users const& u) {
+	std::string out = std::format("{{mode={} users: ", u.mode());
 	bool first = true;
-	out << "{mode=" << u.mode() << " users: ";
 	for(auto&& v : u.access()) {
 		if(first) {
 			first = false;
 		} else {
-			out << ", ";
+			out += ", ";
 		}
-		out << v;
+		out += std::format("{}", v);
 	}
-	out << "}";
+	out += "}";
 	return out;
+}
+
+std::ostream& operator<<(std::ostream& out, users const& u) {
+	return out << to_string(u);
 }
 
 }

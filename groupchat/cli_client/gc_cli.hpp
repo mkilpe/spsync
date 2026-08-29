@@ -1,6 +1,8 @@
 #pragma once
 
 #include "cmd_data.hpp"
+
+#include <flat_map>
 #include "gc_cli_config.hpp"
 #include "cli_window.hpp"
 #include "cli_groupchat.hpp"
@@ -37,7 +39,7 @@ private:
 	void show_chats(std::vector<std::wstring_view> const& args);
 	void manage_chat(std::vector<std::wstring_view> const& args);
 	void manage_window(std::vector<std::wstring_view> const& args);
-	void send_message(std::string const& message);
+	void send_message(std::string_view message);
 
 	void add_member(std::vector<std::wstring_view> const& args);
 	void join_chat(std::vector<std::wstring_view> const& args);
@@ -46,7 +48,7 @@ private:
 private:
 	std::unique_ptr<cli_window> win_;
 	std::unique_ptr<cli_groupchat> gc_;
-	std::map<std::wstring, cmd_data> cmds_;
+	std::flat_map<std::wstring, cmd_data> cmds_;
 };
 
 }

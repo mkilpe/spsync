@@ -2,11 +2,12 @@
 
 namespace securepath::sync::test {
 
-database::connection_ptr create_test_database(std::string const& db_name, bool remove) {
+database::connection_ptr create_test_database(std::string_view db_name, bool remove) {
+	std::string name{db_name};
 	if(remove) {
-		std::remove(db_name.c_str());
+		std::remove(name.c_str());
 	}
-	return database::sqlite::create_sqlite_connection(db_name);
+	return database::sqlite::create_sqlite_connection(name);
 }
 
 bool check_record_matches(sequence_number seq, int client_n, record_handle sh, record_handle ch) {

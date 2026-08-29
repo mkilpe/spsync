@@ -15,14 +15,14 @@ std::string error_to_json(securepath::error const& err);
 json::object server_to_object(host_port const& server);
 
 json::object contacting_to_object(sync::client::request const& req
-	, std::string const& name
-	, std::string const& message);
+	, std::string_view name
+	, std::string_view message);
 
 json::object invitation_to_object(sync::client::request const& req
 	, sync::client::storage_info const& info
 	, json::object const& sender
-	, std::string const& name
-	, std::string const& message);
+	, std::string_view name
+	, std::string_view message);
 
 
 inline std::string call(auto Func) {

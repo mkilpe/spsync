@@ -28,12 +28,17 @@ struct chain_block_id {
 	}
 };
 
+inline std::string to_string(chain_block_id const& b) {
+	// note: no closing paren, kept as the historical log format
+	return std::format("({}, {}", b.sequence, to_hex(b.hash));
+}
+
 inline std::ostream& operator<<(std::ostream& out, chain_block_id const& b) {
-	return out << "(" << b.sequence << ", " << to_hex(b.hash);
+	return out << to_string(b);
 }
 
 }
 
 
-SPSYNC_FORMAT_VIA_OSTREAM(securepath::sync::chain_block_id)
+SPSYNC_FORMAT_VIA_TO_STRING(securepath::sync::chain_block_id)
 

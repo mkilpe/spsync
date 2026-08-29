@@ -22,10 +22,10 @@ public:
 	using fetch_data_sig = result<record_data_handle>(sequence_number);
 	using commit_sig = result<chain_block>(record_handle);
 
-	void add_fetch_records_response(std::function<fetch_record_sig>);
-	void add_fetch_data_response(std::function<fetch_data_sig>);
-	void add_commit_record_response(std::function<commit_sig>);
-	void add_action(std::function<void(comm_output&)>);
+	void add_fetch_records_response(std::move_only_function<fetch_record_sig>);
+	void add_fetch_data_response(std::move_only_function<fetch_data_sig>);
+	void add_commit_record_response(std::move_only_function<commit_sig>);
+	void add_action(std::move_only_function<void(comm_output&)>);
 
 	sequence_number next_sequence_number();
 	octet_vector previous_block_hash() const;

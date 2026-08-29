@@ -48,14 +48,14 @@ bool check_contains_json(json::object const& in, json::object const& exp) {
 	return true;
 }
 
-bool check_contains_json(std::string const& in, std::string const& exp) {
+bool check_contains_json(std::string_view in, std::string_view exp) {
 	CAPTURE(in, exp);
 	auto in_j = json::parse(in).as_object();
 	auto exp_j = json::parse(exp).as_object();
 	return check_contains_json(in_j, exp_j);
 }
 
-bool check_equal_json(std::string const& in, std::string const& exp) {
+bool check_equal_json(std::string_view in, std::string_view exp) {
 	CAPTURE(in, exp);
 	auto in_j = json::parse(in).as_object();
 	auto exp_j = json::parse(exp).as_object();

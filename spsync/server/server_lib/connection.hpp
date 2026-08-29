@@ -2,6 +2,8 @@
 
 #include "storage_server_context.hpp"
 
+#include <flat_map>
+
 #include <spsync/core/records/block_envelope.hpp>
 
 #include <optional>
@@ -39,7 +41,7 @@ private:
 private:
 	storage_server_context& context_;
 	crypto::public_key_id id_;
-	std::map<protocol::storage_id, std::shared_ptr<storage>> syncs_;
+	std::flat_map<protocol::storage_id, std::shared_ptr<storage>> syncs_;
 };
 
 }

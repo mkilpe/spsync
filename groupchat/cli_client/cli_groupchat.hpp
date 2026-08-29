@@ -1,6 +1,8 @@
 #pragma once
 
 #include "cli_window.hpp"
+
+#include <flat_map>
 #include "gc_cli_config.hpp"
 
 #include <groupchat/core/groupchat.hpp>
@@ -43,8 +45,8 @@ private:
 private:
 	cli_window& win_;
 	gc_cli_config config_;
-	std::map<chat_id, int> channel_map_;
-	std::map<int, chat_id> cid_map_;
+	std::flat_map<chat_id, int> channel_map_;
+	std::flat_map<int, chat_id> cid_map_;
 };
 
 }

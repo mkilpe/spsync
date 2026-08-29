@@ -37,7 +37,7 @@ public:
 	void set_join_data(sync::client::storage_info const& sinfo, std::string const& name);
 
 	void create_initial_record();
-	message send_message(std::string const& message);
+	message send_message(std::string_view message);
 	std::deque<message> messages(message_search = {}) const;
 
 	chat_id id() const;

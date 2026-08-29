@@ -25,7 +25,7 @@ struct keep_db_type {} keep_db;
 // This class is to test request and contact handlers
 class test_client : public event_system::event_handler {
 public:
-	test_client(event_system::event_loop& loop, network::context& context, std::string const& dbname, host_port keys = local_key_server)
+	test_client(event_system::event_loop& loop, network::context& context, std::string_view dbname, host_port keys = local_key_server)
 	: event_handler(loop)
 	, conn(context, *this, sync::test::create_test_database(dbname))
 	{
@@ -33,7 +33,7 @@ public:
 		conn.set_own_account(me);
 	}
 
-	test_client(keep_db_type, event_system::event_loop& loop, network::context& context, std::string const& dbname, host_port keys = local_key_server)
+	test_client(keep_db_type, event_system::event_loop& loop, network::context& context, std::string_view dbname, host_port keys = local_key_server)
 	: event_handler(loop)
 	, conn(context, *this, sync::test::create_test_database(dbname, false))
 	{

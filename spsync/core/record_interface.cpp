@@ -10,15 +10,17 @@ bool is_valid_state(record_state state) {
 
 char const* const state_name[] = {"unknown",  "invalid", "pending commit", "pending sync", "in sync", "acked"};
 
-std::ostream& operator<<(std::ostream& out, record_state state) {
-	int state_value = static_cast<int>(state);
-	if(0 <= state_value && state_value < sizeof(state_name)/sizeof(*state_name)) {
-		out << state_name[state_value];
-	} else {
-		LOG_WARN("bad state value: {}", state_value);
-		out << "<bad state value>";
+std::string to_string(record_state state) {
+	auto state_value = static_cast<std::size_t>(state);
+	if(state_value < sizeof(state_name)/sizeof(*state_name)) {
+		return state_name[state_value];
 	}
-	return out;
+	LOG_WARN("bad state value: {}", state_value);
+	return "<bad state value>";
+}
+
+std::ostream& operator<<(std::ostream& out, record_state state) {
+	return out << to_string(state);
 }
 
 }

@@ -1,5 +1,7 @@
 
 #include "storage_server.hpp"
+
+#include <flat_map>
 #include "connection.hpp"
 #include "storage.hpp"
 
@@ -162,7 +164,7 @@ public:
 	storage_server_params params_;
 	network::context& context_;
 	network::handshake_data handshake_data_;
-	std::map<protocol::storage_id, std::shared_ptr<storage>> storages_;
+	std::flat_map<protocol::storage_id, std::shared_ptr<storage>> storages_;
 	storage_config default_storage_config_;
 };
 

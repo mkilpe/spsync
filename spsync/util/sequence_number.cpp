@@ -52,12 +52,12 @@ sequence_number operator-(std::uint64_t v, sequence_number const& seq) {
 	return sequence_number{seq.value - v};
 }
 
+std::string to_string(sequence_number const& seq) {
+	return seq.is_valid() ? std::to_string(seq.value) : "<invalid sequence number>";
+}
+
 std::ostream& operator<<(std::ostream& out, sequence_number const& seq) {
-	if(seq.is_valid()) {
-		out << seq.value;
-	} else {
-		out << "<invalid sequence number>";
-	}
+	out << to_string(seq);
 	return out;
 }
 
