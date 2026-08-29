@@ -472,6 +472,87 @@ TEST_CASE("record_storage acked state", "[unit]") {
 }
 
 
+TEST_CASE("record_storage truncate_from", "[unit]") {
+	remove_database_test_db();
+	auto db_conn = database::sqlite::create_sqlite_connection(db_name);
+	record_storage storage(db_conn);
+
+	test_block_creator creator;
+	REQUIRE(storage.create(creator.test_user_change(), record_state::in_sync));
+	auto b2 = creator.test_data_change();
+	REQUIRE(storage.create(b2, record_state::in_sync));
+	auto b3 = creator.test_data_change();
+	REQUIRE(storage.create(b3, record_state::acked));
+	auto b4 = creator.test_data_change();
+	REQUIRE(storage.create(b4, record_state::pending_sync));
+	auto local = creator.test_data_change();
+	REQUIRE(storage.create(local.to_auth_record<data_change_record>()));
+
+	object_id const oid2 = b2.deserialise_to<data_change_record>().begin()->data.id;
+	CHECK(storage.find_last(oid2));
+
+	auto held = storage.find(sequence_number{2});
+	REQUIRE(held);
+
+	CHECK_THROWS(storage.truncate_from(sequence_number{}));
+
+	auto removed = storage.truncate_from(sequence_number{2});
+	REQUIRE(removed.size() == 3);
+	CHECK(removed[0].tag() == b2.tag());
+	CHECK(removed[1].tag() == b3.tag());
+	CHECK(removed[2].tag() == b4.tag());
+
+	// rows and their object records are gone, the root stays
+	CHECK(storage.last_block().sequence == sequence_number{1});
+	CHECK(!storage.find(sequence_number{2}));
+	CHECK(!storage.find(sequence_number{3}, record_state::acked));
+	CHECK(!storage.find(sequence_number{4}, record_state::pending_sync));
+	CHECK(!storage.find_last(oid2));
+	CHECK(held->state() == record_state::invalid);
+
+	// pending_commit records are never touched
+	auto pending = storage.find_first_pending_commit();
+	REQUIRE(pending);
+	CHECK(pending->tag() == local.tag());
+
+	// the freed sequences can be committed again (unique sequence selector is released)
+	auto again = creator.test_data_change();
+	again.set_sequence_and_parent_hash(sequence_number{2}, storage.last_block().hash);
+	CHECK(storage.create(again, record_state::in_sync));
+	CHECK(storage.last_block().sequence == sequence_number{2});
+}
+
+TEST_CASE("record_storage truncate_from demotes acked", "[unit]") {
+	remove_database_test_db();
+	auto db_conn = database::sqlite::create_sqlite_connection(db_name);
+	record_storage storage(db_conn);
+
+	test_block_creator creator;
+	REQUIRE(storage.create(creator.test_user_change(), record_state::in_sync));
+	auto b2 = creator.test_data_change();
+	REQUIRE(storage.create(b2, record_state::in_sync));
+	auto b3 = creator.test_data_change();
+	auto acked_handle = storage.create(b3, record_state::acked);
+	REQUIRE(acked_handle);
+
+	auto removed = storage.truncate_from(sequence_number{2}, true);
+	REQUIRE(removed.size() == 1);
+	CHECK(removed[0].tag() == b2.tag());
+
+	// the acked record is demoted to pending_commit, keeping op id and content for rebase
+	CHECK(acked_handle->state() == record_state::pending_commit);
+	auto pending = storage.find_first_pending_commit();
+	REQUIRE(pending);
+	CHECK(pending == acked_handle);
+	CHECK(storage.find_op_id(b3.deserialise_to<data_change_record>().op_id()) == acked_handle);
+	CHECK(pending->record().check_matches_without_server_data(b3));
+
+	// demotion releases the unique sequence selector: the sequence can be assigned again
+	auto again = creator.test_user_change();
+	again.set_sequence_and_parent_hash(b3.sequence(), octet_vector{});
+	CHECK(storage.create(again, record_state::in_sync));
+}
+
 TEST_CASE("record_storage assignment round-trip", "[unit]") {
 	remove_database_test_db();
 	auto db_conn = database::sqlite::create_sqlite_connection(db_name);

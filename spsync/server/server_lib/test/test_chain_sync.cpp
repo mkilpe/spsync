@@ -221,6 +221,35 @@ TEST_CASE("chain_sync data add cursor replay on reopen", "[unit]") {
 	}
 }
 
+// (6b) truncation: after truncate_from the replayed cursors allow committing again (plan 3.1)
+TEST_CASE("chain_sync truncate then recommit", "[unit]") {
+	remove_database_test_db();
+	test_block_creator creator;
+	test_block_creator snapshot;
+	{
+		chain_sync sync(database::sqlite::create_sqlite_connection(db_name), chain_sync_config{sync_mode::require_special_seen});
+		CHECK(sync.commit_block(creator.test_user_change()));
+		snapshot = creator; // has seen only the first special record
+		CHECK(sync.commit_block(creator.test_user_change()));
+		CHECK(sync.commit_block(creator.test_data_change()));
+
+		auto removed = sync.records().truncate_from(sequence_number{2});
+		REQUIRE(removed.size() == 2);
+		CHECK(removed[0].sequence() == sequence_number{2});
+		CHECK(removed[1].sequence() == sequence_number{3});
+	}
+	{
+		chain_sync sync(database::sqlite::create_sqlite_connection(db_name), chain_sync_config{sync_mode::require_special_seen});
+		// head and mode cursors are recomputed from the truncated storage
+		CHECK(sync.current_sequence_number() == sequence_number{1});
+		// a client that saw only the first special record is in sync again after truncation
+		creator = snapshot;
+		CHECK(sync.commit_block(creator.test_user_change()));
+		CHECK(sync.current_sequence_number() == sequence_number{2});
+		CHECK(sync.commit_block(creator.test_data_change()));
+	}
+}
+
 // (7) validate/apply split behaves like commit_block
 TEST_CASE("chain_sync validate and apply", "[unit]") {
 	remove_database_test_db();

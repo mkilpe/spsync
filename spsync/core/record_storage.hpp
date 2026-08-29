@@ -4,6 +4,7 @@
 #include <securepath/database/connection.hpp>
 
 #include <memory>
+#include <vector>
 
 namespace securepath::sync {
 
@@ -59,6 +60,20 @@ public:
 
 	/// highest in sync sequence of data change records that add an object (no previous record tag)
 	sequence_number last_data_add_sequence() const;
+
+
+	// -- truncation --
+
+	/**
+	 * Remove every in_sync / acked / pending_sync record with sequence >= first_removed,
+	 * together with their object records, in one transaction. pending_commit records are
+	 * never touched. With demote_acked set, acked records in the range are demoted back
+	 * to pending_commit (keeping op id and content for rebase) instead of removed.
+	 * Cached handles of removed records are set to record_state::invalid.
+	 *
+	 * Returns the removed blocks in ascending sequence order (demoted blocks excluded).
+	 */
+	std::vector<chain_block> truncate_from(sequence_number first_removed, bool demote_acked = false);
 
 
 	// -- pending commit --

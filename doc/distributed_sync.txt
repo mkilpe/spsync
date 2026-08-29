@@ -655,13 +655,20 @@ sends without the group key.
 Phase 3  Server log abstraction  (still single server)
 ------------------------------------------------------
 
-- 3.1 Truncation path  (B3)                                                       [1d]
++ 3.1 Truncation path  (B3) -- done 2026-08-29                                    [1d]
       record_storage::truncate_from(sequence_number first_removed) - deletes in_sync /
       acked / pending_sync rows with seq >= N and their record_objects in one
       transaction; returns the removed blocks. Never touches pending_commit.
       Client use: demote acked -> pending_commit instead of delete (keeps op_id and
       content for rebase).
       Test: truncate then commit again; cursors (0.2) are recomputed.
+      Implemented: truncate_from(first_removed, demote_acked = false) returns the
+      removed blocks in ascending sequence order. demote_acked keeps acked rows as
+      pending_commit (op_id and content preserved, unique seq selector released so
+      the sequence can be reassigned); live handles of deleted rows are flipped to
+      invalid and dropped from the handle cache. Tests: record_storage delete and
+      demote paths, chain_sync truncate then recommit proving cursor replay
+      (require_special_seen).
 
 - 3.2 chain_log                                                                   [2d]
       Extract from chain_sync a log type over block_envelope:

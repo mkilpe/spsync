@@ -316,6 +316,70 @@ struct record_storage::impl {
 		return result;
 	}
 
+	struct truncate_row {
+		chain_block block;
+		record_state state{record_state::unknown};
+		std::uint64_t key{};
+	};
+
+	// collect the server sequenced rows (in_sync/acked/pending_sync) with seq >= first_removed
+	std::vector<truncate_row> collect_truncation_rows(sequence_number first_removed) {
+		auto q = db->prepare(
+			"SELECT key, state, record FROM record WHERE seq >= :seq"
+			" AND (state = :s1 OR state = :s2 OR state = :s3) ORDER BY seq ASC;");
+		q.bind(":seq", static_cast<std::uint64_t>(first_removed.value));
+		q.bind(":s1", std::to_underlying(record_state::in_sync));
+		q.bind(":s2", std::to_underlying(record_state::acked));
+		q.bind(":s3", std::to_underlying(record_state::pending_sync));
+
+		std::vector<truncate_row> rows;
+		auto res = q.execute();
+		for(; res; res.next()) {
+			auto key = res.value<std::uint64_t>(0);
+			auto state = res.value<std::int64_t>(1);
+			if(!key || !state) {
+				LOG_WARN("invalid record storage entry while truncating");
+				throw make_error(securepath::errc::invalid_data, "failed to interpret record columns");
+			}
+			rows.push_back({database::extract_column_type<chain_block>(res, 2)
+				, static_cast<record_state>(*state), *key});
+		}
+		return rows;
+	}
+
+	record_handle load_by_key(std::uint64_t key) {
+		auto q = db->prepare(
+			"SELECT key, tag, seq, hash, parent_hash, state FROM record WHERE key = :k;");
+		q.bind(":k", key);
+		return load_record(q.execute());
+	}
+
+	void remove_row(truncate_row const& row) {
+		auto objs = db->prepare("DELETE FROM record_objects WHERE tag = :tag;");
+		objs.bind(":tag", row.block.tag());
+		objs.execute();
+
+		auto rec = db->prepare("DELETE FROM record WHERE key = :k;");
+		rec.bind(":k", row.key);
+		rec.execute();
+	}
+
+	// drop the cache entry of a deleted row; a still live handle is flipped to invalid
+	void invalidate_handle(std::uint64_t key) {
+		record_handle handle;
+		{
+			std::unique_lock lock{mutex};
+			auto it = record_handles.find(key);
+			if(it != record_handles.end()) {
+				handle = it->second.lock();
+				record_handles.erase(it);
+			}
+		}
+		if(handle) {
+			handle->set_state(record_state::invalid);
+		}
+	}
+
 	mutable std::mutex mutex;
 	database::connection_ptr db;
 
@@ -482,6 +546,29 @@ sequence_number record_storage::last_data_add_sequence() const {
 		ret = sequence_number{res.value<std::uint64_t>(0).value_or(0)};
 	}
 	return ret;
+}
+
+std::vector<chain_block> record_storage::truncate_from(sequence_number first_removed, bool demote_acked) {
+	if(!first_removed.is_valid()) {
+		throw make_error(sync::errc::constraint_violation, "truncate_from requires a valid sequence number");
+	}
+	LOG_TRACE("truncating records [first_removed={}, demote_acked={}]", first_removed, demote_acked);
+
+	database::transaction tact(*impl_->db);
+
+	std::vector<chain_block> removed;
+	for(auto const& row : impl_->collect_truncation_rows(first_removed)) {
+		if(demote_acked && row.state == record_state::acked) {
+			if(auto handle = impl_->load_by_key(row.key)) {
+				handle->set_state(record_state::pending_commit);
+			}
+		} else {
+			impl_->remove_row(row);
+			impl_->invalidate_handle(row.key);
+			removed.push_back(row.block);
+		}
+	}
+	return removed;
 }
 
 record_handle record_storage::find_internal(record_internal_id iid) const {
