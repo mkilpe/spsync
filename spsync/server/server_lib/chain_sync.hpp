@@ -1,5 +1,4 @@
-#ifndef SPSYNC_SERVER_CHAIN_SYNC_HEADER
-#define SPSYNC_SERVER_CHAIN_SYNC_HEADER
+#pragma once
 
 #include <spsync/core/sync_mode.hpp>
 #include <spsync/core/record_storage.hpp>
@@ -104,4 +103,3 @@ private:
 
 }
 
-#endif

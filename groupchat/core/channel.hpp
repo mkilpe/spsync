@@ -1,5 +1,4 @@
-#ifndef GROUPCHAT_CORE_CHANNEL_HEADER
-#define GROUPCHAT_CORE_CHANNEL_HEADER
+#pragma once
 
 #include "chat_conn_context.hpp"
 #include "message.hpp"
@@ -61,4 +60,3 @@ private:
 
 }
 
-#endif

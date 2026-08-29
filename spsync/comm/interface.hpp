@@ -1,5 +1,4 @@
-#ifndef SPSYNC_COMM_INTERFACE_HEADER
-#define SPSYNC_COMM_INTERFACE_HEADER
+#pragma once
 
 #include "types.hpp"
 #include <securepath/event_system/event_handler.hpp>
@@ -98,4 +97,3 @@ struct on_record_received {
 }
 }
 
-#endif

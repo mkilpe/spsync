@@ -1,5 +1,4 @@
-#ifndef SPSYNC_TEST_TEST_SYNC_ENGINE_HEADER
-#define SPSYNC_TEST_TEST_SYNC_ENGINE_HEADER
+#pragma once
 
 #include <spsync/engine/sync_engine.hpp>
 
@@ -18,4 +17,3 @@ public:
 
 }
 
-#endif

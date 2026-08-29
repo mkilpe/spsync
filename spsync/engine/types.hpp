@@ -1,5 +1,4 @@
-#ifndef SPSYNC_ENGINE_TYPES_HEADER
-#define SPSYNC_ENGINE_TYPES_HEADER
+#pragma once
 
 #include <mutex>
 
@@ -13,4 +12,3 @@ using engine_mutex_type = std::recursive_mutex;
 
 }
 
-#endif

@@ -1,5 +1,4 @@
-#ifndef SPSYNC_UTIL_HASH_HEADER
-#define SPSYNC_UTIL_HASH_HEADER
+#pragma once
 
 #include <securepath/crypto/hash.hpp>
 #include <securepath/serialisation/types.hpp>
@@ -26,4 +25,3 @@ struct hash {
 };
 
 
-#endif

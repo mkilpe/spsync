@@ -1,5 +1,4 @@
-#ifndef SPSYNC_CORE_BLOCK_ENVELOPE_HEADER
-#define SPSYNC_CORE_BLOCK_ENVELOPE_HEADER
+#pragma once
 
 #include "chain_block.hpp"
 
@@ -55,4 +54,3 @@ private:
 
 }
 
-#endif

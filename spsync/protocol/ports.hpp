@@ -1,5 +1,4 @@
-#ifndef SPSYNC_PROTOCOL_PORTS_HEADER
-#define SPSYNC_PROTOCOL_PORTS_HEADER
+#pragma once
 
 #include <cstdint>
 
@@ -12,4 +11,3 @@ std::uint16_t const default_key_server_port{18188};
 }
 }
 
-#endif

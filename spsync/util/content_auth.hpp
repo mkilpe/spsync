@@ -1,5 +1,4 @@
-#ifndef SPSYNC_UTIL_CONTENT_AUTH_HEADER
-#define SPSYNC_UTIL_CONTENT_AUTH_HEADER
+#pragma once
 
 #include <securepath/crypto/error.hpp>
 #include <securepath/crypto/signature.hpp>
@@ -58,4 +57,3 @@ private:
 
 }
 
-#endif

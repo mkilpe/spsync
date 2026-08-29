@@ -1,5 +1,4 @@
-#ifndef SPSYNC_CORE_ENCRYPTION_KEY_STORAGE_HEADER
-#define SPSYNC_CORE_ENCRYPTION_KEY_STORAGE_HEADER
+#pragma once
 
 #include <spsync/util/sequence_number.hpp>
 #include <securepath/database/connection.hpp>
@@ -65,4 +64,3 @@ bool operator!=(encryption_key const& left, encryption_key const& right);
 
 }
 
-#endif

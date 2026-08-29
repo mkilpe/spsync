@@ -1,5 +1,4 @@
-#ifndef SPSYNC_CORE_RECORD_BASE_HEADER
-#define SPSYNC_CORE_RECORD_BASE_HEADER
+#pragma once
 
 #include <spsync/core/chain_block_id.hpp>
 #include <spsync/core/types.hpp>
@@ -71,4 +70,3 @@ private:
 
 }
 
-#endif

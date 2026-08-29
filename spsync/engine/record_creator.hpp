@@ -1,5 +1,4 @@
-#ifndef SPSYNC_ENGINE_RECORD_CREATOR_HEADER
-#define SPSYNC_ENGINE_RECORD_CREATOR_HEADER
+#pragma once
 
 #include <spsync/core/encryption_key_storage.hpp>
 #include <spsync/core/records/data_change_record.hpp>
@@ -96,4 +95,3 @@ public:
 
 }
 
-#endif

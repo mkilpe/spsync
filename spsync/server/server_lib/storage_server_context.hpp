@@ -1,5 +1,4 @@
-#ifndef SPSYNC_SERVER_STORAGE_SERVER_CONTEXT_HEADER
-#define SPSYNC_SERVER_STORAGE_SERVER_CONTEXT_HEADER
+#pragma once
 
 #include <spsync/core/sync_mode.hpp>
 #include <spsync/protocol/protocol_base.hpp>
@@ -32,4 +31,3 @@ public:
 
 }
 
-#endif

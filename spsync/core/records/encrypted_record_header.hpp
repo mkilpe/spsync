@@ -1,5 +1,4 @@
-#ifndef SPSYNC_CORE_ENCRYPTED_RECORD_HEADER_HEADER
-#define SPSYNC_CORE_ENCRYPTED_RECORD_HEADER_HEADER
+#pragma once
 
 namespace securepath::sync {
 
@@ -32,4 +31,3 @@ private:
 
 }
 
-#endif

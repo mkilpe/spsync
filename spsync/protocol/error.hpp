@@ -1,5 +1,4 @@
-#ifndef SPSYNC_PROTOCOL_ERROR_HEADER
-#define SPSYNC_PROTOCOL_ERROR_HEADER
+#pragma once
 
 #include <securepath/util/error.hpp>
 #include <securepath/network/net_error.hpp>
@@ -43,4 +42,3 @@ namespace std {
 		: public true_type {};
 }
 
-#endif

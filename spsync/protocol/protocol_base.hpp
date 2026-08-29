@@ -1,5 +1,4 @@
-#ifndef SPSYNC_PROTOCOL_PROTOCOL_BASE_HEADER
-#define SPSYNC_PROTOCOL_PROTOCOL_BASE_HEADER
+#pragma once
 
 #include "types.hpp"
 #include <spsync/core/sync_mode.hpp>
@@ -84,4 +83,3 @@ struct reply_base : protocol_base {
 
 SPSYNC_FORMAT_VIA_OSTREAM(securepath::network::net_error)
 
-#endif

@@ -1,5 +1,4 @@
-#ifndef SPSYNC_TEST_ENGINE_CONTEXT_HEADER
-#define SPSYNC_TEST_ENGINE_CONTEXT_HEADER
+#pragma once
 
 #include "comm_test_interface.hpp"
 #include "test_progress.hpp"
@@ -63,4 +62,3 @@ public:
 
 }
 
-#endif

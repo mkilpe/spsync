@@ -1,5 +1,4 @@
-#ifndef SPSYNC_COMM_TYPES_HEADER
-#define SPSYNC_COMM_TYPES_HEADER
+#pragma once
 
 #include <spsync/core/record_interface.hpp>
 #include <spsync/core/records/block_envelope.hpp>
@@ -39,4 +38,3 @@ struct commit_response {
 
 }
 
-#endif

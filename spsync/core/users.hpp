@@ -1,5 +1,4 @@
-#ifndef SPSYNC_CORE_USERS_HEADER
-#define SPSYNC_CORE_USERS_HEADER
+#pragma once
 
 #include <spsync/core/types.hpp>
 #include <spsync/util/format.hpp>
@@ -70,4 +69,3 @@ std::ostream& operator<<(std::ostream&, users const&);
 SPSYNC_FORMAT_VIA_OSTREAM(securepath::sync::users)
 SPSYNC_FORMAT_VIA_OSTREAM(securepath::sync::users_change_mode)
 
-#endif

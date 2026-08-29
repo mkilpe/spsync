@@ -1,5 +1,4 @@
-#ifndef SPSYNC_PROTOCOL_CLIENT_PROTOCOL_HEADER
-#define SPSYNC_PROTOCOL_CLIENT_PROTOCOL_HEADER
+#pragma once
 
 #include "protocol_base.hpp"
 
@@ -167,4 +166,3 @@ using c2s_types =
 }
 }
 
-#endif

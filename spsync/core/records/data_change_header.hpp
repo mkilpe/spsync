@@ -1,5 +1,4 @@
-#ifndef SPSYNC_CORE_DATA_CHANGE_HEADER_HEADER
-#define SPSYNC_CORE_DATA_CHANGE_HEADER_HEADER
+#pragma once
 
 #include "../types.hpp"
 #include <spsync/util/metadata.hpp>
@@ -72,4 +71,3 @@ private:
 
 }
 
-#endif

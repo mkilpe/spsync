@@ -1,5 +1,4 @@
-#ifndef SPSYNC_CORE_RECORD_STORAGE_HEADER
-#define SPSYNC_CORE_RECORD_STORAGE_HEADER
+#pragma once
 
 #include "record_interface.hpp"
 #include <securepath/database/connection.hpp>
@@ -105,4 +104,3 @@ record_handle record_storage::create(auth_record<RecordType> const& rec) {
 
 }
 
-#endif

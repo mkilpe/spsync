@@ -1,5 +1,4 @@
-#ifndef SPSYNC_CORE_DATA_CHANGE_RECORD_HEADER
-#define SPSYNC_CORE_DATA_CHANGE_RECORD_HEADER
+#pragma once
 
 #include "data_change_header.hpp"
 #include "encrypted_record_header.hpp"
@@ -83,4 +82,3 @@ private:
 
 }
 
-#endif

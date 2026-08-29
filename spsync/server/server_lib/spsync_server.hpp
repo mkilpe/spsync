@@ -1,5 +1,4 @@
-#ifndef SPSYNC_SERVER_SPSYNC_SERVER_HEADER
-#define SPSYNC_SERVER_SPSYNC_SERVER_HEADER
+#pragma once
 
 #include "storage_server.hpp"
 #include <infrastructure/key_server/server_lib/key_server.hpp>
@@ -33,4 +32,3 @@ private:
 
 }
 
-#endif

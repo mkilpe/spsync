@@ -1,5 +1,4 @@
-#ifndef SPSYNC_CORE_RECORD_DATA_HEADER
-#define SPSYNC_CORE_RECORD_DATA_HEADER
+#pragma once
 
 #include <spsync/core/types.hpp>
 
@@ -76,4 +75,3 @@ using const_record_data_handle = std::shared_ptr<record_data const>;
 
 }
 
-#endif

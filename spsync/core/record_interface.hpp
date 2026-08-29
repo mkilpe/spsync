@@ -1,5 +1,4 @@
-#ifndef SPSYNC_CORE_RECORD_INTERFACE_HEADER
-#define SPSYNC_CORE_RECORD_INTERFACE_HEADER
+#pragma once
 
 #include "chain_block_id.hpp"
 #include <spsync/util/format.hpp>
@@ -103,4 +102,3 @@ using record_handle = std::shared_ptr<record_interface>;
 
 SPSYNC_FORMAT_VIA_OSTREAM(securepath::sync::record_state)
 
-#endif

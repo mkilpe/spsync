@@ -1,5 +1,4 @@
-#ifndef SPSYNC_TEST_TEST_SYNC_SERVER_HEADER
-#define SPSYNC_TEST_TEST_SYNC_SERVER_HEADER
+#pragma once
 
 #include "test_progress.hpp"
 #include "test_sync_engine.hpp"
@@ -139,4 +138,3 @@ public:
 
 }
 
-#endif

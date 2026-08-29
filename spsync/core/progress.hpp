@@ -1,5 +1,4 @@
-#ifndef SPSYNC_CORE_PROGRESS_HEADER
-#define SPSYNC_CORE_PROGRESS_HEADER
+#pragma once
 
 #include <securepath/event_system/event_handler.hpp>
 
@@ -17,4 +16,3 @@ struct progress : event_system::event_handler {
 
 }
 
-#endif

@@ -1,5 +1,4 @@
-#ifndef SPSYNC_UTIL_USER_HEADER
-#define SPSYNC_UTIL_USER_HEADER
+#pragma once
 
 #include "metadata.hpp"
 #include <spsync/util/format.hpp>
@@ -118,4 +117,3 @@ SPSYNC_FORMAT_VIA_OSTREAM(securepath::sync::util::user)
 SPSYNC_FORMAT_VIA_OSTREAM(securepath::sync::util::access_type)
 SPSYNC_FORMAT_VIA_OSTREAM(securepath::sync::util::user_access)
 
-#endif

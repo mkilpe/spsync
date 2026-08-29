@@ -1,5 +1,4 @@
-#ifndef SPSYNC_ENGINE_INTERFACE_HEADER
-#define SPSYNC_ENGINE_INTERFACE_HEADER
+#pragma once
 
 #include <spsync/core/record_data.hpp>
 #include <spsync/core/record_storage.hpp>
@@ -99,4 +98,3 @@ struct on_fork_suspected {
 
 }
 
-#endif

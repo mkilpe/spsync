@@ -1,5 +1,4 @@
-#ifndef GROUPCHAT_CORE_MESSAGE_HEADER
-#define GROUPCHAT_CORE_MESSAGE_HEADER
+#pragma once
 
 #include "types.hpp"
 
@@ -55,4 +54,3 @@ struct message_data {
 
 }
 
-#endif

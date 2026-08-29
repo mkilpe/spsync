@@ -1,5 +1,4 @@
-#ifndef SPSYNC_UTIL_OBJECT_ID_HEADER
-#define SPSYNC_UTIL_OBJECT_ID_HEADER
+#pragma once
 
 #include <securepath/util/octet_vector.hpp>
 #include <spsync/util/format.hpp>
@@ -53,4 +52,3 @@ std::ostream& operator<<(std::ostream&, object_id const&);
 
 SPSYNC_FORMAT_VIA_OSTREAM(securepath::sync::util::object_id)
 
-#endif

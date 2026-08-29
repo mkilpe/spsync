@@ -1,5 +1,4 @@
-#ifndef SPSYNC_ENGINE_REBASE_POLICY_HEADER
-#define SPSYNC_ENGINE_REBASE_POLICY_HEADER
+#pragma once
 
 #include <spsync/core/chain_block_id.hpp>
 #include <spsync/core/records/record_types.hpp>
@@ -39,4 +38,3 @@ bool needs_rebase(rebase_state const&);
 
 }
 
-#endif

@@ -1,5 +1,4 @@
-#ifndef GROUPCHAT_CORE_TYPES_HEADER
-#define GROUPCHAT_CORE_TYPES_HEADER
+#pragma once
 
 #include <spsync/client/types.hpp>
 #include <spsync/core/users.hpp>
@@ -83,4 +82,3 @@ int const default_timeout = 60;
 
 }
 
-#endif

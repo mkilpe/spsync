@@ -1,5 +1,4 @@
-#ifndef SPSYNC_SERVER_CONNECTION_HEADER
-#define SPSYNC_SERVER_CONNECTION_HEADER
+#pragma once
 
 #include "storage_server_context.hpp"
 
@@ -45,4 +44,3 @@ private:
 
 }
 
-#endif

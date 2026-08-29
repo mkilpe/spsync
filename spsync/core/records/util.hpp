@@ -1,5 +1,4 @@
-#ifndef SPSYNC_CORE_RECORDS_UTIL_HEADER
-#define SPSYNC_CORE_RECORDS_UTIL_HEADER
+#pragma once
 
 #include "data_change_record.hpp"
 #include "../error.hpp"
@@ -15,4 +14,3 @@ inline single_change get_single_change(data_change_record const& r) {
 
 }
 
-#endif

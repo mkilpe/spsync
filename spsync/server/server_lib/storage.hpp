@@ -1,5 +1,4 @@
-#ifndef SPSYNC_SERVER_STORAGE_HEADER
-#define SPSYNC_SERVER_STORAGE_HEADER
+#pragma once
 
 #include "chain_sync.hpp"
 #include <spsync/core/records/block_envelope.hpp>
@@ -71,4 +70,3 @@ private:
 
 }
 
-#endif

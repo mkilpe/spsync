@@ -1,5 +1,4 @@
-#ifndef SPSYNC_CORE_SEGMENT_RECORD_HEADER
-#define SPSYNC_CORE_SEGMENT_RECORD_HEADER
+#pragma once
 
 #include "record_base.hpp"
 #include "record_types.hpp"
@@ -62,4 +61,3 @@ private:
 
 }
 
-#endif

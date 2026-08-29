@@ -1,5 +1,4 @@
-#ifndef SPSYNC_COMM_NET_CONNECTION_IMPL_HEADER
-#define SPSYNC_COMM_NET_CONNECTION_IMPL_HEADER
+#pragma once
 
 #include "net_connection.hpp"
 
@@ -149,4 +148,3 @@ public:
 
 }
 
-#endif

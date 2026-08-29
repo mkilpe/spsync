@@ -1,5 +1,4 @@
-#ifndef SPSYNC_UTIL_METADATA_HEADER
-#define SPSYNC_UTIL_METADATA_HEADER
+#pragma once
 
 #include <securepath/util/octet_vector.hpp>
 #include <securepath/serialisation/map.hpp>
@@ -68,4 +67,3 @@ private:
 
 }
 
-#endif

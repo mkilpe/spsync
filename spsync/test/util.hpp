@@ -1,5 +1,4 @@
-#ifndef SPSYNC_TEST_UTIL_HEADER
-#define SPSYNC_TEST_UTIL_HEADER
+#pragma once
 
 #include <spsync/core/record_storage.hpp>
 
@@ -13,4 +12,3 @@ bool check_commit_records_equal(sequence_number seq, record_storage const&, reco
 
 }
 
-#endif

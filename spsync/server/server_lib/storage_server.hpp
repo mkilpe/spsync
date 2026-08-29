@@ -1,5 +1,4 @@
-#ifndef SPSYNC_SERVER_STORAGE_SERVER_HEADER
-#define SPSYNC_SERVER_STORAGE_SERVER_HEADER
+#pragma once
 
 #include <securepath/network/encryption/context.hpp>
 #include <spsync/protocol/ports.hpp>
@@ -38,4 +37,3 @@ private:
 
 }
 
-#endif

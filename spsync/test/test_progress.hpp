@@ -1,5 +1,4 @@
-#ifndef SPSYNC_TEST_TEST_PROGRESS_HEADER
-#define SPSYNC_TEST_TEST_PROGRESS_HEADER
+#pragma once
 
 #include <spsync/core/progress.hpp>
 #include <securepath/event_system/event_loop.hpp>
@@ -18,4 +17,3 @@ public:
 
 }
 
-#endif

@@ -1,5 +1,4 @@
-#ifndef SPSYNC_CORE_TYPES_HEADER
-#define SPSYNC_CORE_TYPES_HEADER
+#pragma once
 
 #include "error.hpp"
 
@@ -25,4 +24,3 @@ using storage_id = octet_vector;
 
 }
 
-#endif

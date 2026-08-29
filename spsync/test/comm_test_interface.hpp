@@ -1,5 +1,4 @@
-#ifndef SPSYNC_TEST_COMM_TEST_INTERFACE_HEADER
-#define SPSYNC_TEST_COMM_TEST_INTERFACE_HEADER
+#pragma once
 
 #include <spsync/comm/interface.hpp>
 
@@ -59,4 +58,3 @@ private:
 
 }
 
-#endif

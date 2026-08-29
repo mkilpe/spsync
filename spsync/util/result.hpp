@@ -1,5 +1,4 @@
-#ifndef SPSYNC_UTIL_RESULT_HEADER
-#define SPSYNC_UTIL_RESULT_HEADER
+#pragma once
 
 #include <securepath/util/error.hpp>
 #include <spsync/util/format.hpp>
@@ -67,4 +66,3 @@ inline bool check_result_error(util::result<ResultType> const& res, Enum value) 
 
 }
 
-#endif

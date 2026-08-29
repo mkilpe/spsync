@@ -1,5 +1,4 @@
-#ifndef SPSYNC_CORE_ERROR_HEADER
-#define SPSYNC_CORE_ERROR_HEADER
+#pragma once
 
 #include <securepath/util/error.hpp>
 
@@ -32,4 +31,3 @@ namespace std {
 
 }
 
-#endif

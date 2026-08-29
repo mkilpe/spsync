@@ -1,5 +1,4 @@
-#ifndef SPSYNC_ENGINE_SYNC_ENGINE_HEADER
-#define SPSYNC_ENGINE_SYNC_ENGINE_HEADER
+#pragma once
 
 #include "interface.hpp"
 #include "sync_engine_config.hpp"
@@ -52,4 +51,3 @@ private:
 
 }
 
-#endif

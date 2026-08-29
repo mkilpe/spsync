@@ -1,5 +1,4 @@
-#ifndef SPSYNC_UTIL_SEQUENCE_NUMBER_HEADER
-#define SPSYNC_UTIL_SEQUENCE_NUMBER_HEADER
+#pragma once
 
 #include <securepath/serialisation/types.hpp>
 #include <spsync/util/format.hpp>
@@ -51,4 +50,3 @@ std::ostream& operator<<(std::ostream&, sequence_number const&);
 
 SPSYNC_FORMAT_VIA_OSTREAM(securepath::sync::util::sequence_number)
 
-#endif

@@ -1,5 +1,4 @@
-#ifndef SPSYNC_CORE_RECORD_TYPES_HEADER
-#define SPSYNC_CORE_RECORD_TYPES_HEADER
+#pragma once
 
 namespace securepath::sync {
 
@@ -14,4 +13,3 @@ enum record_type_tag {
 
 }
 
-#endif

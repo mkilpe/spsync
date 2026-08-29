@@ -1,5 +1,4 @@
-#ifndef SPSYNC_TEST_TEST_BLOCK_CREATOR_HEADER
-#define SPSYNC_TEST_TEST_BLOCK_CREATOR_HEADER
+#pragma once
 
 #include <spsync/core/records/chain_block.hpp>
 #include <spsync/core/records/data_change_record.hpp>
@@ -83,4 +82,3 @@ struct test_block_creator {
 
 }
 
-#endif

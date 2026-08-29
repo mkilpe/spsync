@@ -1,5 +1,4 @@
-#ifndef SPSYNC_COMM_NET_CONNECTION_HEADER
-#define SPSYNC_COMM_NET_CONNECTION_HEADER
+#pragma once
 
 #include <spsync/comm/interface.hpp>
 #include <spsync/core/sync_mode.hpp>
@@ -85,4 +84,3 @@ private:
 
 }
 
-#endif

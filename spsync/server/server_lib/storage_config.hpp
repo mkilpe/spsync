@@ -1,5 +1,4 @@
-#ifndef SPSYNC_SERVER_STORAGE_CONFIG_HEADER
-#define SPSYNC_SERVER_STORAGE_CONFIG_HEADER
+#pragma once
 
 #include <string>
 
@@ -23,4 +22,3 @@ private:
 
 }
 
-#endif

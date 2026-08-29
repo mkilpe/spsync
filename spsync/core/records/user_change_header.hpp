@@ -1,5 +1,4 @@
-#ifndef SPSYNC_CORE_USER_CHANGE_HEADER_HEADER
-#define SPSYNC_CORE_USER_CHANGE_HEADER_HEADER
+#pragma once
 
 #include <spsync/core/types.hpp>
 
@@ -62,4 +61,3 @@ private:
 
 }
 
-#endif

@@ -1,5 +1,4 @@
-#ifndef SPSYNC_PROTOCOL_SERVER_PROTOCOL_HEADER
-#define SPSYNC_PROTOCOL_SERVER_PROTOCOL_HEADER
+#pragma once
 
 #include "protocol_base.hpp"
 #include <spsync/core/records/block_envelope.hpp>
@@ -163,4 +162,3 @@ using s2c_types =
 }
 }
 
-#endif

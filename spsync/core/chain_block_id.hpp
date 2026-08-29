@@ -1,5 +1,4 @@
-#ifndef SPSYNC_CORE_CHAIN_BLOCK_ID_HEADER
-#define SPSYNC_CORE_CHAIN_BLOCK_ID_HEADER
+#pragma once
 
 #include <spsync/core/types.hpp>
 #include <spsync/util/format.hpp>
@@ -44,4 +43,3 @@ inline std::ostream& operator<<(std::ostream& out, chain_block_id const& b) {
 
 SPSYNC_FORMAT_VIA_OSTREAM(securepath::sync::chain_block_id)
 
-#endif
