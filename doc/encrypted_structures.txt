@@ -56,6 +56,9 @@ Chain of structures:
 	* iv for encrypted data and key id
 	* encrypted meta data
 	* signature/tag
+	update 2026-08-30: resolved in segments.txt (S1): start/end + record tags +
+	previous_segment_tag in the plain authenticated part, creation_time/metadata
+	in the encrypted header
 
 think:
  - aggregate change?

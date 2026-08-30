@@ -708,9 +708,21 @@ Phase 3  Server log abstraction  (still single server)
       invalid_configuration. Tests: parsing round trips + failure shapes, config
       file options through command_parser, identity resolution, subset resolution.
 
-- 3.4 Storage head table                                                          [0.5d]
++ 3.4 Storage head table -- done 2026-08-30                                       [0.5d]
       Per storage: for each origin server the highest (term, seq, hash) seen, plus
       our own head. This is what anti-entropy exchanges.
+      Implemented: server_lib/storage_heads: origin_head{origin, term, block}
+      (serialisable, ready for the 4.1 heads packet) and a storage_heads table in
+      the storage db. advance() is monotonic by (term, seq) - an equal (term, seq)
+      under a different hash is not newer (equivocation evidence stays with the
+      caller); find/all/remove round out the API. storage::heads() composes the
+      anti-entropy list: the own head derived live from chain_log (never stale,
+      term 0 until phase 6, absent without a signing key) followed by the stored
+      foreign origins; storage::origin_heads() exposes the table for 4.2
+      apply_foreign. Tests: monotonic advance ordering, persistence over reopen,
+      storage-level composition following commits.
+
+      => PHASE 3 COMPLETE 2026-08-30. Next: phase 4 (server-to-server, weak mode, M3).
 
 
 Phase 4  Server-to-server, weak mode  (M3)

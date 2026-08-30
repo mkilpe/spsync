@@ -9,19 +9,19 @@
 + server
 + client networking
 + internal conflicting record handling when committing to server (out of sync handling)
-- full user change record support (conflicting key sequence, new enc key)
-- multichat PoC
+* full user change record support (new enc key distribution works; conflicting key sequences are first-win, merge semantics in distributed_sync.txt D9)
++ multichat PoC (groupchat app: channels, invite/join/message/reload, cli client, system tests)
 
 
 --- phase 2 (multi change per oid and per record support)
-* previous oid support
-- record data support
-- user conflict handling
++ previous oid support (server validation + per-change rebase, 2026-08-27)
+- record data support (record_data is an interface only, data_ref never set; design: record_data.txt, 2026-08-30)
++ user conflict handling (conflict_policy rebase_on_top/ask + on_object_conflict, 2026-08-27)
 
 --- phase 3 (full record support)
-- segment records
-- server member access checking
-- multi data change records
+- segment records (plan: segments.txt, 2026-08-30)
+- server member access checking (distributed_sync.txt phase 7)
+* multi data change records (validated and rebased end to end 2026-08-27; engine input api still creates only single-change records, collation open)
 
 --- phase 4 (full handling and progress support)
 - progress

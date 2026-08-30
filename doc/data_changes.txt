@@ -1,3 +1,6 @@
 
 * single change in data structure
 * possibility to aggregate multiple changes to one visible change for the outer system
+
+update 2026-08-30: the payload data side (chunking, transfer, storage, quotas) is
+designed in record_data.txt

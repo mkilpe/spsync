@@ -1,0 +1,262 @@
+SPSync record data support plan
+===============================
+
+Markers as in dev-phases.txt:  + done   * in progress   - todo
+Written 2026-08-30. Cross-references: use_cases.txt (1: file-like sync on mobile),
+progress_indication.txt, segments.txt (S6 retention), distributed_sync.txt (D1
+content-blind servers, phase 4 s2s), data_changes.txt, dev-phases.txt phase 2.
+
+
+Purpose
+-------
+
+Records today carry only metadata; the actual payload ("record data") of an object
+change - a file, an attachment, any biggish blob - has an interface
+(core/record_data.hpp), a state machine, protocol stubs (request_data/response_data,
+server replies not_implemented) and a data_change_info field, but no implementation
+anywhere. This plan makes record data real, sized for file sync / file transfer:
+multi-gigabyte objects, resumable transfers, lazy per-object fetching on mobile
+(use case 1), verifiable end to end while the server stays content-blind (D1).
+
+Data is deliberately NOT part of the record chain: the record authenticates a
+descriptor of the data, the bytes travel and are stored out of band. Committing a
+record never waits for its data upload; readers see the record immediately and the
+data state separately (record_data_state::remote_not_complete exists for this).
+
+
+Current state (2026-08-30)
+--------------------------
+
+Exists:
+  - core/record_data.hpp: record_data interface (offset read/write, remove_data)
+    and record_data_state {deferred, remote_not_complete, upload_pending,
+    download_pending, in_sync, removed, invalid} - the states already match the
+    flow below.
+  - data_change_header: optional data_change_info{size, iv, gcm_tag} inside the
+    ENCRYPTED header - designed for one GCM pass over the whole blob (64 GiB cap,
+    no random access, server cannot verify anything). Superseded by RD2/RD3.
+  - protocol: request_data{record seq, start, end} / empty response_data; server
+    connection replies not_implemented; comm::handle(response_data) stub.
+  - record_objects.data_ref column in the client record storage, never set.
+  - crypto: auth_stream_cipher (streaming AES-GCM with AAD), sha3, PQ signing.
+  - engine: sync_object_change(oid, metadata, record_data_handle = {}) already
+    accepts a data handle and drops it.
+
+Missing: everything behind those seams - no data store on either side, no chunking,
+no upload/download, no verification, no lifecycle.
+
+
+Design decisions
+----------------
+
+RD1 Separation of record and data. The record chain stays small and fast to sync.
+    A single_change may reference one data blob through a descriptor that is part
+    of the authenticated record; the blob itself is chunked, stored and moved
+    independently. Record commit never blocks on data (mobile, resume, "message
+    before attachment"); consumers must tolerate remote_not_complete.
+
+RD2 Descriptor, two views (replaces data_change_info):
+      plain part of single_change (server-visible, authenticated):
+        enc_size          total encrypted size (quota checks, progress)
+        chunk_size        chunking used for this data
+        manifest_digest   sha3-512 over the ordered list of chunk digests
+      encrypted header (members only):
+        plain_size        plaintext size
+        content_digest    sha3-512 of the plaintext (end-to-end integrity, later
+                          dedup basis)
+    The server-visible half leaks only sizes (which traffic reveals anyway) and
+    lets the server fully verify stored bytes without decrypting: the client sends
+    the chunk digest list (manifest) first, the server checks it against
+    manifest_digest, then checks every chunk against the manifest. Junk uploads
+    and bit rot die at the server's edge; s2s replication gets the same check for
+    free. data_id := manifest_digest (stable across rebases, see RD7).
+
+RD3 Chunked encryption. Chunks of chunk_size (default 1 MiB, per-storage config)
+    encrypted independently:
+      data_key   derived per data from the group encryption key and a random
+                 per-data nonce (HKDF over sha3); key separation means GCM nonce
+                 management is local to one data
+      nonce      chunk counter
+      AAD        data nonce + chunk number (no reorder/transplant)
+      per chunk  AES-256-GCM tag stored with the chunk
+    The per-data nonce and encryption key sequence live in the encrypted header.
+    Chunking removes the old 64 GiB single-GCM cap and gives random access:
+    reading offset X decrypts only the chunks covering X; a failed chunk marks the
+    data invalid, not the record.
+
+RD4 Transfer protocol (flesh out the c2s stubs; all inside the encrypted
+    transport as today):
+      upload_data_manifest {tag, change idx, chunk digests}   opens an upload,
+          server verifies against the committed record's manifest_digest;
+          response says which chunks it already has (resume)
+      upload_data_chunk {data_id, chunk no, bytes}            server verifies the
+          digest, stores, acks with a window to keep pipelining
+      request_data {tag, change idx, chunk range}             replaces the seq
+          based stub; response_data streams the chunks it has and states
+          completeness
+      notify_data {sid, tag, change idx, complete}            to storage listeners
+          when a data becomes complete, so waiting clients fetch without polling
+    Uploads happen after the record is acked (the tag exists server side);
+    interrupted transfers resume by manifest. Fetch is pull-based and lazy by
+    default (use case 1: fetch data for individual files only).
+
+RD5 Server data store. Chunks as files under the storage directory
+    (record-storages/<sid>/data/<data_id>/...), sqlite is for the bookkeeping
+    only: data table {data_id, record tag, change idx, enc_size, chunk_size,
+    manifest, have-bitmap, complete}. The server never decrypts (D1). Limits and
+    quota per RD10; incomplete uploads expire. Chunks of records that are pruned
+    at a segment cut are deleted unless a retained record still references the
+    same data_id (segments.txt S6).
+
+RD6 Client data store. One record_data implementation over the same chunk-file
+    layout plus local state (record_objects.data_ref finally points at a client
+    data table row: {data_id, state, have-bitmap}). Policy per storage: lazy
+    (deferred until asked - mobile default) or auto-fetch up to a size threshold.
+    read() decrypts chunk-wise and verifies on the fly; write() only for locally
+    created data before upload; remove_data() evicts local chunks (state removed,
+    refetchable) without touching the record.
+
+RD7 Engine flow. sync_object_change with a data handle: stream the source once -
+    encrypt chunks into the local store, build the manifest, put the descriptor
+    into the record - then commit as usual; comm uploads pending data in the
+    background (few in flight, resumable) and flips upload_pending -> in_sync.
+    Incoming records with a descriptor surface as deferred/remote_not_complete;
+    explicit fetch (or auto policy) drives download_pending -> in_sync. Rebase
+    reuses the data untouched: the descriptor is inside the re-signed record and
+    data_id/chunks do not depend on the record tag. New engine events:
+    on_data_state_changed, on_data_progress (progress_indication.txt wants per
+    entity upload/download progress).
+
+RD8 Replication (details belong to distributed_sync.txt): data is not in the
+    chain_log and not in the Raft log; peers exchange data completeness alongside
+    heads (3.4) and pull missing chunks by data_id manifest from any peer that has
+    them - same verification path as clients. Weak and strict mode identical here.
+
+RD9 Lifecycle. A newer change to the same oid supersedes the old data (old one
+    becomes prunable at the next segment cut unless retained); remove-type changes
+    (the open question in single_change) make the object's data dead. Local
+    eviction (RD6) is independent of server retention. Data of records dropped by
+    truncate_from (rollback) is dropped with them once no record references the
+    data_id.
+
+RD10 Quotas and limits - data AND the record chain. Today NOTHING is bounded: no
+    transport cap, no validation cap, record metadata is arbitrary octets, so the
+    chain can be bloated as easily as data. Two kinds of limit with different
+    rules:
+
+    Validity limits (deterministic, replicated): anything that makes a record
+    invalid must be judged identically by every replica, or weak-mode replicas
+    diverge and a Raft leader/follower disagree on apply. So max_record_size (and
+    the existing max data descriptor bounds) are per-storage creation parameters
+    next to storage_modes: wire-encoded in create_storage, persisted in
+    storage_config, immutable, checked in chain_sync validation ->
+    protocol::errc::record_too_big. Server operator sets the defaults for new
+    storages (spsync_server.cfg).
+
+    Resource quota (local, per server): total bytes of stored data, max single
+    data size, per-member and total chain growth budgets. These do NOT affect
+    record validity - a server may refuse to *accept an upload* or *serve as
+    origin* (quota_exceeded, data_too_big) without disagreeing about what a valid
+    record is; data completeness already differs per server (RD8), so a peer
+    hitting its disk limit degrades availability, not consistency. Enforced at
+    the protocol edge: upload_data_manifest/chunk against data quota, commit
+    against a chain budget. Accounting is incremental per storage (chain bytes,
+    data bytes) in the storage db, recomputed at segment cuts.
+
+    Transfer quota (local, per server): traffic budgets on top of the resource
+    quota - bytes uploaded/downloaded per storage (and per member once 2.3 signer
+    attribution is wired in) over a time window. Storage quota bounds what is
+    kept, transfer quota bounds what is moved: repeated re-downloads of the same
+    data cost no storage but real bandwidth, so data serving (request_data) is
+    the main consumer. Same nature as the resource quota: server-local,
+    accounted incrementally per window in the storage db, refusal
+    (quota_exceeded, retry-after) degrades availability only - a client resumes
+    in the next window, replication peers (RD8) fall behind but never diverge.
+    Chain sync (records) should stay outside the transfer budget or get a
+    generous separate one: starving record sync breaks liveness for kilobytes.
+
+    The chain's long-term size control is retention, not quota: history is cut at
+    segments (segments.txt S6) and dead data pruned with it; the chain budget
+    only guards the growth rate between cuts. Clients learn the limits in the
+    storage info exchange (response_sequence_number carries the modes already;
+    add the limits) so the engine can refuse oversized changes before committing.
+    Per-connection instantaneous rate limiting (bytes/s) is operational
+    hardening, phase 7 territory; the transfer quota above is the cumulative
+    counterpart.
+
+
+Implementation steps
+--------------------
+
+- RDS 1  Descriptor and chunk crypto                                           [1d]
+      Descriptor v2 in single_change + encrypted header (RD2), per-data key
+      derivation, chunker with manifest build/verify (RD3). Unit tests: round
+      trip, tamper per chunk, reorder, wrong manifest. data_change_info retired.
+
+- RDS 2  Client data store                                                   [1.5d]
+      record_data implementation over chunk files + state table, data_ref wiring
+      in record storage, eviction. Tests: offset read/write across chunk
+      boundaries, remove/refetch state, big-file streaming without loading whole
+      blobs.
+
+- RDS 3  Engine create path and upload                                       [1.5d]
+      sync_object_change streams source -> local chunks + descriptor; upload
+      queue in comm (manifest, chunks, resume), states and progress events.
+      Tests: commit-then-upload ordering, interrupted upload resume.
+
+- RDS 4  Server data store and upload handling                               [1.5d]
+      Chunk files + data table, manifest verification, data quota (RD10 resource
+      side), expiry of incomplete uploads, the upload packets (RD4). Tests: junk
+      chunk rejected, resume reply, quota errors.
+
+- RDS 5  Download path                                                         [1d]
+      request_data/response_data ranges, notify_data, lazy/auto fetch policy,
+      verification on fetch, transfer quota windows (RD10) on serving. Tests:
+      second client fetches while upload in progress (remote_not_complete),
+      completes after notify, quota-exceeded fetch resumes in the next window.
+
+- RDS 6  End to end                                                            [1d]
+      System test: multi-hundred-MB object between two clients over the test
+      server incl. kill/resume both directions; mobile-style lazy fetch of one
+      object among many.
+
+- RDS 7  Chain validity limits                                             [0.5d]
+      max_record_size as a per-storage creation parameter (RD10 validity side):
+      wire + persistence next to storage_modes, chain_sync validation,
+      record_too_big error, limits reported to clients, engine pre-check.
+      Independent of the data work and SHOULD land before distributed phase 4
+      (replicas must already agree on validity limits). Tests: oversized record
+      rejected identically on reopen, mismatching creation limits refused.
+
+- RDS 8  Retention / segment interaction                                   [defer]
+      With segments.txt SEG 5: prune data at segment cut, retained live objects
+      keep theirs; server GC by data_id references.
+
+- RDS 9  Replication interactions                                          [defer]
+      With distributed_sync.txt phase 4+: completeness exchange, peer pulls
+      (RD8).
+
+Ordering: RDS 1-7 are single-server and independent of the distributed plan; they
+unblock file sync (use case 1) and groupchat attachments. RDS 7 is also
+independent of RDS 1-6 and is wanted before distributed phase 4. RDS 8 rides on
+the segments plan, RDS 9 on the distributed plan.
+
+
+Open questions
+--------------
+
+q: inline threshold - tiny payloads already ride in record metadata today (group
+   chat messages); keep that as the small-data path and document the cutoff, or
+   add an inline data field to the descriptor?
+q: dedup by content_digest (same file attached twice) - client-side reference
+   counting of data_id, or full content addressing later?
+q: compression before encryption (the old q in data_change_info) - probably a
+   flag in the encrypted header, client-side only, opaque to the server.
+q: chunk_size fixed per storage or per data? per-storage config is simpler and
+   keeps manifests comparable for dedup.
+q: transfer scheduling - how many datas/chunks in flight, priority (newest
+   first?), and per-storage bandwidth caps?
+q: does fetch need finer access control than membership (phase 7 rights), e.g.
+   read-only members allowed data but not history?
+q: per-member quotas (fair share inside one storage) - needs the signer identity
+   (2.3) for attribution; server-side only, or advertised to clients too?

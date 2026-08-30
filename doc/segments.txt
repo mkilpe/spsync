@@ -1,0 +1,180 @@
+SPSync segment records plan
+===========================
+
+Markers as in dev-phases.txt:  + done   * in progress   - todo
+Written 2026-08-30. Cross-references: distributed_sync.txt (D4/D9, 3.1/3.2/3.4, 4.3, 6.x),
+encrypted_structures.txt (original field sketch), dimensions.txt, server_api.txt.
+
+
+Purpose (the original idea)
+---------------------------
+
+1. Harden the chain. A segment record mentions (lists the tags of) the records
+   committed before it since the previous segment. Once the segment is committed -
+   and under sign_records signed by a member key - changing any of the in-between
+   records becomes very hard: an attacker would have to forge both the hash chain
+   and the authenticated segment record that pins them. In particular the server
+   alone cannot rewrite covered history, even towards a client that never saw the
+   original records.
+
+2. Performance and retention. The chain only grows; recomputing and checking the
+   whole chain stops being feasible, and in some cases even storing the full
+   history does (mobile clients, long-lived storages). A segment is the answer to
+   both: verification can start from the newest segment instead of the root, and
+   history can be cut at a segment record - the segment becomes the anchor (the
+   new effective root) for everything after it.
+
+
+Current state (2026-08-30)
+--------------------------
+
+Exists:
+  - segment_record type serialises: record_base + plain_segment_data{segment_start,
+    segment_end, tags} + encrypted segment_header{creation_time, metadata}.
+  - server: classified as special; modes >= require_special_seen force a segment to
+    be committed at the head; the special cursor is replayed on restart (dist 0.2).
+  - engine: segment_record_creator / segment_record_verifier skeletons and
+    sync_engine::sync_segment_end.
+
+Missing / defective:
+  - plain_segment_data has no constructor or accessors - it cannot be filled at all.
+  - sync_segment_end commits an EMPTY segment: start/end/tags are never set and the
+    metadata argument is dropped (the add_change call is commented out).
+  - no previous-segment link, so there is no verifiable segment backbone.
+  - no server-side coverage validation (the tag list is never checked).
+  - no fast verification, no history cutting, no tests
+    (test_block_creator::test_segment() is commented out).
+
+
+Design decisions
+----------------
+
+S1  Content (resolves the '???' in encrypted_structures.txt). Plain, server-visible,
+    inside the authenticated record:
+      segment_start, segment_end   covered range [start, end), end == the segment's
+                                   own sequence (in weak modes these are origin-local,
+                                   see S7)
+      tags                         record tags of [start, end) in sequence order
+      previous_segment_tag         tag of the previous segment record, empty for the
+                                   first -> the segment backbone (S2)
+    Encrypted header stays as is (creation_time, metadata for higher layers).
+    The tag list must be plain: the server has to validate coverage (S5) and cut
+    history safely (S6); record tags are already server-visible, so nothing new
+    leaks. Flat list first; a Merkle root is a later optimisation (q below).
+    The format is not frozen (no deployed storages); trailing_data keeps older
+    readers tolerant anyway.
+
+S2  Segments partition the chain. The first segment starts at 1, every later one
+    starts at the previous segment's end. previous_segment_tag links them by tag,
+    not by position, so the backbone stays verifiable under D4 (weak modes) and
+    after history cuts.
+
+S3  What hardening it adds over the hash chain. The parent-hash chain already links
+    blocks, but (a) it is only as strong as the head the client currently trusts,
+    while a signed segment is a member-authenticated statement about a whole
+    interval that the server cannot recompute, and (b) after a history cut the old
+    parent hashes can no longer be recomputed from data - the segment is then the
+    only anchor. Full-chain verification stays possible as long as the history is
+    stored (paranoia mode).
+
+S4  Verification fast path. Verify the newest segment record (tag/signature), check
+    the records [start, end) against its tag list, then walk the backbone
+    (previous_segment_tag) instead of every record. Cost is O(records since the
+    last segment + number of segments) instead of O(chain length).
+
+S5  Server validation (origin server, strict/single server): the tag list must
+    exactly match the server's records for [start, end); start must equal the
+    previous segment's end (or 1); end == the assigned sequence, which the
+    segment-at-head rules of modes >= require_special_seen already give. In
+    allow_all the coverage check still applies (it is checkable), only the
+    at-head requirement stays relaxed. Violations -> record_out_of_sync /
+    invalid_record as elsewhere.
+
+S6  History cut = prefix truncation at a segment. Counterpart of truncate_from
+    (dist 3.1): drop records with seq < the segment's sequence EXCEPT records still
+    needed to rebuild current objects. The retained set is computable server-side
+    from record_objects (latest change per oid and its prev_tag chain); the client
+    ground truth can pin more via metadata later (q). After the cut the segment is
+    the chain anchor: new clients fetch from it, verification anchors at its hash,
+    and invitees receive the anchor hash with the invite (server_api.txt note:
+    "give hash of the new root to people who are invited").
+
+S7  Weak modes / replication (details live in distributed_sync.txt). Per D9 a
+    segment is an advisory checkpoint in weak modes; sequences are per-replica
+    (D4), so segment_start/end and the tag order are origin-local. Other replicas
+    validate only "all listed tags exist" (by tag, 4.3 style). Cutting a
+    replicated storage is allowed only behind every peer's head (3.4 heads table +
+    4.4 anti-entropy tell), and anti-entropy must never resurrect a cut prefix.
+    In strict mode the segment is the natural Raft snapshot/compaction boundary
+    (6.x): install-snapshot == send the anchor segment + retained records.
+
+S8  Keys. A segment boundary is the natural encryption key rotation point
+    (backward security): rotate after the segment, and the keys of a cut prefix
+    can be discarded per retention policy. Consideration for the key storage work,
+    not a prerequisite.
+
+
+Implementation steps
+--------------------
+
+- SEG 1  Record content and helpers                                          [0.5d]
+      plain_segment_data: constructor + accessors, add previous_segment_tag.
+      record_storage: find-last-segment query (the 0.2 note "find_last_of_type"),
+      get tags for a sequence range. test_block_creator::test_segment() revived.
+      Serialisation round-trip tests.
+
+- SEG 2  Client creation path                                                  [1d]
+      sync_segment_end fills the record: start = previous segment end (else 1),
+      end = predicted own sequence, tags collected from record storage, metadata
+      into the encrypted header; commits through the normal pending_commit path.
+      Rebase support: on out-of-sync recompute end + tag list (op_id preserved,
+      D6). Engine tests in all four modes including a conflicting commit.
+
+- SEG 3  Server coverage validation                                            [1d]
+      chain_sync::check_rules(segment_record) per S5: exact tag/range match,
+      backbone continuity, at-head per mode. Tests: valid segment, wrong tag list,
+      gap to previous segment, stale segment in each mode.
+
+- SEG 4  Verification fast path                                                [1d]
+      Client verify-from-segment on reload/full resync per S4, config choice
+      fast/full. Test: mid-history tamper detected via segment mismatch; cost
+      sanity check on a long chain.
+
+- SEG 5  History cut, single server                                            [2d]
+      record_storage::truncate_prefix(first_kept, retained_tags) as the mirror of
+      truncate_from; chain_log::cut_before(segment) computing the retained set
+      from record_objects; get_records/anchor handling for clients that join after
+      the cut; anchor hash into the invite path. Tests: cut, rejoin from anchor,
+      retained objects still rebuild, cursors survive.
+
+- SEG 6  Client local prune                                                    [1d]
+      The same prefix cut client side (storage-constrained devices) while the
+      server keeps full history: keep segment anchors + live-object records,
+      reload and verification work from the anchor.
+
+- SEG 7  Replication interactions                                          [defer]
+      Implemented inside the distributed plan, not here: cut only behind all peer
+      heads (3.4/4.4), advisory checkpoints in weak modes (D9/4.3), segment as the
+      Raft snapshot boundary (6.x). This step only tracks that those phases keep
+      the S6/S7 semantics.
+
+Ordering: SEG 1-4 are independent of the distributed work and can be done any time
+on a single server; SEG 5-6 are single-server too but their protocol surface
+(anchor in get_records/invites) should be settled before phase 4 s2s pulls reuse
+it; SEG 7 belongs to distributed_sync.txt phases 4/6.
+
+
+Open questions
+--------------
+
+q: flat tag list grows with segment size (16-32 B per record). Merkle root or
+   cumulative digest instead, with tags fetchable on demand? Flat list chosen for
+   now for simplicity and prune planning.
+q: who may commit a segment - any writer, or admin-only? Ties into access rights
+   (distributed plan phase 7). Default until then: any writing member.
+q: automatic segments (record count / age, the dimensions.txt question) or only
+   app-initiated? Proposal: app-initiated first (sync_segment_end), an optional
+   engine auto-policy later.
+q: should clients be able to pin extra records against pruning (retention beyond
+   live objects), stated in the segment metadata?
+q: force an encryption key rotation at every segment (S8) or leave it to the app?
