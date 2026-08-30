@@ -14,42 +14,43 @@ namespace securepath::sync {
 chain_sync::chain_sync(database::connection_ptr db, chain_sync_config config, crypto::public_key_access* keys)
 : config_(std::move(config))
 , keys_(keys)
-, records_(db)
-, last_block_(records_.last_block())
-, last_data_add_remove_(records_.last_data_add_sequence())
-, last_user_change_or_segment_(records_.last_special_sequence())
+, log_(db)
+, last_data_add_remove_(log_.records().last_data_add_sequence())
+, last_user_change_or_segment_(log_.records().last_special_sequence())
 {
 }
 
 sequence_number chain_sync::current_sequence_number() const {
-	return last_block_.sequence;
+	return log_.head().sequence;
 }
 
 std::deque<chain_block> chain_sync::get_records(sequence_number start, sequence_number end) const {
 	std::deque<chain_block> ret;
-	record_handle h;
-	if(!start.is_valid()) {
-		start = sequence_number{1};
-	}
-	if(!end.is_valid()) {
-		end = current_sequence_number();
-	}
-	for(; start <= end && (h = records_.find(start)) && ret.size() < config_.max_returned_records; ++start) {
-		ret.push_back(h->record());
+	for(auto const& env : log_.get(start, end, config_.max_returned_records)) {
+		ret.push_back(env.block());
 	}
 	return ret;
 }
 
+std::vector<chain_block> chain_sync::truncate_from(sequence_number first_removed) {
+	auto removed = log_.truncate_from(first_removed);
+	last_data_add_remove_ = log_.records().last_data_add_sequence();
+	last_user_change_or_segment_ = log_.records().last_special_sequence();
+	return removed;
+}
+
 chain_block chain_sync::set_and_save_block(chain_block block, rec_type type) {
-	block.set_sequence_and_parent_hash(last_block_.sequence+1, last_block_.hash);
-	records_.create(block, record_state::in_sync);
-	last_block_ = block.id();
+	auto const head = log_.head();
+	block.set_sequence_and_parent_hash(head.sequence+1, head.hash);
+	// the local commit path signs the assignment after the sequence is set (storage layer),
+	// so the block is appended in an unsigned envelope here
+	log_.append(block_envelope{block, {}});
 	if(type == rec_type::data_add_remove) {
 		last_data_add_remove_ = block.sequence();
 	} else if(type == rec_type::special) {
 		last_user_change_or_segment_ = block.sequence();
 	}
-	LOG_TRACE("committed block [block id=({},{}), tag={}, type={}] (rsid={})", last_block_.sequence, to_hex(last_block_.hash), to_hex(block.tag()), int(type), config_.log_id);
+	LOG_TRACE("committed block [block id=({},{}), tag={}, type={}] (rsid={})", block.sequence(), to_hex(block.hash()), to_hex(block.tag()), int(type), config_.log_id);
 	return block;
 }
 
@@ -77,7 +78,7 @@ error chain_sync::verify_signature(chain_block const& block, std::optional<crypt
 
 chain_sync::rule_result chain_sync::evaluate(chain_block const& block) const {
 	rule_result r;
-	auto handle = records_.find_tag(block.tag());
+	auto handle = log_.find_by_tag(block.tag());
 	if(!handle) {
 		if(config_.auth_mode == auth_mode::sign_records) {
 			r.err = verify_signature(block, r.signer);
@@ -88,7 +89,7 @@ chain_sync::rule_result chain_sync::evaluate(chain_block const& block) const {
 		r = block.deserialise_record<rule_result>([this](auto const& rec) {
 				// the op id survives rebases: a rebased duplicate of an already committed
 				// operation is rejected even though its tag differs (plan 2.2/D6)
-				if(!rec.op_id().empty() && records_.find_op_id(rec.op_id())) {
+				if(!rec.op_id().empty() && log_.find_by_op_id(rec.op_id())) {
 					return rule_result{make_error(protocol::errc::record_already_committed)};
 				}
 				return check_rules(rec);
@@ -102,9 +103,10 @@ chain_sync::rule_result chain_sync::evaluate(chain_block const& block) const {
 error chain_sync::check_rules_add(data_change_record const& rec) const {
 	error err;
 	if(config_.mode == sync_mode::require_all_seen) {
-		if(rec.last_seen_block() != last_block_) {
+		auto const head = log_.head();
+		if(rec.last_seen_block() != head) {
 			LOG_TRACE("out of sync [({},{}) != ({},{}) (rsid={})"
-				, last_block_.sequence, to_hex(last_block_.hash), rec.last_seen_block().sequence, to_hex(rec.last_seen_block().hash), config_.log_id);
+				, head.sequence, to_hex(head.hash), rec.last_seen_block().sequence, to_hex(rec.last_seen_block().hash), config_.log_id);
 			err = make_error(protocol::errc::record_out_of_sync);
 		}
 	} else {
@@ -123,9 +125,10 @@ error chain_sync::check_rules_add(data_change_record const& rec) const {
 error chain_sync::check_rules_existing(data_change_record const& rec) const {
 	error err;
 	if(config_.mode == sync_mode::require_all_seen) {
-		if(rec.last_seen_block() != last_block_) {
+		auto const head = log_.head();
+		if(rec.last_seen_block() != head) {
 			LOG_TRACE("out of sync [({},{}) != ({},{}) (rsid={})"
-				, last_block_.sequence, to_hex(last_block_.hash), rec.last_seen_block().sequence, to_hex(rec.last_seen_block().hash), config_.log_id);
+				, head.sequence, to_hex(head.hash), rec.last_seen_block().sequence, to_hex(rec.last_seen_block().hash), config_.log_id);
 			err = make_error(protocol::errc::record_out_of_sync);
 		}
 	} else {
@@ -141,7 +144,7 @@ chain_sync::rule_result chain_sync::check_rules(data_change_record const& rec) c
 			LOG_TRACE("data id is invalid [id={}] (rsid={})", it->data.id, config_.log_id);
 			r.err = make_error(protocol::errc::invalid_record);
 		} else {
-			auto handle = records_.find_last(it->data.id);
+			auto handle = log_.records().find_last(it->data.id);
 			if(!handle && it->data.previous_oid_record_tag.empty()) {
 				r.type = rec_type::data_add_remove;
 				r.err = check_rules_add(rec);
@@ -172,10 +175,11 @@ chain_sync::rule_result chain_sync::check_rules(user_change_record const& rec) c
 	rule_result r;
 	r.type = rec_type::special;
 	if(config_.mode == sync_mode::require_all_seen) {
-		if(rec.last_seen_block() != last_block_) {
+		auto const head = log_.head();
+		if(rec.last_seen_block() != head) {
 			r.err = make_error(protocol::errc::record_out_of_sync);
 			LOG_TRACE("out of sync [({},{}) != ({},{}) (rsid={})"
-				, last_block_.sequence, to_hex(last_block_.hash), rec.last_seen_block().sequence, to_hex(rec.last_seen_block().hash), config_.log_id);
+				, head.sequence, to_hex(head.hash), rec.last_seen_block().sequence, to_hex(rec.last_seen_block().hash), config_.log_id);
 		}
 	} else {
 		r.err = check_rules_special_seen(rec.last_seen_block());
@@ -187,10 +191,11 @@ chain_sync::rule_result chain_sync::check_rules(segment_record const& rec) const
 	rule_result r;
 	r.type = rec_type::special;
 	if(config_.mode >= sync_mode::require_special_seen) {
-		if(rec.last_seen_block() != last_block_) {
+		auto const head = log_.head();
+		if(rec.last_seen_block() != head) {
 			r.err = make_error(protocol::errc::record_out_of_sync);
 			LOG_TRACE("out of sync [({},{}) != ({},{}) (rsid={})"
-				, last_block_.sequence, to_hex(last_block_.hash), rec.last_seen_block().sequence, to_hex(rec.last_seen_block().hash), config_.log_id);
+				, head.sequence, to_hex(head.hash), rec.last_seen_block().sequence, to_hex(rec.last_seen_block().hash), config_.log_id);
 		}
 	}
 	return r;

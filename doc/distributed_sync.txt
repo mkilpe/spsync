@@ -670,13 +670,27 @@ Phase 3  Server log abstraction  (still single server)
       demote paths, chain_sync truncate then recommit proving cursor replay
       (require_special_seen).
 
-- 3.2 chain_log                                                                   [2d]
++ 3.2 chain_log -- done 2026-08-30                                                [2d]
       Extract from chain_sync a log type over block_envelope:
         head(), get(range), append(envelope), truncate_from(seq), find_by_tag,
         find_by_op_id, find_divergence(peer_head_list) -> sequence
       chain_sync keeps validation rules and uses chain_log for storage.
       Weak and strict replication both talk to chain_log; the Raft state machine
       adapter (6.2) is a thin wrapper on it.
+      Implemented: server_lib/chain_log owns record_storage and the cached head.
+      append enforces head extension (sequence + parent hash) and persists a signed
+      envelope in the record's envelope column; the local commit path appends
+      unsigned and storage::commit_block stores the assignment right after signing
+      (store_assignment). get(range, max) returns stored envelopes, or unsigned
+      wrappers for records committed without a server key. chain_sync keeps only
+      rules and mode cursors (the head lives in the log), gains log() and a
+      truncate_from that re-derives the cursors live. find_divergence returns the
+      lowest peer head sequence we hold under a different hash; a peer ahead of our
+      head is not divergence. Tests: chain_log suite (append/get, signed envelope
+      persistence over reopen, truncate head recompute, divergence), storage
+      envelope persisted in the log, chain_sync live truncate+recommit. Full suite
+      green (parallel ctest db-name clashes between binaries are pre-existing;
+      serial run 22/22).
 
 - 3.3 Server identity and peer config                                             [1d]
       spsync_server.cfg: server_id (public key id of the storage server key),

@@ -9,6 +9,9 @@
 #include <securepath/crypto/private_data_cache.hpp>
 #include <securepath/crypto/public_key_cache.hpp>
 
+#include <securepath/database/sqlite/connection.hpp>
+#include <securepath/util/conversions.hpp>
+
 #include <filesystem>
 
 namespace securepath::sync {
@@ -88,6 +91,15 @@ TEST_CASE("storage signs the sequence assignment", "[unit]") {
 	CHECK(outcome.envelope->is_signed());
 	CHECK(outcome.envelope->origin() == server_key.id());
 	CHECK(!outcome.envelope->verify(sid, keys));
+
+	{ // the signed assignment is persisted in the server log (plan 3.2)
+		chain_log log(database::sqlite::create_sqlite_connection(root + "/" + to_hex(sid) + "/storage.db"));
+		auto envs = log.get({}, {}, 10);
+		REQUIRE(envs.size() == 1);
+		CHECK(envs[0].is_signed());
+		CHECK(!envs[0].verify(sid, keys));
+		CHECK(envs[0].block().id() == outcome.block.value().id());
+	}
 
 	// without a signing key there is no envelope (fresh chain, fresh creator)
 	std::filesystem::remove_all(root);

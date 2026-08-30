@@ -1,14 +1,14 @@
 #pragma once
 
+#include "chain_log.hpp"
+
 #include <spsync/core/sync_mode.hpp>
-#include <spsync/core/record_storage.hpp>
 #include <spsync/core/records/data_change_record.hpp>
 #include <spsync/util/result.hpp>
 
 #include <securepath/crypto/public_key_id.hpp>
 #include <securepath/database/connection.hpp>
 
-#include <memory>
 #include <optional>
 
 namespace securepath::crypto {
@@ -35,9 +35,11 @@ struct chain_sync_config {
 /**
  * Server side block chain handler.
  *
- * The mode enforcement cursors are derived from the record storage by replay on construction,
- * so enforcement survives restarts. validate() and apply() are separated so that a replication
- * layer can validate on the leader and apply deterministically on every replica.
+ * Keeps the validation rules; the storage and the chain head live in chain_log (plan 3.2),
+ * which the replication layers talk to directly. The mode enforcement cursors are derived
+ * from the record storage by replay on construction, so enforcement survives restarts.
+ * validate() and apply() are separated so that a replication layer can validate on the
+ * leader and apply deterministically on every replica.
  */
 class chain_sync {
 public:
@@ -66,8 +68,15 @@ public:
 	/// try to commit chain block (validate + apply)
 	util::result<chain_block> commit_block(chain_block const&);
 
-	record_storage& records() { return records_; }
-	record_storage const& records() const { return records_; }
+	/// truncate the log from the given sequence and re-derive the mode cursors;
+	/// returns the removed blocks (see chain_log::truncate_from)
+	std::vector<chain_block> truncate_from(sequence_number first_removed);
+
+	chain_log& log() { return log_; }
+	chain_log const& log() const { return log_; }
+
+	record_storage& records() { return log_.records(); }
+	record_storage const& records() const { return log_.records(); }
 
 private:
 	enum class rec_type { none = 0, data_add_remove, special };
@@ -93,8 +102,7 @@ private:
 private:
 	chain_sync_config config_;
 	crypto::public_key_access* keys_{};
-	record_storage records_;
-	chain_block_id last_block_;
+	chain_log log_;
 
 	// enforcement cursors, replayed from the storage on construction and advanced on apply
 	sequence_number last_data_add_remove_;

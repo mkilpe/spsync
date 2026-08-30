@@ -103,6 +103,10 @@ storage::commit_outcome storage::commit_block(chain_block const& cb) {
 	commit_outcome outcome{sync_->commit_block(cb)};
 	if(outcome.block) {
 		outcome.envelope = make_envelope(outcome.block.value());
+		if(outcome.envelope) {
+			// keep the signed assignment in the log so replication can serve it later
+			sync_->log().store_assignment(outcome.block.value().tag(), *outcome.envelope);
+		}
 		notify_listeners(outcome.block.value(), outcome.envelope);
 	}
 	return outcome;
