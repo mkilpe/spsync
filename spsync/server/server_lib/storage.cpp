@@ -74,6 +74,27 @@ storage::storage(protocol::storage_id id, storage_config config, std::optional<s
 	chain_sync_config sync_config{modes_.mode, modes_.auth, to_hex(id_)};
 
 	sync_ = std::make_unique<chain_sync>(db_conn, sync_config, keys);
+	heads_ = std::make_unique<storage_heads>(db_conn);
+	if(private_data_) {
+		if(auto key = private_data_->my_private_key()) {
+			own_id_ = key->id();
+		}
+	}
+}
+
+std::vector<origin_head> storage::heads() const {
+	std::unique_lock l{mutex_};
+	std::vector<origin_head> ret;
+	if(own_id_.is_valid() && sync_->log().head().is_valid()) {
+		// the own head is derived live from the log so it cannot go stale; term 0 until phase 6
+		ret.push_back(origin_head{own_id_, 0, sync_->log().head()});
+	}
+	for(auto& head : heads_->all()) {
+		if(head.origin != own_id_) {
+			ret.push_back(std::move(head));
+		}
+	}
+	return ret;
 }
 
 sequence_number storage::current_sequence_number() const {

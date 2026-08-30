@@ -101,6 +101,22 @@ TEST_CASE("storage signs the sequence assignment", "[unit]") {
 		CHECK(envs[0].block().id() == outcome.block.value().id());
 	}
 
+	{ // the anti-entropy heads: the own live head plus stored foreign origins (plan 3.4)
+		auto own = origin_head{server_key.id(), 0, outcome.block.value().id()};
+		CHECK(s.heads() == std::vector{own});
+
+		auto const foreign = origin_head{crypto::public_key_id{octet_vector(32, 7)}, 0
+			, chain_block_id{5, securepath::test::random_octet_vector(16)}};
+		CHECK(s.origin_heads().advance(foreign));
+		CHECK(s.heads() == std::vector{own, foreign});
+
+		// the own head follows the log live
+		auto outcome_next = s.commit_block(creator.test_user_change());
+		REQUIRE(outcome_next.block);
+		own.block = outcome_next.block.value().id();
+		CHECK(s.heads() == std::vector{own, foreign});
+	}
+
 	// without a signing key there is no envelope (fresh chain, fresh creator)
 	std::filesystem::remove_all(root);
 	storage s2(sid, cfg);
@@ -108,6 +124,8 @@ TEST_CASE("storage signs the sequence assignment", "[unit]") {
 	auto outcome2 = s2.commit_block(creator2.test_user_change());
 	REQUIRE(outcome2.block);
 	CHECK(!outcome2.envelope);
+	// and no own identity to exchange
+	CHECK(s2.heads().empty());
 
 	std::filesystem::remove_all(root);
 }

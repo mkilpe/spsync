@@ -1,6 +1,7 @@
 #pragma once
 
 #include "chain_sync.hpp"
+#include "storage_heads.hpp"
 #include <spsync/core/records/block_envelope.hpp>
 #include "storage_config.hpp"
 
@@ -53,6 +54,16 @@ public:
 
 	void add_listener(std::shared_ptr<connection> const&);
 
+	/**
+	 * The heads anti-entropy exchanges for this storage (plan 3.4): the own live head
+	 * from the log (when the server has a signing key, term 0 until phase 6) followed by
+	 * the stored heads of the other origins.
+	 */
+	std::vector<origin_head> heads() const;
+
+	/// the stored per-origin heads; phase 4 records foreign heads here when applying
+	storage_heads& origin_heads() { return *heads_; }
+
 private:
 	std::optional<block_envelope> make_envelope(chain_block const&) const;
 	void notify_listeners(chain_block const& c, std::optional<block_envelope> const&);
@@ -65,6 +76,9 @@ private:
 	crypto::private_data_access* private_data_{};
 
 	std::unique_ptr<chain_sync> sync_;
+	std::unique_ptr<storage_heads> heads_;
+	/// id of the server signing key; invalid when the server has no key
+	crypto::public_key_id own_id_;
 	std::unordered_map<void const*, std::weak_ptr<connection>> listeners_;
 };
 
