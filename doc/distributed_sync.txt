@@ -692,10 +692,21 @@ Phase 3  Server log abstraction  (still single server)
       green (parallel ctest db-name clashes between binaries are pre-existing;
       serial run 22/22).
 
-- 3.3 Server identity and peer config                                             [1d]
++ 3.3 Server identity and peer config -- done 2026-08-30                          [1d]
       spsync_server.cfg: server_id (public key id of the storage server key),
       peers = list of host_port + key id. storage_config.peers per storage
       (subset of known peers that replicate this storage).
+      Implemented: server_lib/peer_config: peer_config{host, port, key} parsed from
+      "host:port/keyid-hex" (IPv6 in brackets), config options --server_id and
+      --peers (spsync_server.cfg/command line). resolve_server_identity checks a
+      configured server_id against the actual server key (mismatch or identity
+      config without a key -> invalid_configuration), drops the own entry from the
+      peer list (one shared cluster config) and refuses duplicate peer key ids;
+      storage_server resolves on start() and exposes identity(). storage_config
+      gains peers() (key id subset, empty = all known); replicating_peers()
+      resolves the subset against the known peers, unknown id ->
+      invalid_configuration. Tests: parsing round trips + failure shapes, config
+      file options through command_parser, identity resolution, subset resolution.
 
 - 3.4 Storage head table                                                          [0.5d]
       Per storage: for each origin server the highest (term, seq, hash) seen, plus

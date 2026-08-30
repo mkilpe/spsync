@@ -8,6 +8,7 @@
 #include <spsync/protocol/error.hpp>
 #include <spsync/protocol/server_protocol.hpp>
 
+#include <securepath/crypto/private_data_access.hpp>
 #include <securepath/network/encryption/encrypted_server.hpp>
 #include <securepath/serialisation/util.hpp>
 
@@ -159,6 +160,19 @@ public:
 		}
 	}
 
+	/// resolve the configured identity against the actual server key (plan 3.3)
+	void resolve_identity() {
+		crypto::public_key_id actual;
+		if(auto key = context_.private_data().my_private_key()) {
+			actual = key->id();
+		}
+		std::unique_lock lock{mutex_};
+		identity_ = resolve_server_identity(params_.server_id, params_.peers, actual);
+		if(identity_.server_id.is_valid()) {
+			LOG_INFO("storage server identity {} [{} peers]", identity_.server_id, identity_.peers.size());
+		}
+	}
+
 public:
 	mutable std::mutex mutex_;
 	storage_server_params params_;
@@ -166,6 +180,7 @@ public:
 	network::handshake_data handshake_data_;
 	std::flat_map<protocol::storage_id, std::shared_ptr<storage>> storages_;
 	storage_config default_storage_config_;
+	server_identity identity_;
 };
 
 
@@ -181,7 +196,13 @@ storage_server::~storage_server()
 }
 
 void storage_server::start() {
+	impl_->resolve_identity();
 	impl_->start(impl_->params_.create_endpoint(), impl_->params_.timeout);
+}
+
+server_identity storage_server::identity() const {
+	std::unique_lock lock{impl_->mutex_};
+	return impl_->identity_;
 }
 
 void storage_server::close() {

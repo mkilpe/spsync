@@ -23,6 +23,8 @@ struct spsync_server_commands : sync::spsync_server_params, command_parser {
 		add(help, "help", "h", "show help");
 		add(verbose, "verbose", "v", "verbose mode");
 		add(timeout, "timeout", "", "Connecting/Handshake timeout in seconds");
+		add(storage_params.server_id, "server_id", "", "expected public key id (hex) of the storage server key");
+		add(storage_params.peers, "peers", "", "replication peers as host:port/keyid-hex");
 	}
 
 	void handle_inputs() {

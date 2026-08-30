@@ -1,10 +1,14 @@
 #pragma once
 
+#include "peer_config.hpp"
+
 #include <securepath/network/encryption/context.hpp>
 #include <spsync/protocol/ports.hpp>
 
 #include <cstdint>
 #include <memory>
+#include <string>
+#include <vector>
 
 using namespace std::chrono_literals;
 
@@ -20,6 +24,16 @@ struct storage_server_params {
 
 	/// connecting/handshake timeout
 	std::chrono::seconds timeout{10s};
+
+	/**
+	 * Expected public key id (hex) of this server's signing key (plan 3.3); empty derives
+	 * the identity from the key. Startup fails when set and not matching the actual key.
+	 */
+	std::string server_id;
+
+	/// the known replication peers of this server (plan 3.3); an own entry is dropped on
+	/// resolve so one shared cluster configuration can be used
+	std::vector<peer_config> peers;
 };
 
 class storage_server {
@@ -29,6 +43,9 @@ public:
 
 	void start();
 	void close();
+
+	/// the resolved server identity (plan 3.3); empty before start()
+	server_identity identity() const;
 private:
 	class impl;
 	// encrypted_server requires this to be shared_ptr
