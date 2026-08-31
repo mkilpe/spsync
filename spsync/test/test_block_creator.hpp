@@ -28,6 +28,7 @@ struct test_block_creator {
 		block.set_sequence_and_parent_hash(last_server_seq, last_chain_hash);
 		last_chain_hash = block.hash();
 		last_tag = test_record.auth.tag();
+		created_tags.push_back(last_tag);
 		return block;
 	}
 
@@ -64,11 +65,15 @@ struct test_block_creator {
 		}
 		return next_block(test_record);
 	}
-	/*
-	chain_block test_segment() {
-
+	/// Create segment record for testing with the given plain data
+	chain_block test_segment(plain_segment_data data = {}) {
+		record_tag tag = securepath::test::random_octet_vector(16);
+		auth_record<segment_record> test_record{
+			segment_record{next_record_base(), std::move(data),
+				encrypted_record_header<segment_header>{}}, util::content_auth{tag}};
+		return next_block(test_record);
 	}
-	*/
+
 	/// when set, the next record base uses this operation id (single shot)
 	std::optional<octet_vector> force_op_id;
 
@@ -78,6 +83,9 @@ struct test_block_creator {
 	sequence_number last_server_seq{};
 	record_tag last_tag{};
 	octet_vector last_chain_hash{};
+
+	/// tags of every created block in creation order (e.g. to build segment tag lists)
+	std::deque<record_tag> created_tags;
 };
 
 }

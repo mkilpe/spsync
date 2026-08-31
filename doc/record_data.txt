@@ -139,10 +139,16 @@ RD9 Lifecycle. A newer change to the same oid supersedes the old data (old one
     truncate_from (rollback) is dropped with them once no record references the
     data_id.
 
-RD10 Quotas and limits - data AND the record chain. Today NOTHING is bounded: no
-    transport cap, no validation cap, record metadata is arbitrary octets, so the
-    chain can be bloated as easily as data. Two kinds of limit with different
-    rules:
+RD10 Quotas and limits - data AND the record chain. Today the only bound is the
+    transport frame cap (16 MiB payload per encrypted frame, framing.hpp): no
+    validation cap, record metadata is arbitrary octets, so the chain can be
+    bloated as easily as data. Worse, the frame cap plus batching is a wedge
+    hazard: response_records packs up to max_returned_records (30) blocks into
+    ONE frame, so records above ~max_frame_size/30 (~0.5 MiB) can make a range
+    unsendable - each committed fine alone, the batch can never be fetched.
+    max_record_size must stay well below max_frame_size/max_returned_records and
+    the record batching should become size-aware. Two kinds of limit with
+    different rules:
 
     Validity limits (deterministic, replicated): anything that makes a record
     invalid must be judged identically by every replica, or weak-mode replicas
@@ -224,9 +230,11 @@ Implementation steps
       max_record_size as a per-storage creation parameter (RD10 validity side):
       wire + persistence next to storage_modes, chain_sync validation,
       record_too_big error, limits reported to clients, engine pre-check.
-      Independent of the data work and SHOULD land before distributed phase 4
-      (replicas must already agree on validity limits). Tests: oversized record
-      rejected identically on reopen, mismatching creation limits refused.
+      Size-aware record batching in response_records (fixes the frame-cap wedge
+      hazard, RD10). Independent of the data work and SHOULD land before
+      distributed phase 4 (replicas must already agree on validity limits).
+      Tests: oversized record rejected identically on reopen, mismatching
+      creation limits refused, a range of large records still fetchable.
 
 - RDS 8  Retention / segment interaction                                   [defer]
       With segments.txt SEG 5: prune data at segment cut, retained live objects

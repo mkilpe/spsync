@@ -117,11 +117,20 @@ S8  Keys. A segment boundary is the natural encryption key rotation point
 Implementation steps
 --------------------
 
-- SEG 1  Record content and helpers                                          [0.5d]
++ SEG 1  Record content and helpers -- done 2026-08-31                       [0.5d]
       plain_segment_data: constructor + accessors, add previous_segment_tag.
       record_storage: find-last-segment query (the 0.2 note "find_last_of_type"),
       get tags for a sequence range. test_block_creator::test_segment() revived.
       Serialisation round-trip tests.
+      Implemented: plain_segment_data{start, end, tags, previous_segment_tag}
+      with accessors, previous_segment_tag serialised before trailing_data;
+      segment_header gains a metadata constructor (stamps creation_time) and
+      accessor; segment_record::data() returns by const ref.
+      record_storage::find_last_of_type(record_type_tag) and
+      tags_in_range(first, last) (in sync only, sequence order).
+      test_block_creator: test_segment(plain_segment_data) + created_tags list
+      of every created block for building tag lists in tests. Tests: data/header/
+      block round trips incl. backbone link, storage query cases.
 
 - SEG 2  Client creation path                                                  [1d]
       sync_segment_end fills the record: start = previous segment end (else 1),

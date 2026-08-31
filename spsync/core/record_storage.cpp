@@ -571,6 +571,36 @@ std::vector<chain_block> record_storage::truncate_from(sequence_number first_rem
 	return removed;
 }
 
+record_handle record_storage::find_last_of_type(record_type_tag type) const {
+	auto q = impl_->db->prepare(
+		"SELECT key, tag, seq, hash, parent_hash, state FROM record"
+		" WHERE state = :state AND type = :type ORDER BY seq DESC LIMIT 1;");
+	q.bind(":state", std::to_underlying(record_state::in_sync));
+	q.bind(":type", std::to_underlying(type));
+	return impl_->load_record(q.execute());
+}
+
+std::deque<record_tag> record_storage::tags_in_range(sequence_number first, sequence_number last) const {
+	auto q = impl_->db->prepare(
+		"SELECT tag FROM record WHERE state = :state AND seq >= :first AND seq <= :last"
+		" ORDER BY seq ASC;");
+	q.bind(":state", std::to_underlying(record_state::in_sync));
+	q.bind(":first", static_cast<std::uint64_t>(first.value));
+	q.bind(":last", static_cast<std::uint64_t>(last.value));
+
+	std::deque<record_tag> ret;
+	auto res = q.execute();
+	for(; res; res.next()) {
+		auto tag = res.value<octet_vector>(0);
+		if(!tag) {
+			LOG_WARN("invalid record storage entry, no tag set");
+			throw make_error(securepath::errc::invalid_data, "failed to interpret record tag column");
+		}
+		ret.push_back(std::move(*tag));
+	}
+	return ret;
+}
+
 record_handle record_storage::find_internal(record_internal_id iid) const {
 	auto q = impl_->db->prepare(
 		"SELECT key, tag, seq, hash, parent_hash, state FROM record"

@@ -553,6 +553,56 @@ TEST_CASE("record_storage truncate_from demotes acked", "[unit]") {
 	CHECK(storage.create(again, record_state::in_sync));
 }
 
+TEST_CASE("record_storage segment queries", "[unit]") {
+	remove_database_test_db();
+	auto db_conn = database::sqlite::create_sqlite_connection(db_name);
+	record_storage storage(db_conn);
+
+	test_block_creator creator;
+	CHECK(!storage.find_last_of_type(segment_record_tag));
+	CHECK(storage.tags_in_range(sequence_number{1}, sequence_number{10}).empty());
+
+	auto b1 = creator.test_user_change();
+	REQUIRE(storage.create(b1, record_state::in_sync));
+	auto b2 = creator.test_data_change();
+	REQUIRE(storage.create(b2, record_state::in_sync));
+	auto s1 = creator.test_segment(plain_segment_data{sequence_number{1}, sequence_number{3}
+		, {b1.tag(), b2.tag()}});
+	REQUIRE(storage.create(s1, record_state::in_sync));
+
+	{ // the newest record per type is found
+		auto h = storage.find_last_of_type(segment_record_tag);
+		REQUIRE(h);
+		CHECK(h->tag() == s1.tag());
+		CHECK(h->type() == segment_record_tag);
+		CHECK(storage.find_last_of_type(user_change_record_tag)->tag() == b1.tag());
+		CHECK(storage.find_last_of_type(data_change_record_tag)->tag() == b2.tag());
+	}
+	{ // range tags come back in sequence order
+		auto tags = storage.tags_in_range(sequence_number{1}, sequence_number{2});
+		REQUIRE(tags.size() == 2);
+		CHECK(tags[0] == b1.tag());
+		CHECK(tags[1] == b2.tag());
+		CHECK(storage.tags_in_range(sequence_number{1}, sequence_number{10}).size() == 3);
+		CHECK(storage.tags_in_range(sequence_number{4}, sequence_number{10}).empty());
+	}
+	{ // records without a server sequence are not part of a range
+		auto pending = creator.test_data_change();
+		REQUIRE(storage.create(pending, record_state::pending_commit));
+		CHECK(storage.tags_in_range(sequence_number{1}, sequence_number{10}).size() == 3);
+	}
+	{ // a newer segment becomes the newest of its type
+		auto s2 = creator.test_segment(plain_segment_data{sequence_number{3}, sequence_number{5}
+			, {s1.tag(), creator.created_tags[3]}, s1.tag()});
+		REQUIRE(storage.create(s2, record_state::in_sync));
+		auto h = storage.find_last_of_type(segment_record_tag);
+		REQUIRE(h);
+		CHECK(h->tag() == s2.tag());
+		auto seg = h->record().deserialise_to<segment_record>();
+		CHECK(seg.data().previous_segment_tag() == s1.tag());
+	}
+}
+
 TEST_CASE("record_storage assignment round-trip", "[unit]") {
 	remove_database_test_db();
 	auto db_conn = database::sqlite::create_sqlite_connection(db_name);

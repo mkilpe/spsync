@@ -10,6 +10,14 @@ namespace securepath::sync {
  */
 class segment_header {
 public:
+	segment_header() = default;
+	explicit segment_header(util::metadata meta)
+	: creation_time(clock_type::now())
+	, metadata_(std::move(meta))
+	{}
+
+	/// get the arbitrary metadata
+	util::metadata const& metadata() const { return metadata_; }
 
 	// time when this segment was created
 	time_point creation_time;

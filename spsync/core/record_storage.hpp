@@ -3,6 +3,7 @@
 #include "record_interface.hpp"
 #include <securepath/database/connection.hpp>
 
+#include <deque>
 #include <memory>
 #include <vector>
 
@@ -60,6 +61,12 @@ public:
 
 	/// highest in sync sequence of data change records that add an object (no previous record tag)
 	sequence_number last_data_add_sequence() const;
+
+	/// find the newest in sync record of the given type (e.g. the newest segment record)
+	record_handle find_last_of_type(record_type_tag) const;
+
+	/// tags of the in sync records with sequence in [first, last], in sequence order
+	std::deque<record_tag> tags_in_range(sequence_number first, sequence_number last) const;
 
 
 	// -- truncation --
