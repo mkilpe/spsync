@@ -132,12 +132,25 @@ Implementation steps
       of every created block for building tag lists in tests. Tests: data/header/
       block round trips incl. backbone link, storage query cases.
 
-- SEG 2  Client creation path                                                  [1d]
++ SEG 2  Client creation path -- done 2026-08-31                               [1d]
       sync_segment_end fills the record: start = previous segment end (else 1),
       end = predicted own sequence, tags collected from record storage, metadata
       into the encrypted header; commits through the normal pending_commit path.
       Rebase support: on out-of-sync recompute end + tag list (op_id preserved,
       D6). Engine tests in all four modes including a conflicting commit.
+      Implemented: segment_record_creator gains set_change/set_data and a real
+      result() (authenticates the plain data, encrypts the header - same stream
+      shape as user changes); segment_record_verifier decrypts/authenticates and
+      exposes data()/header(). sync_engine::impl::make_segment_data(base) builds
+      the covered range: [previous segment end (else 1), base+1), in sync tags,
+      backbone link; the previous segment is the first covered record so every
+      record is covered exactly once. sync_segment_end refuses while local
+      commits are pending (the seal is exact, no rebase-heal dependency);
+      update_record(segment) recomputes range+tags at rebase keeping header and
+      op id. Tests: (18) segment end in all four modes (coverage vs server
+      chain, pending guard, encrypted metadata round trip, backbone of a second
+      segment), (19) conflict rebase in the three seen-modes (recomputed range,
+      op id preserved, loser tag gone from the server).
 
 - SEG 3  Server coverage validation                                            [1d]
       chain_sync::check_rules(segment_record) per S5: exact tag/range match,

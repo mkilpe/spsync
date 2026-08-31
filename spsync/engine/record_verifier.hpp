@@ -75,8 +75,14 @@ public:
 	/// Construct to verify authenticity and extract the decrypted data.
 	segment_record_verifier(encryption_key const& key, segment_record const& record, util::content_auth auth);
 
-	//t: implement
+	/// Returns the decrypted header from the record
+	segment_header header() const;
+
+	/// Returns the plain segment data from the record
+	plain_segment_data const& data() const;
 private:
+	std::optional<segment_header> header_;
+	plain_segment_data data_;
 };
 
 

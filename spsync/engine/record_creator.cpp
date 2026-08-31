@@ -70,8 +70,24 @@ auth_record<user_change_record> user_change_record_creator::result() {
 	return auth_record<user_change_record>{std::move(record), std::move(auth)};
 }
 
+void segment_record_creator::set_change(plain_segment_data data, metadata meta) {
+	set_data(segment_header{std::move(meta)}, std::move(data));
+}
+
+void segment_record_creator::set_data(segment_header header, plain_segment_data data) {
+	plain_record_ = std::move(data);
+	// the metadata is put into the encrypted header which is protected
+	header_ = std::move(header);
+}
+
 auth_record<segment_record> segment_record_creator::result() {
-	segment_record record{};
+	// first authenticate the unencrypted data
+	encryptor_->process_auth(serialisation::asn_der_serialise(plain_record_));
+
+	// create encrypted header that contains the user's metadata
+	encrypted_record_header<segment_header> enc_header(encryptor_->process(serialisation::asn_der_serialise(header_)));
+
+	segment_record record{std::move(base_), std::move(plain_record_), std::move(enc_header)};
 	auto auth = make_auth(record);
 	return auth_record<segment_record>{std::move(record), std::move(auth)};
 }

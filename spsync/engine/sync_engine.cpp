@@ -357,6 +357,23 @@ public:
 		return creator.result();
 	}
 
+	/**
+	 * Build the plain segment data for a segment committed on top of base: it covers
+	 * [previous segment end (else 1), base sequence + 1) with the in sync tags of that
+	 * range, linking the previous segment by tag (segments.txt S1/S2). The previous
+	 * segment itself is the first covered record, so every record is covered exactly once.
+	 */
+	plain_segment_data make_segment_data(chain_block_id const& base) const {
+		sequence_number start{1};
+		record_tag previous_tag;
+		if(auto previous = records.find_last_of_type(segment_record_tag)) {
+			previous_tag = previous->tag();
+			start = previous->record().deserialise_to<segment_record>().data().segment_end();
+		}
+		return plain_segment_data{start, base.sequence + 1
+			, records.tags_in_range(start, base.sequence), std::move(previous_tag)};
+	}
+
 	auth_record<segment_record> update_record(encryption_key const& key, segment_record_verifier& ver) const {
 		auto last_block = records.last_block();
 		LINFO("updating last block to {}", last_block);
@@ -367,7 +384,9 @@ public:
 		}
 
 		segment_record_creator creator(key, last_block, signer, ver.base().op_id());
-		//f: implement
+		// the covered range moved underneath the segment: recompute the end and the tag
+		// list from the storage, keeping the caller's header (metadata, creation time)
+		creator.set_data(ver.header(), make_segment_data(last_block));
 		return creator.result();
 	}
 
@@ -732,15 +751,18 @@ record_handle sync_engine::sync_segment_end(metadata mdata) {
 	if(!last_block.is_valid()) {
 		throw error(errc::invalid_record_chain_state, "Can't find last record, segment cannot be first record");
 	}
+	// the tag list is built from the in sync records, so the seal is only exact when
+	// nothing local is still waiting; the app commits its changes first
+	if(impl_->records.find_first_pending_commit()) {
+		throw error(errc::invalid_record_chain_state, "segment requires all local changes to be committed");
+	}
 
 	std::optional<crypto::private_key> signer;
 	if(impl_->config.auth_mode == auth_mode::sign_records) {
 		signer = my_private_key(impl_->crypto.private_data());
 	}
 	segment_record_creator creator(impl_->crypto.enc_keys().current_key(), last_block, signer);
-
-	//needs the start, end sequences and the record tags
-	//creator.add_change(std::move(mdata));
+	creator.set_change(impl_->make_segment_data(last_block), std::move(mdata));
 
 	record_handle h = impl_->records.create(creator.result());
 	impl_->commit_record(h);

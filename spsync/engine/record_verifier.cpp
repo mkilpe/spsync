@@ -56,6 +56,20 @@ plain_user_change_data user_change_record_verifier::data() const {
 segment_record_verifier::segment_record_verifier(encryption_key const& key, segment_record const& rec, util::content_auth auth)
 : record_verifier_base(key, std::move(auth), rec)
 {
+	// first authenticate the unencrypted data
+	data_ = rec.data();
+	decryptor_->process_auth(serialisation::asn_der_serialise(data_));
+	// decrypt the header
+	header_ = serialisation::asn_der_deserialise<segment_header>(decryptor_->process(rec.header().data()));
+}
+
+segment_header segment_record_verifier::header() const {
+	assert(header_);
+	return *header_;
+}
+
+plain_segment_data const& segment_record_verifier::data() const {
+	return data_;
 }
 
 }

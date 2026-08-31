@@ -89,8 +89,17 @@ class segment_record_creator: public record_creator_base {
 public:
 	using record_creator_base::record_creator_base;
 
+	/// set the plain segment data with the metadata (goes to the encrypted header)
+	void set_change(plain_segment_data data, metadata);
+
 	/// Returns the ready segment_record, it can be called only once as it will move content
 	auth_record<segment_record> result();
+
+	/// Set the data in one go (e.g. from verifier)
+	void set_data(segment_header, plain_segment_data);
+private:
+	plain_segment_data plain_record_;
+	segment_header header_;
 };
 
 }

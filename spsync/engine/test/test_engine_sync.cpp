@@ -2,6 +2,7 @@
 
 #include <spsync/client/record_util.hpp>
 #include <spsync/engine/record_creator.hpp>
+#include <spsync/engine/record_verifier.hpp>
 
 #include <spsync/core/records/data_change_record.hpp>
 #include <spsync/core/records/user_change_record.hpp>
@@ -412,6 +413,92 @@ TEST_CASE("engine sync commit storm with special record", "[unit]") {
 
 	context.commit_storm(per_client, true);
 	CHECK(context.compare_record_storages(sequence_number{2 + clients*per_client}));
+}
+
+// (18) segment end covers the chain since the previous segment, in every mode (SEG 2)
+TEST_CASE("engine sync segment end", "[unit]") {
+	auto mode = GENERATE(sync_mode::allow_all, sync_mode::require_special_seen,
+		sync_mode::require_data_add_remove_seen, sync_mode::require_all_seen);
+
+	test::test_sync_context context(chain_sync_config{mode});
+	context.add_client();
+	context.create_initial_record();
+	while(context.handle_events()) {}
+
+	context.client(0).engine.sync_object_change(create_object_id(), metadata{});
+	while(context.handle_events()) {}
+
+	// a segment seals only committed history: refused while a commit is pending
+	context.client(0).engine.sync_object_change(create_object_id(), metadata{});
+	CHECK_THROWS(context.client(0).engine.sync_segment_end(metadata{}));
+	while(context.handle_events()) {}
+
+	metadata meta;
+	meta.insert("checkpoint", std::string{"test"});
+	auto h = context.client(0).engine.sync_segment_end(meta);
+	REQUIRE(h);
+	while(context.handle_events()) {}
+	CHECK(context.compare_record_storages(sequence_number{4}));
+
+	auto seg = h->record().deserialise_to<segment_record>();
+	CHECK(h->block_id().sequence == sequence_number{4});
+	CHECK(seg.data().segment_start() == sequence_number{1});
+	CHECK(seg.data().segment_end() == sequence_number{4});
+	CHECK(seg.data().previous_segment_tag().empty());
+	REQUIRE(seg.data().tags().size() == 3);
+	for(std::size_t i = 0; i != seg.data().tags().size(); ++i) {
+		CHECK(seg.data().tags()[i] == context.server.sync.records().find(sequence_number{i + 1})->tag());
+	}
+
+	// the encrypted header carries the metadata and the record verifies
+	segment_record_verifier ver(context.client(0).enc_keys.current_key(), seg, h->record().auth());
+	CHECK(ver.is_authentic());
+	CHECK(ver.header().metadata().find<std::string>("checkpoint") == std::string{"test"});
+
+	// the next segment starts where the first ended and links it by tag (the backbone)
+	context.client(0).engine.sync_object_change(create_object_id(), metadata{});
+	while(context.handle_events()) {}
+	auto h2 = context.client(0).engine.sync_segment_end(metadata{});
+	while(context.handle_events()) {}
+	CHECK(context.compare_record_storages(sequence_number{6}));
+
+	auto seg2 = h2->record().deserialise_to<segment_record>();
+	CHECK(seg2.data().segment_start() == sequence_number{4});
+	CHECK(seg2.data().segment_end() == sequence_number{6});
+	CHECK(seg2.data().previous_segment_tag() == h->tag());
+	REQUIRE(seg2.data().tags().size() == 2);
+	CHECK(seg2.data().tags()[0] == h->tag());
+}
+
+// (19) a segment that has not seen the newest record is rejected and rebuilt with a
+// recomputed range and tag list, preserving the operation id (SEG 2)
+TEST_CASE("engine sync segment conflict rebase", "[unit]") {
+	auto mode = GENERATE(sync_mode::require_special_seen,
+		sync_mode::require_data_add_remove_seen, sync_mode::require_all_seen);
+
+	test::test_sync_context context(chain_sync_config{mode});
+	context.add_client(true, 2);
+	context.create_initial_record();
+	while(context.handle_events()) {}
+
+	// client 0 wins the race; client 1's segment is based on the old head
+	auto winner = context.client(0).engine.sync_object_change(create_object_id(), metadata{});
+	auto h = context.client(1).engine.sync_segment_end(metadata{});
+	auto original_tag = h->tag();
+	auto original_op = h->record().deserialise_to<segment_record>().op_id();
+	CHECK(h->record().deserialise_to<segment_record>().data().segment_end() == sequence_number{2});
+
+	while(context.handle_events()) {}
+	CHECK(context.compare_record_storages(sequence_number{3}));
+	CHECK(h->tag() != original_tag);
+	CHECK(!context.server.sync.records().find_tag(original_tag));
+
+	auto seg = h->record().deserialise_to<segment_record>();
+	CHECK(seg.op_id() == original_op);
+	CHECK(seg.data().segment_start() == sequence_number{1});
+	CHECK(seg.data().segment_end() == sequence_number{3});
+	REQUIRE(seg.data().tags().size() == 2);
+	CHECK(seg.data().tags()[1] == winner->tag());
 }
 
 }
