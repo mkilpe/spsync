@@ -198,7 +198,52 @@ chain_sync::rule_result chain_sync::check_rules(segment_record const& rec) const
 				, head.sequence, to_hex(head.hash), rec.last_seen_block().sequence, to_hex(rec.last_seen_block().hash), config_.log_id);
 		}
 	}
+	if(!r.err) {
+		r.err = check_rules_segment(rec);
+	}
 	return r;
+}
+
+/// segment coverage validation (segments plan SEG 3/S5); applies in every mode, in
+/// allow_all a stale segment stays acceptable as an advisory checkpoint (D9) as long
+/// as it covers its stated range truthfully
+error chain_sync::check_rules_segment(segment_record const& rec) const {
+	auto const& data = rec.data();
+	// the stated end must be the segment's own (predicted) sequence
+	if(data.segment_end() != rec.last_seen_block().sequence + 1) {
+		LOG_TRACE("segment end does not match the record sequence [{} != {}] (rsid={})"
+			, data.segment_end(), rec.last_seen_block().sequence + 1, config_.log_id);
+		return make_error(protocol::errc::invalid_record, "segment end does not match the record sequence");
+	}
+	auto err = check_segment_backbone(rec);
+	if(!err) {
+		// the tag list must match the committed records of [start, end) exactly
+		if(data.tags() != log_.records().tags_in_range(data.segment_start(), data.segment_end() - 1)) {
+			LOG_TRACE("segment tag list does not match the chain [start={}, end={}] (rsid={})"
+				, data.segment_start(), data.segment_end(), config_.log_id);
+			err = make_error(protocol::errc::invalid_record, "segment tag list does not match the chain");
+		}
+	}
+	return err;
+}
+
+/// segments partition the chain (S2): start at the previous segment's STATED end (else 1),
+/// linked by tag. The stated end is used because in allow_all an accepted stale segment's
+/// end lags its assigned sequence; chaining on the stated ends keeps the partition gapless.
+error chain_sync::check_segment_backbone(segment_record const& rec) const {
+	auto const& data = rec.data();
+	sequence_number expected_start{1};
+	record_tag expected_tag;
+	if(auto previous = log_.records().find_last_of_type(segment_record_tag)) {
+		expected_start = previous->record().deserialise_to<segment_record>().data().segment_end();
+		expected_tag = previous->tag();
+	}
+	if(data.segment_start() != expected_start || data.previous_segment_tag() != expected_tag) {
+		LOG_TRACE("segment does not continue the backbone [start={} expected={}, prev tag={} expected={}] (rsid={})"
+			, data.segment_start(), expected_start, to_hex(data.previous_segment_tag()), to_hex(expected_tag), config_.log_id);
+		return make_error(protocol::errc::record_out_of_sync);
+	}
+	return {};
 }
 
 error chain_sync::validate(chain_block const& block) const {

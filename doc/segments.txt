@@ -152,10 +152,21 @@ Implementation steps
       segment), (19) conflict rebase in the three seen-modes (recomputed range,
       op id preserved, loser tag gone from the server).
 
-- SEG 3  Server coverage validation                                            [1d]
++ SEG 3  Server coverage validation -- done 2026-08-31                         [1d]
       chain_sync::check_rules(segment_record) per S5: exact tag/range match,
       backbone continuity, at-head per mode. Tests: valid segment, wrong tag list,
       gap to previous segment, stale segment in each mode.
+      Implemented: check_rules_segment after the existing at-head rule, in every
+      mode: stated end must equal the record's own (predicted) sequence
+      (invalid_record), backbone continuity - start at the previous segment's
+      STATED end (else 1) with the matching tag (record_out_of_sync, healable by
+      rebase), tag list must equal tags_in_range(start, end-1) exactly
+      (invalid_record). Chaining on stated ends (not block sequences) keeps the
+      partition gapless in allow_all where an accepted stale segment's end lags
+      its assigned sequence. Tests: coverage violations per mode (6c), stale
+      segment advisory in allow_all incl. the follow-up segment covering the
+      unseen record + the stale segment, rejected in the seen modes (6d); the
+      SEG 2 engine tests now run end to end against this validation.
 
 - SEG 4  Verification fast path                                                [1d]
       Client verify-from-segment on reload/full resync per S4, config choice

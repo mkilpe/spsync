@@ -99,6 +99,8 @@ private:
 	error check_rules_add(data_change_record const& rec) const;
 	error check_rules_existing(data_change_record const& rec) const;
 	error check_rules_special_seen(chain_block_id const& last_seen_block) const;
+	error check_rules_segment(segment_record const& rec) const;
+	error check_segment_backbone(segment_record const& rec) const;
 private:
 	chain_sync_config config_;
 	crypto::public_key_access* keys_{};

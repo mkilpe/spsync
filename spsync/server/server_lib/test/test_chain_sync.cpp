@@ -253,6 +253,94 @@ TEST_CASE("chain_sync truncate then recommit", "[unit]") {
 	}
 }
 
+// (6c) segment coverage validation (segments plan SEG 3): range, tag list and backbone
+// must match the chain, in every mode
+TEST_CASE("chain_sync segment coverage validation", "[unit]") {
+	auto mode = GENERATE(sync_mode::allow_all, sync_mode::require_special_seen,
+		sync_mode::require_data_add_remove_seen, sync_mode::require_all_seen);
+	remove_database_test_db();
+	chain_sync sync(database::sqlite::create_sqlite_connection(db_name), chain_sync_config{mode});
+
+	test_block_creator creator;
+	CHECK(sync.commit_block(creator.test_user_change()));
+	CHECK(sync.commit_block(creator.test_data_change()));
+
+	{ // wrong tag list is refused
+		auto c = creator;
+		std::deque<record_tag> reversed{c.created_tags.rbegin(), c.created_tags.rend()};
+		CHECK(check_result_error(sync.commit_block(c.test_segment(
+			plain_segment_data{sequence_number{1}, sequence_number{3}, reversed})), protocol::errc::invalid_record));
+	}
+	{ // wrong amount of tags is refused
+		auto c = creator;
+		CHECK(check_result_error(sync.commit_block(c.test_segment(
+			plain_segment_data{sequence_number{1}, sequence_number{3}, {c.created_tags[0]}})), protocol::errc::invalid_record));
+	}
+	{ // an end that is not the segment's own sequence is refused
+		auto c = creator;
+		CHECK(check_result_error(sync.commit_block(c.test_segment(
+			plain_segment_data{sequence_number{1}, sequence_number{2}, {c.created_tags[0]}})), protocol::errc::invalid_record));
+	}
+	{ // the first segment must start at 1
+		auto c = creator;
+		CHECK(check_result_error(sync.commit_block(c.test_segment(
+			plain_segment_data{sequence_number{2}, sequence_number{3}, {c.created_tags[1]}})), protocol::errc::record_out_of_sync));
+	}
+
+	// the valid first segment covers [1, 3)
+	auto s1 = creator.test_segment(plain_segment_data{sequence_number{1}, sequence_number{3}, creator.created_tags});
+	CHECK(sync.commit_block(s1));
+
+	{ // a gap to the previous segment is refused
+		auto c = creator;
+		CHECK(check_result_error(sync.commit_block(c.test_segment(
+			plain_segment_data{sequence_number{4}, sequence_number{4}, {}, s1.tag()})), protocol::errc::record_out_of_sync));
+	}
+	{ // a wrong backbone tag is refused
+		auto c = creator;
+		CHECK(check_result_error(sync.commit_block(c.test_segment(
+			plain_segment_data{sequence_number{3}, sequence_number{4}, {s1.tag()}
+				, securepath::test::random_octet_vector(16)})), protocol::errc::record_out_of_sync));
+	}
+	{ // a missing backbone tag is refused once a segment exists
+		auto c = creator;
+		CHECK(check_result_error(sync.commit_block(c.test_segment(
+			plain_segment_data{sequence_number{3}, sequence_number{4}, {s1.tag()}})), protocol::errc::record_out_of_sync));
+	}
+
+	// the valid second segment continues from the previous end, covering the previous segment
+	CHECK(sync.commit_block(creator.test_segment(
+		plain_segment_data{sequence_number{3}, sequence_number{4}, {s1.tag()}, s1.tag()})));
+}
+
+// (6d) a stale segment is an advisory checkpoint in allow_all (D9), rejected in the seen modes
+TEST_CASE("chain_sync stale segment", "[unit]") {
+	auto mode = GENERATE(sync_mode::allow_all, sync_mode::require_special_seen,
+		sync_mode::require_data_add_remove_seen, sync_mode::require_all_seen);
+	remove_database_test_db();
+	chain_sync sync(database::sqlite::create_sqlite_connection(db_name), chain_sync_config{mode});
+
+	test_block_creator creator;
+	CHECK(sync.commit_block(creator.test_user_change()));
+	CHECK(sync.commit_block(creator.test_data_change()));
+	auto stale = creator; // has not seen the next record
+	CHECK(sync.commit_block(creator.test_data_change()));
+
+	auto seg = stale.test_segment(plain_segment_data{sequence_number{1}, sequence_number{3}, stale.created_tags});
+	auto res = sync.commit_block(seg);
+	if(mode == sync_mode::allow_all) {
+		// truthful coverage of the stated range is enough; the sequence is assigned past it
+		REQUIRE(res);
+		CHECK(res.value().sequence() == sequence_number{4});
+		// the next segment continues from the STATED end, so the unseen record and the
+		// stale segment both stay covered
+		CHECK(sync.commit_block(creator.test_segment(
+			plain_segment_data{sequence_number{3}, sequence_number{4}, {creator.created_tags[2]}, seg.tag()})));
+	} else {
+		CHECK(check_result_error(res, protocol::errc::record_out_of_sync));
+	}
+}
+
 // (7) validate/apply split behaves like commit_block
 TEST_CASE("chain_sync validate and apply", "[unit]") {
 	remove_database_test_db();
