@@ -168,10 +168,27 @@ Implementation steps
       unseen record + the stale segment, rejected in the seen modes (6d); the
       SEG 2 engine tests now run end to end against this validation.
 
-- SEG 4  Verification fast path                                                [1d]
++ SEG 4  Verification fast path -- done 2026-09-01                             [1d]
       Client verify-from-segment on reload/full resync per S4, config choice
       fast/full. Test: mid-history tamper detected via segment mismatch; cost
       sanity check on a long chain.
+      Implemented: engine/history_verifier: verify_history(records, keys, mode)
+      -> result<history_verify_report{verified_records, verified_segments,
+      covered_records}> (counters sum to the chain length). full walks every
+      record: recomputed hash vs stored, parent link, GCM authenticity. fast
+      verifies [newest segment's stated end, head] the same way (the newest
+      segment itself included), then walks the backbone: each segment
+      authenticated, coverage list == tags_in_range exactly, stated-end
+      continuity, start 1 at the first segment; covered records carry no crypto
+      cost (content still authenticated when read). Without segments fast ==
+      full. sync_engine::verify_history() with sync_engine_config::verification
+      (default fast); the app calls it on reload. Note: own committed records
+      keep their pre-assignment blob (B8) - the verifier reconstructs the
+      committed block from blob + stored columns; a real B8 fix would remove
+      committed_block(). Also fixed: util/result.hpp was not self-contained
+      (missing log include). Tests: fast vs full crypto counts on a 10-record
+      2-segment chain (2+2 vs 8+2), no-segment fallback, covered-record tamper
+      via coverage mismatch, tail tamper via per-record verification.
 
 - SEG 5  History cut, single server                                            [2d]
       record_storage::truncate_prefix(first_kept, retained_tags) as the mirror of

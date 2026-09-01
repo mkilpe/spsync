@@ -3,6 +3,8 @@
 #include <securepath/util/error.hpp>
 #include <spsync/util/format.hpp>
 
+#include <securepath/log/log.hpp>
+
 #include <optional>
 #include <utility>
 

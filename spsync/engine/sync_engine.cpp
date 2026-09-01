@@ -770,4 +770,10 @@ record_handle sync_engine::sync_segment_end(metadata mdata) {
 	return h;
 }
 
+util::result<history_verify_report> sync_engine::verify_history() const {
+	std::unique_lock lock{impl_->mutex};
+	LTRACE("verify history");
+	return sync::verify_history(impl_->records, impl_->crypto.enc_keys(), impl_->config.verification);
+}
+
 }

@@ -1,5 +1,6 @@
 #pragma once
 
+#include "history_verifier.hpp"
 #include "interface.hpp"
 #include "sync_engine_config.hpp"
 #include <spsync/comm/interface.hpp>
@@ -44,6 +45,9 @@ public:
 	virtual record_handle sync_object_change(object_id, metadata, record_data_handle = {});
 	virtual record_handle sync_user_change(plain_user_change_data change_data, metadata = {});
 	virtual record_handle sync_segment_end(metadata = {});
+
+	/// verify the stored in sync history (segments plan SEG 4), strategy from the config
+	util::result<history_verify_report> verify_history() const;
 private:
 	class impl;
 	std::unique_ptr<impl> impl_;

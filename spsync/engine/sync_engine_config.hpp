@@ -2,6 +2,8 @@
 
 #include <spsync/core/sync_mode.hpp>
 
+#include <string>
+
 namespace securepath::sync {
 
 /**
@@ -18,6 +20,15 @@ enum class conflict_policy {
 	ask
 };
 
+/// How verify_history checks the stored chain (segments plan SEG 4/S4)
+enum class history_verification {
+	/// walk every record: hash chain and per-record authenticity
+	full = 0,
+	/// verify from the newest segment: the records past its stated end fully, the older
+	/// history through the authenticated segment backbone
+	fast
+};
+
 /**
  * The configuration for the sync engine
  */
@@ -30,6 +41,9 @@ struct sync_engine_config {
 
 	/// what to do when an object changed underneath a pending record
 	conflict_policy conflicts{conflict_policy::rebase_on_top};
+
+	/// how verify_history checks the stored chain (segments plan SEG 4)
+	history_verification verification{history_verification::fast};
 
 	/// the replication mode the storage is expected to have (plan 2.4: replication
 	/// requires sign_records, the engine refuses an invalid combination)
