@@ -26,8 +26,8 @@ std::deque<block_envelope> chain_log::get(sequence_number start, sequence_number
 		end = head_.sequence;
 	}
 	std::deque<block_envelope> ret;
-	record_handle h;
-	for(; start <= end && ret.size() < max && (h = records_.find(start)); ++start) {
+	// find_range skips the sequences a history cut removed (SEG 5)
+	for(auto const& h : records_.find_range(start, end, record_state::in_sync, max)) {
 		auto env = h->assignment();
 		if(env.empty()) {
 			ret.push_back(block_envelope{h->record(), {}});
@@ -64,6 +64,20 @@ std::vector<chain_block> chain_log::truncate_from(sequence_number first_removed)
 	auto removed = records_.truncate_from(first_removed);
 	head_ = records_.last_block();
 	return removed;
+}
+
+std::vector<chain_block> chain_log::cut_before(record_tag const& segment_tag) {
+	auto segment = records_.find_tag(segment_tag);
+	bool const valid = segment && segment->type() == segment_record_tag
+		&& segment->state() == record_state::in_sync;
+	if(!valid) {
+		throw make_error(sync::errc::constraint_violation, "history cut requires a committed segment as the anchor");
+	}
+	auto const anchor = segment->block_id().sequence;
+	auto retained = records_.object_chain_tags_below(anchor);
+	LOG_INFO("cutting history before the segment [anchor=({},{}), retained={}]"
+		, anchor, to_hex(segment->block_id().hash), retained.size());
+	return records_.truncate_prefix(anchor, retained);
 }
 
 record_handle chain_log::find_by_tag(octet_vector const& tag) const {

@@ -190,12 +190,35 @@ Implementation steps
       2-segment chain (2+2 vs 8+2), no-segment fallback, covered-record tamper
       via coverage mismatch, tail tamper via per-record verification.
 
-- SEG 5  History cut, single server                                            [2d]
++ SEG 5  History cut, single server -- done 2026-09-01                         [2d]
       record_storage::truncate_prefix(first_kept, retained_tags) as the mirror of
       truncate_from; chain_log::cut_before(segment) computing the retained set
       from record_objects; get_records/anchor handling for clients that join after
       the cut; anchor hash into the invite path. Tests: cut, rejoin from anchor,
       retained objects still rebuild, cursors survive.
+      Implemented: record_storage gains find_range (sparse range query, also
+      chain_log::get uses it so fetches skip cut sequences),
+      object_chain_tags_below (newest in sync record per oid + its
+      previous-record chain, the retained set) and truncate_prefix (removes
+      seq < first_kept except retained tags, handles invalidated).
+      chain_log::cut_before(segment tag) validates the anchor is a committed
+      segment, computes the retained set and truncates; the head and the
+      max-based cursors are unaffected. Client: sync_engine_config::trusted_anchor
+      (block hash, delivered with the invite - the seam for the invite path);
+      strict acceptance takes the anchor block as the chain start, retained
+      records below it are accepted content-authenticated with an advisory
+      position (arriving before the anchor they wait in pending_sync and are
+      promoted when it lands); weak modes already accept sparse chains.
+      verify_history is anchor aware: retained records verified detached, the
+      chain from the anchor onwards fully, the backbone walk stops at the anchor.
+      Keys for post-cut joiners come with the invite (the root user change that
+      carried the enveloped keys is dropped by the cut) - the engine tests model
+      this by inserting the key directly. Found+fixed: binding LIMIT through the
+      offset-encoding uint64 bind made it negative (unlimited). Tests: storage
+      prefix cut + chains + ranges, chain_sync cut end to end (gap-skipping
+      get_records, follow-up to retained object, backbone over the cut, reopen
+      cursors), engine rejoin from anchor (sparse sync, promotion, fast/full
+      verify counts, converging commit from the rejoined client).
 
 - SEG 6  Client local prune                                                    [1d]
       The same prefix cut client side (storage-constrained devices) while the

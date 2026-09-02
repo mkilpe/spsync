@@ -4,6 +4,7 @@
 #include <securepath/database/connection.hpp>
 
 #include <deque>
+#include <limits>
 #include <memory>
 #include <vector>
 
@@ -68,6 +69,21 @@ public:
 	/// tags of the in sync records with sequence in [first, last], in sequence order
 	std::deque<record_tag> tags_in_range(sequence_number first, sequence_number last) const;
 
+	/**
+	 * The records in the given state with sequence in [first, last], in sequence order,
+	 * at most max entries. Sequences without a record are skipped (a history cut leaves
+	 * the retained records sparse below the anchor).
+	 */
+	std::vector<record_handle> find_range(sequence_number first, sequence_number last,
+		record_state state = record_state::in_sync, std::size_t max = std::numeric_limits<std::size_t>::max()) const;
+
+	/**
+	 * Tags of the records below the given sequence that current objects still depend on:
+	 * for every object id the newest in sync record and its previous-record chain
+	 * (segments plan SEG 5/S6). This is the retained set of a history cut.
+	 */
+	std::vector<record_tag> object_chain_tags_below(sequence_number below) const;
+
 
 	// -- truncation --
 
@@ -81,6 +97,17 @@ public:
 	 * Returns the removed blocks in ascending sequence order (demoted blocks excluded).
 	 */
 	std::vector<chain_block> truncate_from(sequence_number first_removed, bool demote_acked = false);
+
+	/**
+	 * The mirror of truncate_from for a history cut (segments plan SEG 5): remove every
+	 * in_sync / acked / pending_sync record with sequence < first_kept, except the
+	 * records with a retained tag, together with the object records of the removed ones,
+	 * in one transaction. pending_commit records are never touched. Cached handles of
+	 * removed records are set to record_state::invalid.
+	 *
+	 * Returns the removed blocks in ascending sequence order.
+	 */
+	std::vector<chain_block> truncate_prefix(sequence_number first_kept, std::vector<record_tag> const& retained);
 
 
 	// -- pending commit --

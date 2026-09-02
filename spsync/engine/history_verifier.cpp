@@ -77,9 +77,61 @@ error verify_range(record_storage const& records, encryption_key_storage const& 
 	return err;
 }
 
-util::result<history_verify_report> full_verify(record_storage const& records, encryption_key_storage const& keys) {
+/// verify the sparse retained records below the anchor individually: content and stored
+/// hash, no chain links (their position is advisory after a history cut, SEG 5)
+error verify_detached(record_storage const& records, encryption_key_storage const& keys
+	, sequence_number first, sequence_number last, history_verify_report& report) {
+	error err;
+	for(auto const& h : records.find_range(first, last)) {
+		if(!err) {
+			auto block = committed_block(h);
+			err = check_stored_hash(h, block);
+			if(!err) {
+				err = verify_record(keys, block, report);
+			}
+		}
+	}
+	return err;
+}
+
+/**
+ * The verified chain start for a cut storage: the retained records below the anchor are
+ * verified detached and the anchor block itself fully; returns the anchor handle.
+ */
+util::result<record_handle> verify_anchor(record_storage const& records, encryption_key_storage const& keys
+	, octet_vector const& anchor, history_verify_report& report) {
+	auto h = records.find(anchor);
+	if(!h) {
+		return make_error(sync::errc::invalid_record_chain_state, "trusted anchor is not in the storage");
+	}
+	auto err = verify_detached(records, keys, sequence_number{1}, h->block_id().sequence - 1, report);
+	if(!err) {
+		auto block = committed_block(h);
+		err = check_stored_hash(h, block);
+		if(!err) {
+			err = verify_record(keys, block, report);
+		}
+	}
+	if(err) {
+		return err;
+	}
+	return h;
+}
+
+util::result<history_verify_report> full_verify(record_storage const& records, encryption_key_storage const& keys
+	, octet_vector const& anchor) {
 	history_verify_report report;
-	auto err = verify_range(records, keys, sequence_number{1}, records.last_block().sequence, {}, report);
+	error err;
+	if(anchor.empty()) {
+		err = verify_range(records, keys, sequence_number{1}, records.last_block().sequence, {}, report);
+	} else {
+		auto a = verify_anchor(records, keys, anchor, report);
+		if(a.is_error()) {
+			return a.get_error();
+		}
+		err = verify_range(records, keys, a.value()->block_id().sequence + 1
+			, records.last_block().sequence, a.value()->block_id().hash, report);
+	}
 	if(err) {
 		return err;
 	}
@@ -138,16 +190,18 @@ error verify_tail(record_storage const& records, encryption_key_storage const& k
 /**
  * Walk the backbone from the newest segment: authenticate every segment below the
  * boundary (the ones at or past it were verified with the tail) and check each
- * coverage list against the stored records.
+ * coverage list against the stored records. The walk ends at the trusted anchor,
+ * whose coverage refers to cut history (SEG 5).
  */
 error verify_backbone(record_storage const& records, encryption_key_storage const& keys
-	, record_handle handle, sequence_number boundary, history_verify_report& report) {
+	, record_handle handle, sequence_number boundary, octet_vector const& anchor, history_verify_report& report) {
 	error err;
 	std::size_t walked{};
 	sequence_number expected_end;
 	while(!err && handle) {
 		auto block = committed_block(handle);
 		auto const data = block.deserialise_to<segment_record>().data();
+		bool const is_anchor = !anchor.empty() && handle->block_id().hash == anchor;
 		if(handle->block_id().sequence < boundary) {
 			err = check_stored_hash(handle, block);
 			if(!err) {
@@ -155,12 +209,14 @@ error verify_backbone(record_storage const& records, encryption_key_storage cons
 				++walked;
 			}
 		}
-		if(!err) {
+		if(!err && is_anchor) {
+			handle = {};
+		} else if(!err) {
 			err = check_segment_coverage(records, data, expected_end, report);
-		}
-		if(!err) {
-			expected_end = data.segment_start();
-			err = next_backbone_segment(records, data, handle);
+			if(!err) {
+				expected_end = data.segment_start();
+				err = next_backbone_segment(records, data, handle);
+			}
 		}
 	}
 	if(!err) {
@@ -170,17 +226,42 @@ error verify_backbone(record_storage const& records, encryption_key_storage cons
 	return err;
 }
 
-util::result<history_verify_report> fast_verify(record_storage const& records, encryption_key_storage const& keys) {
+util::result<history_verify_report> fast_verify(record_storage const& records, encryption_key_storage const& keys
+	, octet_vector const& anchor) {
 	auto newest = records.find_last_of_type(segment_record_tag);
 	if(!newest) {
 		// nothing to anchor on
-		return full_verify(records, keys);
+		return full_verify(records, keys, anchor);
 	}
 	history_verify_report report;
+	if(!anchor.empty() && newest->block_id().hash == anchor) {
+		// no segment since the cut: the anchor is the whole backbone
+		auto a = verify_anchor(records, keys, anchor, report);
+		if(a.is_error()) {
+			return a.get_error();
+		}
+		auto err = verify_range(records, keys, newest->block_id().sequence + 1
+			, records.last_block().sequence, newest->block_id().hash, report);
+		if(err) {
+			return err;
+		}
+		return report;
+	}
+	if(!anchor.empty()) {
+		auto a = records.find(anchor);
+		if(!a) {
+			return make_error(sync::errc::invalid_record_chain_state, "trusted anchor is not in the storage");
+		}
+		// the retained records below the anchor are outside every coverage list
+		auto err = verify_detached(records, keys, sequence_number{1}, a->block_id().sequence - 1, report);
+		if(err) {
+			return err;
+		}
+	}
 	auto const boundary = newest->record().deserialise_to<segment_record>().data().segment_end();
 	auto err = verify_tail(records, keys, boundary, report);
 	if(!err) {
-		err = verify_backbone(records, keys, newest, boundary, report);
+		err = verify_backbone(records, keys, newest, boundary, anchor, report);
 	}
 	if(err) {
 		return err;
@@ -191,12 +272,12 @@ util::result<history_verify_report> fast_verify(record_storage const& records, e
 }
 
 util::result<history_verify_report> verify_history(record_storage const& records
-	, encryption_key_storage const& keys, history_verification mode) {
+	, encryption_key_storage const& keys, history_verification mode, octet_vector const& trusted_anchor) {
 	try {
 		if(mode == history_verification::full) {
-			return full_verify(records, keys);
+			return full_verify(records, keys, trusted_anchor);
 		}
-		return fast_verify(records, keys);
+		return fast_verify(records, keys, trusted_anchor);
 	} catch(error const& err) {
 		return err;
 	} catch(std::exception const& exp) {

@@ -501,4 +501,74 @@ TEST_CASE("engine sync segment conflict rebase", "[unit]") {
 	CHECK(seg.data().tags()[1] == winner->tag());
 }
 
+// (20) rejoin from the anchor after a server-side history cut (segments plan SEG 5): the
+// new client gets the anchor, the tail and the retained object chains, nothing else
+TEST_CASE("engine sync rejoin from anchor after cut", "[unit]") {
+	test::test_sync_context context(chain_sync_config{sync_mode::require_all_seen});
+	context.add_client();
+	context.create_initial_record();
+	while(context.handle_events()) {}
+
+	auto oid = create_object_id();
+	context.client(0).engine.sync_object_change(oid, metadata{});                 // 2: add A
+	while(context.handle_events()) {}
+	context.client(0).engine.sync_object_change(create_object_id(), metadata{});  // 3: add B
+	while(context.handle_events()) {}
+	context.client(0).engine.sync_object_change(oid, metadata{});                 // 4: change A
+	while(context.handle_events()) {}
+	auto seg = context.client(0).engine.sync_segment_end(metadata{});             // 5: covers [1,5)
+	while(context.handle_events()) {}
+	context.client(0).engine.sync_object_change(create_object_id(), metadata{});  // 6
+	while(context.handle_events()) {}
+	REQUIRE(context.compare_record_storages(sequence_number{6}));
+
+	// the server cuts before the segment: the root user change goes, the object chains stay
+	auto removed = context.server.sync.log().cut_before(seg->tag());
+	REQUIRE(removed.size() == 1);
+	CHECK(removed[0].sequence() == sequence_number{1});
+
+	// a new client joins with the anchor hash and the keys from the invite (the root
+	// record that used to carry the enveloped keys is gone)
+	context.add_client(false, 1);
+	auto& fresh = context.client(1);
+	auto cfg = fresh.engine_config;
+	cfg.trusted_anchor = seg->block_id().hash;
+	fresh.engine.set_config(cfg);
+	fresh.enc_keys.insert(encryption_key{sequence_number{1}, to_octet_vector("12345678901234567890123456789012")});
+	context.connect_client(1);
+	while(context.handle_events()) {}
+
+	// the sparse history synced: retained records promoted, anchor as the chain start
+	auto& recs = fresh.io.records();
+	CHECK(recs.last_block().sequence == sequence_number{6});
+	CHECK(!recs.find(sequence_number{1}));
+	CHECK(recs.find(sequence_number{2}));
+	CHECK(recs.find(sequence_number{4}));
+	REQUIRE(recs.find(sequence_number{5}));
+	CHECK(recs.find(sequence_number{5})->tag() == seg->tag());
+	CHECK(recs.find(sequence_number{6}));
+	REQUIRE(recs.find_last(oid));
+	CHECK(recs.find_last(oid)->tag() == recs.find(sequence_number{4})->tag());
+
+	// verification anchors at the segment: retained records detached, tail chained
+	auto fast = fresh.engine.verify_history();
+	REQUIRE(fast);
+	CHECK(fast.value().verified_segments == 1);
+	CHECK(fast.value().verified_records == 4);
+	CHECK(fast.value().covered_records == 0);
+	cfg.verification = history_verification::full;
+	fresh.engine.set_config(cfg);
+	auto full = fresh.engine.verify_history();
+	REQUIRE(full);
+	CHECK(full.value().verified_segments == 1);
+	CHECK(full.value().verified_records == 4);
+
+	// the rejoined client changes a retained object and everyone converges
+	fresh.engine.sync_object_change(oid, metadata{});                             // 7
+	while(context.handle_events()) {}
+	CHECK(context.server.sync.current_sequence_number() == sequence_number{7});
+	CHECK(recs.find(sequence_number{7}));
+	CHECK(context.client(0).io.records().find(sequence_number{7}));
+}
+
 }

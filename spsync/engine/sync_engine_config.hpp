@@ -2,6 +2,8 @@
 
 #include <spsync/core/sync_mode.hpp>
 
+#include <securepath/util/octet_vector.hpp>
+
 #include <string>
 
 namespace securepath::sync {
@@ -44,6 +46,15 @@ struct sync_engine_config {
 
 	/// how verify_history checks the stored chain (segments plan SEG 4)
 	history_verification verification{history_verification::fast};
+
+	/**
+	 * Block hash of the trusted chain anchor (segments plan SEG 5): the segment record
+	 * accepted as the chain start when the history before it was cut on the server. The
+	 * hash comes with the invite. Retained records below the anchor are accepted content
+	 * authenticated with an advisory position - the cut kept only the anchor as
+	 * positional proof. Empty for storages with full history.
+	 */
+	octet_vector trusted_anchor;
 
 	/// the replication mode the storage is expected to have (plan 2.4: replication
 	/// requires sign_records, the engine refuses an invalid combination)

@@ -10,9 +10,12 @@
 #include <spsync/core/records/user_change_record.hpp>
 #include <spsync/core/records/segment_record.hpp>
 
+#include <format>
 #include <memory>
 #include <mutex>
+#include <string_view>
 #include <unordered_map>
+#include <unordered_set>
 
 namespace securepath::sync {
 namespace {
@@ -322,12 +325,13 @@ struct record_storage::impl {
 		std::uint64_t key{};
 	};
 
-	// collect the server sequenced rows (in_sync/acked/pending_sync) with seq >= first_removed
-	std::vector<truncate_row> collect_truncation_rows(sequence_number first_removed) {
-		auto q = db->prepare(
-			"SELECT key, state, record FROM record WHERE seq >= :seq"
-			" AND (state = :s1 OR state = :s2 OR state = :s3) ORDER BY seq ASC;");
-		q.bind(":seq", static_cast<std::uint64_t>(first_removed.value));
+	// collect the server sequenced rows (in_sync/acked/pending_sync) with seq compared
+	// against the given sequence (seq_compare is a fixed SQL operator, e.g. ">=")
+	std::vector<truncate_row> collect_truncation_rows(std::string_view seq_compare, sequence_number seq) {
+		auto q = db->prepare(std::format(
+			"SELECT key, state, record FROM record WHERE seq {} :seq"
+			" AND (state = :s1 OR state = :s2 OR state = :s3) ORDER BY seq ASC;", seq_compare));
+		q.bind(":seq", static_cast<std::uint64_t>(seq.value));
 		q.bind(":s1", std::to_underlying(record_state::in_sync));
 		q.bind(":s2", std::to_underlying(record_state::acked));
 		q.bind(":s3", std::to_underlying(record_state::pending_sync));
@@ -362,6 +366,73 @@ struct record_storage::impl {
 		auto rec = db->prepare("DELETE FROM record WHERE key = :k;");
 		rec.bind(":k", row.key);
 		rec.execute();
+	}
+
+	struct object_head_row {
+		octet_vector oid;
+		record_tag tag;
+		record_tag prev_tag;
+		std::uint64_t seq{};
+	};
+
+	/// the newest in sync record per object id with its previous-record link
+	std::vector<object_head_row> collect_object_heads() {
+		// sqlite: bare columns beside max() come from the matching row
+		auto q = db->prepare(
+			"SELECT record_objects.oid, record_objects.tag, record_objects.prev_tag, max(record.seq)"
+			" FROM record_objects JOIN record ON record.tag = record_objects.tag"
+			" WHERE record.state = :state GROUP BY record_objects.oid;");
+		q.bind(":state", std::to_underlying(record_state::in_sync));
+
+		std::vector<object_head_row> rows;
+		auto res = q.execute();
+		for(; res; res.next()) {
+			auto oid = res.value<octet_vector>(0);
+			auto tag = res.value<octet_vector>(1);
+			if(!oid || !tag) {
+				LOG_WARN("invalid record objects entry");
+				throw make_error(securepath::errc::invalid_data, "failed to interpret record object columns");
+			}
+			rows.push_back({std::move(*oid), std::move(*tag)
+				, res.value<octet_vector>(2).value_or(octet_vector{})
+				, res.value<std::uint64_t>(3).value_or(0)});
+		}
+		return rows;
+	}
+
+	/// walk one object's previous-record chain from its newest record, collecting the
+	/// tags below the cut; seen keeps shared chain parts from being walked twice
+	void collect_object_chain(object_head_row const& head, sequence_number below
+		, std::unordered_set<record_tag>& seen, std::vector<record_tag>& ret) {
+		record_tag tag = head.tag;
+		record_tag prev = head.prev_tag;
+		std::uint64_t seq = head.seq;
+		bool walking = true;
+		while(walking && !tag.empty() && seen.insert(tag).second) {
+			if(sequence_number{seq} < below) {
+				ret.push_back(tag);
+			}
+			if(prev.empty()) {
+				walking = false;
+			} else {
+				auto q = db->prepare(
+					"SELECT record.seq, record_objects.prev_tag FROM record_objects"
+					" JOIN record ON record.tag = record_objects.tag"
+					" WHERE record_objects.tag = :t AND record_objects.oid = :o AND record.state = :state;");
+				q.bind(":t", prev);
+				q.bind(":o", head.oid);
+				q.bind(":state", std::to_underlying(record_state::in_sync));
+				auto res = q.execute();
+				if(res) {
+					tag = prev;
+					seq = res.value<std::uint64_t>(0).value_or(0);
+					prev = res.value<octet_vector>(1).value_or(octet_vector{});
+				} else {
+					LOG_WARN("object chain dangles [oid={}, missing tag={}]", to_hex(head.oid), to_hex(prev));
+					walking = false;
+				}
+			}
+		}
 	}
 
 	// drop the cache entry of a deleted row; a still live handle is flipped to invalid
@@ -557,7 +628,7 @@ std::vector<chain_block> record_storage::truncate_from(sequence_number first_rem
 	database::transaction tact(*impl_->db);
 
 	std::vector<chain_block> removed;
-	for(auto const& row : impl_->collect_truncation_rows(first_removed)) {
+	for(auto const& row : impl_->collect_truncation_rows(">=", first_removed)) {
 		if(demote_acked && row.state == record_state::acked) {
 			if(auto handle = impl_->load_by_key(row.key)) {
 				handle->set_state(record_state::pending_commit);
@@ -599,6 +670,57 @@ std::deque<record_tag> record_storage::tags_in_range(sequence_number first, sequ
 		ret.push_back(std::move(*tag));
 	}
 	return ret;
+}
+
+std::vector<record_handle> record_storage::find_range(sequence_number first, sequence_number last,
+	record_state state, std::size_t max) const {
+	auto q = impl_->db->prepare(
+		"SELECT key, tag, seq, hash, parent_hash, state FROM record"
+		" WHERE state = :state AND seq >= :first AND seq <= :last ORDER BY seq ASC LIMIT :max;");
+	q.bind(":state", std::to_underlying(state));
+	q.bind(":first", static_cast<std::uint64_t>(first.value));
+	q.bind(":last", static_cast<std::uint64_t>(last.value));
+	// LIMIT takes the plain value: the unsigned bind offsets values for ordered columns
+	q.bind(":max", static_cast<std::int64_t>(std::min<std::size_t>(max
+		, std::numeric_limits<std::int64_t>::max())));
+
+	std::vector<record_handle> ret;
+	auto res = q.execute();
+	for(; res; res.next()) {
+		ret.push_back(impl_->load_record(res));
+	}
+	return ret;
+}
+
+std::vector<record_tag> record_storage::object_chain_tags_below(sequence_number below) const {
+	std::vector<record_tag> ret;
+	std::unordered_set<record_tag> seen;
+	for(auto const& head : impl_->collect_object_heads()) {
+		impl_->collect_object_chain(head, below, seen, ret);
+	}
+	return ret;
+}
+
+std::vector<chain_block> record_storage::truncate_prefix(sequence_number first_kept,
+	std::vector<record_tag> const& retained) {
+	if(!first_kept.is_valid()) {
+		throw make_error(sync::errc::constraint_violation, "truncate_prefix requires a valid sequence number");
+	}
+	LOG_TRACE("truncating record prefix [first_kept={}, retained={}]", first_kept, retained.size());
+
+	std::unordered_set<record_tag> const keep{retained.begin(), retained.end()};
+
+	database::transaction tact(*impl_->db);
+
+	std::vector<chain_block> removed;
+	for(auto const& row : impl_->collect_truncation_rows("<", first_kept)) {
+		if(!keep.contains(row.block.tag())) {
+			impl_->remove_row(row);
+			impl_->invalidate_handle(row.key);
+			removed.push_back(row.block);
+		}
+	}
+	return removed;
 }
 
 record_handle record_storage::find_internal(record_internal_id iid) const {

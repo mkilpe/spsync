@@ -553,6 +553,68 @@ TEST_CASE("record_storage truncate_from demotes acked", "[unit]") {
 	CHECK(storage.create(again, record_state::in_sync));
 }
 
+TEST_CASE("record_storage truncate_prefix and object chains", "[unit]") {
+	remove_database_test_db();
+	auto db_conn = database::sqlite::create_sqlite_connection(db_name);
+	record_storage storage(db_conn);
+
+	test_block_creator creator;
+	auto b1 = creator.test_user_change();
+	REQUIRE(storage.create(b1, record_state::in_sync));
+	auto b2 = creator.test_data_change();
+	REQUIRE(storage.create(b2, record_state::in_sync));
+	auto b3 = creator.test_followup_data_change(b2);
+	REQUIRE(storage.create(b3, record_state::in_sync));
+	auto b4 = creator.test_data_change();
+	REQUIRE(storage.create(b4, record_state::in_sync));
+	auto b5 = creator.test_user_change();
+	REQUIRE(storage.create(b5, record_state::in_sync));
+
+	auto contains = [](auto const& tags, record_tag const& t) {
+		return std::ranges::find(tags, t) != tags.end();
+	};
+
+	{ // the object chains below the cut: first object {b3, b2}, second {b4}
+		auto tags = storage.object_chain_tags_below(sequence_number{5});
+		CHECK(tags.size() == 3);
+		CHECK(contains(tags, b2.tag()));
+		CHECK(contains(tags, b3.tag()));
+		CHECK(contains(tags, b4.tag()));
+		CHECK(!contains(tags, b1.tag()));
+	}
+	{ // a record at or past the cut is not part of the retained set
+		auto tags = storage.object_chain_tags_below(sequence_number{4});
+		CHECK(tags.size() == 2);
+		CHECK(!contains(tags, b4.tag()));
+	}
+	{ // find_range respects the range and the cap
+		CHECK(storage.find_range(sequence_number{1}, sequence_number{5}).size() == 5);
+		CHECK(storage.find_range(sequence_number{1}, sequence_number{5}, record_state::in_sync, 2).size() == 2);
+		CHECK(storage.find_range(sequence_number{6}, sequence_number{9}).empty());
+	}
+
+	auto held = storage.find(sequence_number{1});
+	REQUIRE(held);
+	auto removed = storage.truncate_prefix(sequence_number{5}, {b2.tag(), b3.tag(), b4.tag()});
+	REQUIRE(removed.size() == 1);
+	CHECK(removed[0].tag() == b1.tag());
+
+	// the retained records and everything at or past the cut stay, the rest is gone
+	CHECK(held->state() == record_state::invalid);
+	CHECK(!storage.find(sequence_number{1}));
+	CHECK(storage.find(sequence_number{2}));
+	CHECK(storage.find(sequence_number{5}));
+	CHECK(storage.last_block().sequence == sequence_number{5});
+	CHECK(storage.find_range(sequence_number{1}, sequence_number{5}).size() == 4);
+
+	// object lookups still work on the retained chain
+	object_id const oid = b2.deserialise_to<data_change_record>().begin()->data.id;
+	REQUIRE(storage.find_last(oid));
+	CHECK(storage.find_last(oid)->tag() == b3.tag());
+
+	CHECK_THROWS(storage.truncate_prefix(sequence_number{}, {}));
+}
+
 TEST_CASE("record_storage segment queries", "[unit]") {
 	remove_database_test_db();
 	auto db_conn = database::sqlite::create_sqlite_connection(db_name);

@@ -341,6 +341,53 @@ TEST_CASE("chain_sync stale segment", "[unit]") {
 	}
 }
 
+// (6e) history cut at a segment (segments plan SEG 5): object chains are retained, the
+// anchor becomes the fetch start and the rules/cursors survive a reopen
+TEST_CASE("chain_sync history cut at segment", "[unit]") {
+	remove_database_test_db();
+	test_block_creator creator;
+	{
+		chain_sync sync(database::sqlite::create_sqlite_connection(db_name), chain_sync_config{sync_mode::require_all_seen});
+		CHECK(sync.commit_block(creator.test_user_change()));
+		auto add = creator.test_data_change();
+		CHECK(sync.commit_block(add));
+		CHECK(sync.commit_block(creator.test_followup_data_change(add)));
+		auto add2 = creator.test_data_change();
+		CHECK(sync.commit_block(add2));
+		auto seg = creator.test_segment(plain_segment_data{sequence_number{1}, sequence_number{5}, creator.created_tags});
+		CHECK(sync.commit_block(seg));
+
+		// only a committed segment can anchor a cut
+		CHECK_THROWS(sync.log().cut_before(add.tag()));
+		CHECK_THROWS(sync.log().cut_before(securepath::test::random_octet_vector(16)));
+
+		// the cut drops the root user change; both object chains are retained
+		auto removed = sync.log().cut_before(seg.tag());
+		REQUIRE(removed.size() == 1);
+		CHECK(removed[0].sequence() == sequence_number{1});
+		CHECK(sync.current_sequence_number() == sequence_number{5});
+
+		// fetching from the start skips the cut sequence and serves the rest
+		auto recs = sync.get_records(sequence_number{1}, sequence_number{5});
+		REQUIRE(recs.size() == 4);
+		CHECK(recs[0].sequence() == sequence_number{2});
+		CHECK(recs.back().sequence() == sequence_number{5});
+
+		// a follow-up to a retained object still validates against its chain
+		CHECK(sync.commit_block(creator.test_followup_data_change(add2)));
+		// and the next segment continues the backbone over the cut storage
+		CHECK(sync.commit_block(creator.test_segment(
+			plain_segment_data{sequence_number{5}, sequence_number{7}
+				, {seg.tag(), creator.created_tags[5]}, seg.tag()})));
+	}
+	{
+		// cursors and rules survive a reopen of the cut storage
+		chain_sync sync(database::sqlite::create_sqlite_connection(db_name), chain_sync_config{sync_mode::require_all_seen});
+		CHECK(sync.current_sequence_number() == sequence_number{7});
+		CHECK(sync.commit_block(creator.test_data_change()));
+	}
+}
+
 // (7) validate/apply split behaves like commit_block
 TEST_CASE("chain_sync validate and apply", "[unit]") {
 	remove_database_test_db();

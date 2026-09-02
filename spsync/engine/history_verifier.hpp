@@ -4,6 +4,8 @@
 
 #include <spsync/util/result.hpp>
 
+#include <securepath/util/octet_vector.hpp>
+
 #include <cstddef>
 
 namespace securepath::sync {
@@ -31,8 +33,13 @@ struct history_verify_report {
  * lists without per-record crypto - their content is still authenticated when read.
  * Without any segment fast equals full. The crypto cost of fast is O(records past the
  * newest segment + number of segments) instead of O(chain length).
+ *
+ * trusted_anchor (segments plan SEG 5): the block hash of the anchor segment for a
+ * storage whose history was cut. The chain is verified from the anchor (which must be
+ * present and match the hash); the sparse retained records below it are verified
+ * individually with an advisory position, and the backbone walk stops at the anchor.
  */
 util::result<history_verify_report> verify_history(record_storage const&, encryption_key_storage const&,
-	history_verification);
+	history_verification, octet_vector const& trusted_anchor = {});
 
 }

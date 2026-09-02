@@ -134,11 +134,51 @@ public:
 		return state;
 	}
 
+	/**
+	 * Chain acceptance around a trusted anchor (segments plan SEG 5): the anchor block
+	 * itself starts the chain after a history cut, and the retained records below it are
+	 * accepted content authenticated with an advisory position - the cut kept only the
+	 * anchor as positional proof.
+	 */
+	std::optional<record_state> check_anchor_chain_block(chain_block const& record) {
+		std::optional<record_state> state;
+		if(!config.trusted_anchor.empty() && !records.find(record.sequence())) {
+			if(record.hash() == config.trusted_anchor) {
+				LINFO("accepting the trusted anchor as the chain start [seq = {}]", record.sequence());
+				state = record_state::in_sync;
+			} else {
+				auto anchor = records.find(config.trusted_anchor);
+				if(anchor && record.sequence() < anchor->block_id().sequence) {
+					state = record_state::in_sync;
+				}
+			}
+		}
+		return state;
+	}
+
+	/**
+	 * Retained records that arrived before the anchor wait in pending_sync; once the
+	 * anchor block is in sync their content stands on its own (SEG 5)
+	 */
+	void promote_pre_anchor_records(chain_block_id const& id) {
+		if(!config.trusted_anchor.empty() && id.hash == config.trusted_anchor) {
+			for(auto const& h : records.find_range(sequence_number{1}, id.sequence - 1, record_state::pending_sync)) {
+				LTRACE("promoting retained pre-anchor record [id = {}]", h->block_id());
+				h->set_state(record_state::in_sync);
+				notify_on_record(h);
+			}
+		}
+	}
+
 	record_state check_chain_block_strict(chain_block const& record, chain_block_id const& id) {
 		// needs to fulfil:
 		//  parent.seq + 1 == record.sequence()
 		//  parent.hash == record.parent_hash
 		//  last_record.seq < record.sequence();
+
+		if(auto anchor_state = check_anchor_chain_block(record)) {
+			return *anchor_state;
+		}
 
 		record_state state = record_state::invalid;
 		auto last_block = records.last_block();
@@ -218,6 +258,7 @@ public:
 			check_fork(record, rec);
 			update_server_seq(record.sequence());
 			if(handle_block_chain(record, id)) {
+				promote_pre_anchor_records(id);
 				check_pending_records(id);
 				if(records.last_block().sequence == server_seq) {
 					try_commit_pending();
@@ -773,7 +814,8 @@ record_handle sync_engine::sync_segment_end(metadata mdata) {
 util::result<history_verify_report> sync_engine::verify_history() const {
 	std::unique_lock lock{impl_->mutex};
 	LTRACE("verify history");
-	return sync::verify_history(impl_->records, impl_->crypto.enc_keys(), impl_->config.verification);
+	return sync::verify_history(impl_->records, impl_->crypto.enc_keys(), impl_->config.verification
+		, impl_->config.trusted_anchor);
 }
 
 }

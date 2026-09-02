@@ -49,6 +49,18 @@ public:
 	/// returns the removed blocks (see record_storage::truncate_from)
 	std::vector<chain_block> truncate_from(sequence_number first_removed);
 
+	/**
+	 * Cut the history before the given committed segment record (segments plan SEG 5/S6):
+	 * removes every record below the segment except those still needed to rebuild current
+	 * objects (the newest record per object id and its previous-record chain). The
+	 * segment becomes the chain anchor: new clients fetch from it, verification anchors
+	 * at its hash and invitees receive the hash with the invite. The head is unaffected.
+	 * Throws constraint_violation when the tag is not a committed segment record.
+	 *
+	 * Returns the removed blocks in ascending sequence order.
+	 */
+	std::vector<chain_block> cut_before(record_tag const& segment_tag);
+
 	/// find record that has the given tag
 	record_handle find_by_tag(octet_vector const&) const;
 
