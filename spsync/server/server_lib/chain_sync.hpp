@@ -56,6 +56,9 @@ public:
 	/// get the records [start, end], returns only maximum of config.max_returned_records at once
 	std::deque<chain_block> get_records(sequence_number start, sequence_number end) const;
 
+	/// get the envelopes [start, end] for the s2s pull (plan 4.1), capped like get_records
+	std::deque<block_envelope> get_envelopes(sequence_number start, sequence_number end) const;
+
 	/// check whether the block could be committed in the current state, without changing anything
 	[[nodiscard]] error validate(chain_block const&) const;
 

@@ -32,6 +32,10 @@ std::deque<chain_block> chain_sync::get_records(sequence_number start, sequence_
 	return ret;
 }
 
+std::deque<block_envelope> chain_sync::get_envelopes(sequence_number start, sequence_number end) const {
+	return log_.get(start, end, config_.max_returned_records);
+}
+
 std::vector<chain_block> chain_sync::truncate_from(sequence_number first_removed) {
 	auto removed = log_.truncate_from(first_removed);
 	last_data_add_remove_ = log_.records().last_data_add_sequence();

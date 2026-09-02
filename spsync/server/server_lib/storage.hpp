@@ -42,6 +42,9 @@ public:
 	/// forwarded to chain_sync
 	std::deque<chain_block> get_records(sequence_number start, sequence_number end) const;
 
+	/// forwarded to chain_sync: envelopes for the s2s pull (plan 4.1)
+	std::deque<block_envelope> get_envelopes(sequence_number start, sequence_number end) const;
+
 	struct commit_outcome {
 		util::result<chain_block> block;
 		/// the signed sequence assignment; set when the server has a signing key

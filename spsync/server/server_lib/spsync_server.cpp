@@ -17,9 +17,8 @@ spsync_server::spsync_server(spsync_server_params params)
 , storage_context_store_(construct_context())
 , storage_server_(*storage_context_store_, params_.storage_params)
 {
-	storage_context_store_->add_handshake(network::handshake_tag::public_key, [&](network::handshake_data const& hdata){
-			return construct_server_pk_handshake(*storage_context_store_, hdata);
-		});
+	// role dispatched: the same context accepts clients/peers and dials out to peers (plan 4.1)
+	network::enable_pk_handshake(*storage_context_store_);
 }
 
 spsync_server::spsync_server(network::context& context, spsync_server_params params)

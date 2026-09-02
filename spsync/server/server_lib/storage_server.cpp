@@ -3,7 +3,10 @@
 
 #include <flat_map>
 #include "connection.hpp"
+#include "peer_connection.hpp"
 #include "storage.hpp"
+
+#include <asio/steady_timer.hpp>
 
 #include <spsync/protocol/error.hpp>
 #include <spsync/protocol/server_protocol.hpp>
@@ -16,6 +19,10 @@ namespace securepath::sync {
 
 asio::ip::tcp::endpoint storage_server_params::create_endpoint() const {
 	return storage_server_endpoint.value_or(asio::ip::tcp::endpoint(asio::ip::address_v4::any(), storage_server_port));
+}
+
+asio::ip::tcp::endpoint storage_server_params::create_s2s_endpoint() const {
+	return s2s_endpoint.value_or(asio::ip::tcp::endpoint(asio::ip::address_v4::any(), s2s_port));
 }
 
 
@@ -112,6 +119,58 @@ private:
 	bool connection_good_{};
 };
 
+/// listener for incoming peer connections (plan 4.1); a separate acceptor so the client
+/// and the s2s packet families stay apart
+class s2s_listener : public network::encrypted_server {
+public:
+	s2s_listener(network::context& context, storage_server_context& sctx, network::handshake_data hdata)
+	: encrypted_server(context)
+	, sctx_(sctx)
+	, hdata_(std::move(hdata))
+	{}
+
+	std::shared_ptr<network::encrypted_connection> create_connection() override {
+		auto conn = std::make_shared<peer_connection>(context(), sctx_, hdata_, shared_from_this());
+		{
+			std::unique_lock lock{mutex_};
+			std::erase_if(incoming_, [](auto const& w) { return w.expired(); });
+			incoming_.push_back(conn);
+		}
+		return conn;
+	}
+
+	/// currently alive accepted peer connections
+	std::vector<std::shared_ptr<peer_connection>> connections() const {
+		std::unique_lock lock{mutex_};
+		std::vector<std::shared_ptr<peer_connection>> ret;
+		for(auto const& w : incoming_) {
+			if(auto p = w.lock()) {
+				ret.push_back(std::move(p));
+			}
+		}
+		return ret;
+	}
+
+private:
+	storage_server_context& sctx_;
+	network::handshake_data hdata_;
+	mutable std::mutex mutex_;
+	std::vector<std::weak_ptr<peer_connection>> incoming_;
+};
+
+/// one configured peer: the outgoing connection and its reconnect state (plan 4.1)
+struct peer_link {
+	explicit peer_link(asio::io_context& io, peer_config p)
+	: peer(std::move(p))
+	, timer(io)
+	{}
+
+	peer_config peer;
+	std::shared_ptr<peer_connection> conn;
+	asio::steady_timer timer;
+	std::chrono::seconds backoff{1};
+};
+
 class storage_server::impl
 	: public network::encrypted_server
 	, public storage_server_context
@@ -122,6 +181,7 @@ public:
 	, params_(std::move(params))
 	, context_(context)
 	, handshake_data_(network::handshake_tag::public_key)
+	, default_storage_config_(params_.storage_root)
 	{
 		LOG_TRACE("constructing storage_server::impl {}", static_cast<void const*>(this));
 	}
@@ -173,6 +233,112 @@ public:
 		}
 	}
 
+	server_identity const& identity() const override {
+		// only written during start(), stable afterwards
+		return identity_;
+	}
+
+	std::vector<protocol::storage_id> replicated_storages() const override {
+		std::unique_lock lock{mutex_};
+		std::vector<protocol::storage_id> ret;
+		for(auto const& [sid, handle] : storages_) {
+			if(handle->modes().replication != replication_mode::none) {
+				ret.push_back(sid);
+			}
+		}
+		return ret;
+	}
+
+	/// start the s2s side when peers are configured (plan 4.1)
+	void start_s2s() {
+		if(identity_.peers.empty()) {
+			return;
+		}
+		s2s_ = std::make_shared<s2s_listener>(context_, *this, handshake_data_);
+		s2s_->start(params_.create_s2s_endpoint(), params_.timeout);
+		LOG_INFO("s2s listening on port {}", s2s_->local_endpoint().port());
+		for(auto const& peer : identity_.peers) {
+			links_.push_back(std::make_unique<peer_link>(context_.io_context(), peer));
+			connect_link(*links_.back());
+		}
+	}
+
+	void connect_link(peer_link& link) {
+		auto conn = std::make_shared<peer_connection>(context_, *this, handshake_data_);
+		conn->set_disconnect_handler([this, &link](securepath::error const&) {
+			schedule_reconnect(link);
+		});
+		{
+			std::unique_lock lock{mutex_};
+			if(closing_) {
+				return;
+			}
+			link.conn = conn;
+		}
+		conn->connect_peer(link.peer, params_.timeout);
+	}
+
+	/// exponential backoff capped at one minute; the links live as long as the impl
+	void schedule_reconnect(peer_link& link) {
+		std::unique_lock lock{mutex_};
+		if(closing_) {
+			return;
+		}
+		LOG_TRACE("reconnecting to peer {} in {}s", link.peer, link.backoff.count());
+		link.timer.expires_after(link.backoff);
+		link.backoff = std::min(link.backoff * 2, std::chrono::seconds{60});
+		link.timer.async_wait([this, &link](std::error_code const& ec) {
+			if(!ec) {
+				connect_link(link);
+			}
+		});
+	}
+
+	/**
+	 * The connections are closed OUTSIDE the mutex: closing waits for the connection
+	 * strand, which may be running the disconnect handler that takes the mutex (it sees
+	 * closing_ and backs off). The links stay alive until every close returned.
+	 */
+	void close_s2s() {
+		std::vector<std::unique_ptr<peer_link>> links;
+		std::shared_ptr<s2s_listener> listener;
+		{
+			std::unique_lock lock{mutex_};
+			closing_ = true;
+			links.swap(links_);
+			listener.swap(s2s_);
+		}
+		for(auto const& link : links) {
+			link->timer.cancel();
+			if(link->conn) {
+				link->conn->close();
+			}
+		}
+		if(listener) {
+			listener->close();
+		}
+	}
+
+	/// every live peer connection, outgoing and accepted
+	std::vector<std::shared_ptr<peer_connection>> peer_connections() const {
+		std::vector<std::shared_ptr<peer_connection>> ret;
+		std::shared_ptr<s2s_listener> listener;
+		{
+			std::unique_lock lock{mutex_};
+			for(auto const& link : links_) {
+				if(link->conn) {
+					ret.push_back(link->conn);
+				}
+			}
+			listener = s2s_;
+		}
+		if(listener) {
+			auto incoming = listener->connections();
+			ret.insert(ret.end(), incoming.begin(), incoming.end());
+		}
+		return ret;
+	}
+
 public:
 	mutable std::mutex mutex_;
 	storage_server_params params_;
@@ -181,6 +347,11 @@ public:
 	std::flat_map<protocol::storage_id, std::shared_ptr<storage>> storages_;
 	storage_config default_storage_config_;
 	server_identity identity_;
+
+	// -- the s2s side (plan 4.1) --
+	std::shared_ptr<s2s_listener> s2s_;
+	std::vector<std::unique_ptr<peer_link>> links_;
+	bool closing_{};
 };
 
 
@@ -198,6 +369,12 @@ storage_server::~storage_server()
 void storage_server::start() {
 	impl_->resolve_identity();
 	impl_->start(impl_->params_.create_endpoint(), impl_->params_.timeout);
+	impl_->start_s2s();
+}
+
+void storage_server::close() {
+	impl_->close_s2s();
+	impl_->close();
 }
 
 server_identity storage_server::identity() const {
@@ -205,8 +382,29 @@ server_identity storage_server::identity() const {
 	return impl_->identity_;
 }
 
-void storage_server::close() {
-	impl_->close();
+std::shared_ptr<storage> storage_server::open_storage(protocol::storage_id const& sid,
+	std::optional<storage_modes> create_modes) {
+	return impl_->acquire_sync(sid, create_modes);
+}
+
+std::optional<asio::ip::tcp::endpoint> storage_server::s2s_local_endpoint() const {
+	std::optional<asio::ip::tcp::endpoint> ret;
+	std::unique_lock lock{impl_->mutex_};
+	if(impl_->s2s_) {
+		ret = impl_->s2s_->local_endpoint();
+	}
+	return ret;
+}
+
+std::vector<origin_head> storage_server::heads_of_peer(crypto::public_key_id const& peer,
+	protocol::storage_id const& sid) const {
+	std::vector<origin_head> ret;
+	for(auto const& conn : impl_->peer_connections()) {
+		if(ret.empty() && conn->peer_id() == peer) {
+			ret = conn->heads_of_peer(sid);
+		}
+	}
+	return ret;
 }
 
 }

@@ -1,10 +1,13 @@
 #pragma once
 
+#include "peer_config.hpp"
+
 #include <spsync/core/sync_mode.hpp>
 #include <spsync/protocol/protocol_base.hpp>
 
 #include <memory>
 #include <optional>
+#include <vector>
 
 namespace securepath::sync {
 
@@ -27,6 +30,11 @@ public:
 	/// Release the storage object
 	virtual void release_sync(std::shared_ptr<storage> storage) = 0;
 
+	/// The resolved server identity (plan 3.3); empty when the server has no signing key
+	virtual server_identity const& identity() const = 0;
+
+	/// Ids of the open storages that replicate to peers (replication mode != none)
+	virtual std::vector<protocol::storage_id> replicated_storages() const = 0;
 };
 
 }

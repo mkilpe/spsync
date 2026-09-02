@@ -728,7 +728,7 @@ Phase 3  Server log abstraction  (still single server)
 Phase 4  Server-to-server, weak mode  (M3)
 ------------------------------------------
 
-- 4.1 s2s protocol and transport                                                  [3d]
++ 4.1 s2s protocol and transport -- done 2026-09-02                               [3d]
       Reuse encrypted_server with handshake_tag::public_key (the PQ KEM handshake
       from 0.0c); peers authenticate by server ML-DSA key id from 3.3. New packet
       family s2s_types:
@@ -740,6 +740,25 @@ Phase 4  Server-to-server, weak mode  (M3)
         not_replicating   { storage_id }
       One peer_connection per peer, both directions, reconnect with backoff.
       Test: two in-process storage_servers on loopback exchanging heads.
+      Implemented: protocol/s2s_protocol.hpp (peer_hello/peer_heads/pull_records/
+      response_envelopes{origin_max}/push_records/not_replicating; origin_head
+      moved to core for the wire). Library: handshake_data carries the endpoint
+      role and enable_pk_handshake() registers a role-dispatched pk constructor,
+      so ONE context accepts clients+peers and dials out (spsync_server switched
+      to it). server_lib/peer_connection: transport key checked against the peer
+      config both ways, peer_hello must match the transport key, then each side
+      announces heads of its replicated open storages; pull_records served from
+      chain_log envelopes (own origin only until 4.2), push logged until 4.2
+      apply_foreign, responses consumed by the 4.4 anti-entropy loop.
+      storage_server: separate s2s listener (default port 18201, off without
+      peers), one peer_link per configured peer with exponential backoff
+      reconnect (1s..60s), params gain storage_root/s2s port+endpoint, new
+      open_storage()/s2s_local_endpoint()/heads_of_peer() accessors; context
+      exposes identity() + replicated_storages(). Gotcha fixed: closing must not
+      hold the impl mutex - the connection strand runs the disconnect handler
+      that takes it (deadlock found by the loopback test). chain_sync/storage
+      gain get_envelopes. Test: test_s2s.cpp - two storage_servers on loopback,
+      both directions authenticated, heads exchanged and verified per origin.
 
 - 4.2 Weak-mode replication: push on commit                                       [2d]
       storage::commit_block (weak): validate+apply locally, set acked->in_sync

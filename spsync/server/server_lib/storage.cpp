@@ -107,6 +107,11 @@ std::deque<chain_block> storage::get_records(sequence_number start, sequence_num
 	return sync_->get_records(start, end);
 }
 
+std::deque<block_envelope> storage::get_envelopes(sequence_number start, sequence_number end) const {
+	std::unique_lock l{mutex_};
+	return sync_->get_envelopes(start, end);
+}
+
 std::optional<block_envelope> storage::make_envelope(chain_block const& block) const {
 	std::optional<block_envelope> env;
 	if(private_data_) {
