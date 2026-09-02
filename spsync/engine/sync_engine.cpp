@@ -811,6 +811,30 @@ record_handle sync_engine::sync_segment_end(metadata mdata) {
 	return h;
 }
 
+octet_vector sync_engine::prune_history(record_tag const& segment_tag) {
+	std::unique_lock lock{impl_->mutex};
+	LTRACE("prune history");
+
+	record_handle segment = segment_tag.empty()
+		? impl_->records.find_last_of_type(segment_record_tag)
+		: impl_->records.find_tag(segment_tag);
+	bool const valid = segment && segment->type() == segment_record_tag
+		&& segment->state() == record_state::in_sync;
+	if(!valid) {
+		throw error(errc::constraint_violation, "local prune requires a committed segment as the anchor");
+	}
+
+	auto const anchor = segment->block_id();
+	auto retained = impl_->records.object_chain_tags_below(anchor.sequence);
+	auto removed = impl_->records.truncate_prefix(anchor.sequence, retained);
+	LINFO("pruned local history [anchor=({},{}), removed={}, retained={}]"
+		, anchor.sequence, to_hex(anchor.hash), removed.size(), retained.size());
+
+	// verification anchors here from now on; later sessions get the hash from the config
+	impl_->config.trusted_anchor = anchor.hash;
+	return anchor.hash;
+}
+
 util::result<history_verify_report> sync_engine::verify_history() const {
 	std::unique_lock lock{impl_->mutex};
 	LTRACE("verify history");

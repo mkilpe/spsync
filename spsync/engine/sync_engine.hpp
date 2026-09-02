@@ -48,6 +48,16 @@ public:
 
 	/// verify the stored in sync history (segments plan SEG 4), strategy from the config
 	util::result<history_verify_report> verify_history() const;
+
+	/**
+	 * Prune the local history before the given committed segment record (segments plan
+	 * SEG 6), keeping the records current objects depend on; the server keeps the full
+	 * history. An empty tag prunes at the newest segment. Returns the anchor block hash:
+	 * it becomes the trusted anchor for this session and the caller must persist it into
+	 * sync_engine_config::trusted_anchor for later sessions, so a reload verifies from
+	 * the anchor.
+	 */
+	octet_vector prune_history(record_tag const& segment_tag = {});
 private:
 	class impl;
 	std::unique_ptr<impl> impl_;

@@ -220,10 +220,19 @@ Implementation steps
       cursors), engine rejoin from anchor (sparse sync, promotion, fast/full
       verify counts, converging commit from the rejoined client).
 
-- SEG 6  Client local prune                                                    [1d]
++ SEG 6  Client local prune -- done 2026-09-02                                 [1d]
       The same prefix cut client side (storage-constrained devices) while the
       server keeps full history: keep segment anchors + live-object records,
       reload and verification work from the anchor.
+      Implemented: sync_engine::prune_history(segment_tag = {} for the newest
+      segment) - validates a committed segment, retains the object chains
+      (object_chain_tags_below) and prefix-truncates below it; SEG 5 machinery
+      reused end to end. Returns the anchor block hash: it becomes the trusted
+      anchor for the running session (verification works immediately) and the
+      caller persists it into sync_engine_config::trusted_anchor for later
+      sessions. Test (21): prune with a full-history peer online - local records
+      dropped/retained as specified, server untouched, fast/full verify from the
+      anchor, both clients keep committing and converge.
 
 - SEG 7  Replication interactions                                          [defer]
       Implemented inside the distributed plan, not here: cut only behind all peer

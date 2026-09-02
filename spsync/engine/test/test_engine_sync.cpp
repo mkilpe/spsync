@@ -571,4 +571,63 @@ TEST_CASE("engine sync rejoin from anchor after cut", "[unit]") {
 	CHECK(context.client(0).io.records().find(sequence_number{7}));
 }
 
+// (21) local prune at a segment (segments plan SEG 6): the client drops covered history
+// while the server keeps everything; verification and syncing continue from the anchor
+TEST_CASE("engine sync local prune at segment", "[unit]") {
+	test::test_sync_context context(chain_sync_config{sync_mode::require_all_seen});
+	context.add_client(true, 2);
+	context.create_initial_record();
+	while(context.handle_events()) {}
+
+	// pruning needs a committed segment
+	CHECK_THROWS(context.client(0).engine.prune_history());
+
+	auto oid = create_object_id();
+	context.client(0).engine.sync_object_change(oid, metadata{});                 // 2: add A
+	while(context.handle_events()) {}
+	context.client(0).engine.sync_object_change(oid, metadata{});                 // 3: change A
+	while(context.handle_events()) {}
+	auto seg = context.client(0).engine.sync_segment_end(metadata{});             // 4: covers [1,4)
+	while(context.handle_events()) {}
+	context.client(0).engine.sync_object_change(create_object_id(), metadata{});  // 5
+	while(context.handle_events()) {}
+	REQUIRE(context.compare_record_storages(sequence_number{5}));
+
+	CHECK_THROWS(context.client(0).engine.prune_history(securepath::test::random_octet_vector(16)));
+
+	// client 0 prunes at the newest segment; the server and client 1 keep everything
+	auto anchor = context.client(0).engine.prune_history();
+	CHECK(anchor == seg->block_id().hash);
+
+	auto& recs = context.client(0).io.records();
+	CHECK(!recs.find(sequence_number{1}));
+	CHECK(recs.find(sequence_number{2}));
+	CHECK(recs.find(sequence_number{3}));
+	CHECK(recs.find(sequence_number{4}));
+	CHECK(recs.find(sequence_number{5}));
+	CHECK(context.server.sync.records().find(sequence_number{1}));
+
+	// verification works from the anchor right away...
+	auto fast = context.client(0).engine.verify_history();
+	REQUIRE(fast);
+	CHECK(fast.value().verified_segments == 1);
+	CHECK(fast.value().verified_records == 3);
+	CHECK(fast.value().covered_records == 0);
+	// ...and on a reload where the app supplies the persisted anchor
+	auto cfg = context.client(0).engine_config;
+	cfg.trusted_anchor = anchor;
+	cfg.verification = history_verification::full;
+	context.client(0).engine.set_config(cfg);
+	REQUIRE(context.client(0).engine.verify_history());
+
+	// both sides keep working: the pruned client and the full client converge
+	context.client(0).engine.sync_object_change(oid, metadata{});                 // 6
+	while(context.handle_events()) {}
+	context.client(1).engine.sync_object_change(create_object_id(), metadata{});  // 7
+	while(context.handle_events()) {}
+	CHECK(context.server.sync.current_sequence_number() == sequence_number{7});
+	CHECK(recs.find(sequence_number{7}));
+	CHECK(context.client(1).io.records().find(sequence_number{6}));
+}
+
 }
