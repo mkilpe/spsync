@@ -819,12 +819,30 @@ Phase 4  Server-to-server, weak mode  (M3)
       accepted on the OTHER replica where it sits at a different local sequence,
       tag sets converge.
 
-- 4.4 Anti-entropy                                                                [2d]
++ 4.4 Anti-entropy -- done 2026-09-03                                             [2d]
       Periodic (and on reconnect): exchange heads; for each origin where the peer is
       ahead, pull_records from our known seq; apply_foreign each. For origins where
       we are ahead the peer does the same. Both directions, idempotent via op_id.
       Test: partition A|B (drop the peer connection), commit on both, heal ->
       converge. Kill B, commit on A, restart B -> B catches up.
+      Implemented: assignments are origin indexed - record table gains
+      origin/origin_seq columns written with every stored envelope, so pulls are
+      served for ANY origin (get_envelopes_by_origin; the own log directly).
+      storage::known_origin_seq = own head or the 3.4 heads entry.
+      response_envelopes carries the origin for the continuation loop. Receiving
+      peer_heads triggers pulls for every origin the peer is ahead on (own origin
+      skipped); responses apply_foreign each envelope and keep pulling while the
+      peer holds more AND the batch made progress (failed applies stop the loop
+      until the next tick). In-flight (storage, origin) set prevents double
+      pulls. Periodic: storage_server anti_entropy_interval (default 30s)
+      re-announces heads on every ready peer connection; the connect-time
+      announcement covers the on-reconnect case. Since heads include foreign
+      origins, third-party records spread transitively. Simplification noted:
+      the announced own head is the local head, which can overstate the own
+      origin sequence when the newest local record is foreign - harmless
+      (over-pull returns nothing extra, idempotent). Test: partition/kill B,
+      commit on both sides, restart B on the same root -> both converge to the
+      same tag set in both directions; the periodic ticks do not duplicate.
 
 - 4.5 Client: replica awareness                                                   [2d]
       comm layer: server_id from server_hello; record storage remembers which server

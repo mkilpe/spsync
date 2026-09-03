@@ -59,6 +59,10 @@ public:
 	/// get the envelopes [start, end] for the s2s pull (plan 4.1), capped like get_records
 	std::deque<block_envelope> get_envelopes(sequence_number start, sequence_number end) const;
 
+	/// get one origin's envelopes with origin sequence in [from, to], same cap (plan 4.4)
+	std::deque<block_envelope> get_envelopes_by_origin(crypto::public_key_id const& origin,
+		sequence_number from, sequence_number to) const;
+
 	/// check whether the block could be committed in the current state, without changing anything
 	[[nodiscard]] error validate(chain_block const&) const;
 

@@ -63,6 +63,17 @@ void peer_connection::push(protocol::push_records const& p) {
 	}
 }
 
+void peer_connection::announce_heads() {
+	bool ready{};
+	{
+		std::unique_lock lock{mutex_};
+		ready = peer_id_.has_value();
+	}
+	if(ready) {
+		send_our_heads();
+	}
+}
+
 void peer_connection::terminate(securepath::error const& err) {
 	encrypted_connection::close();
 	on_disconnected(err);
@@ -171,8 +182,43 @@ void peer_connection::operator()(protocol::peer_hello const& p) {
 void peer_connection::operator()(protocol::peer_heads const& p) {
 	if(check_ready("peer heads")) {
 		LOG_TRACE("peer heads [sid={}, heads={}]", to_hex(p.sid), p.heads.size());
+		{
+			std::unique_lock lock{mutex_};
+			peer_heads_[p.sid] = p.heads;
+		}
+		start_pulls(p);
+	}
+}
+
+/// pull every origin the peer is ahead on (plan 4.4); the peer does the same for the
+/// origins we are ahead on when it receives our heads
+void peer_connection::start_pulls(protocol::peer_heads const& p) {
+	auto handle = sctx_.find_open_sync(p.sid);
+	if(handle && handle->modes().replication == replication_mode::weak) {
+		auto const& own = sctx_.identity().server_id;
+		for(auto const& head : p.heads) {
+			if(head.origin != own) {
+				auto const known = handle->known_origin_seq(head.origin);
+				if(known < head.block.sequence) {
+					request_pull(p.sid, head.origin, known + 1, head.block.sequence);
+				}
+			}
+		}
+	}
+}
+
+void peer_connection::request_pull(protocol::storage_id const& sid, crypto::public_key_id const& origin,
+	sequence_number from, sequence_number to) {
+	bool start{};
+	protocol::call_id cid{};
+	{
 		std::unique_lock lock{mutex_};
-		peer_heads_[p.sid] = p.heads;
+		start = pulling_.insert({sid, origin.data()}).second;
+		cid = next_cid_++;
+	}
+	if(start) {
+		LOG_TRACE("pulling origin {} [{}..{}] for storage {}", origin, from, to, to_hex(sid));
+		send_packet(protocol::pull_records{cid, sid, origin, from, to});
 	}
 }
 
@@ -182,22 +228,41 @@ void peer_connection::operator()(protocol::pull_records const& p) {
 		if(!handle) {
 			send_packet(protocol::not_replicating{0, p.sid});
 			send_packet(protocol::response_envelopes{p, make_error(protocol::errc::no_such_storage)});
+		} else if(p.origin == sctx_.identity().server_id) {
+			// the own log is served directly, local sequences are the origin sequences
+			send_packet(protocol::response_envelopes{p, handle->current_sequence_number()
+				, handle->get_envelopes(p.from, p.to)});
 		} else {
-			// origin-indexed serving arrives with anti-entropy (plan 4.4); the own log
-			// can be served directly
-			if(p.origin == sctx_.identity().server_id) {
-				send_packet(protocol::response_envelopes{p, handle->current_sequence_number()
-					, handle->get_envelopes(p.from, p.to)});
-			} else {
-				send_packet(protocol::response_envelopes{p, sequence_number{}, {}});
-			}
+			send_packet(protocol::response_envelopes{p, handle->known_origin_seq(p.origin)
+				, handle->get_envelopes_by_origin(p.origin, p.from, p.to)});
 		}
 	}
 }
 
 void peer_connection::operator()(protocol::response_envelopes const& p) {
-	// the anti-entropy pull loop consumes these with plan 4.4
-	LOG_TRACE("response_envelopes [sid={}, envelopes={}]", to_hex(p.sid), p.envelopes.size());
+	if(check_ready("response_envelopes")) {
+		{
+			std::unique_lock lock{mutex_};
+			pulling_.erase({p.sid, p.origin.data()});
+		}
+		LOG_TRACE("response_envelopes [sid={}, origin={}, envelopes={}]", to_hex(p.sid), p.origin, p.envelopes.size());
+		auto handle = sctx_.find_open_sync(p.sid);
+		if(handle && !p.error) {
+			for(auto const& env : p.envelopes) {
+				if(auto err = handle->apply_foreign(env)) {
+					LOG_WARN("failed to apply pulled record [origin={}, err={}]", env.origin(), err);
+				}
+			}
+			// keep pulling while the peer holds more of the origin AND this batch made
+			// progress (no progress means the applies failed, retried on the next tick)
+			auto const known = handle->known_origin_seq(p.origin);
+			bool const progressed = !p.envelopes.empty()
+				&& known >= p.envelopes.back().block().sequence();
+			if(progressed && p.origin_max.is_valid() && known < p.origin_max) {
+				request_pull(p.sid, p.origin, known + 1, p.origin_max);
+			}
+		}
+	}
 }
 
 void peer_connection::operator()(protocol::push_records const& p) {

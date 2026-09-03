@@ -46,6 +46,16 @@ public:
 	/// forwarded to chain_sync: envelopes for the s2s pull (plan 4.1)
 	std::deque<block_envelope> get_envelopes(sequence_number start, sequence_number end) const;
 
+	/// forwarded to chain_sync: one origin's envelopes by origin sequence (plan 4.4)
+	std::deque<block_envelope> get_envelopes_by_origin(crypto::public_key_id const& origin,
+		sequence_number from, sequence_number to) const;
+
+	/**
+	 * The highest sequence we hold of the given origin (plan 4.4): the local head for
+	 * our own origin, the origin head table entry otherwise (invalid when unknown).
+	 */
+	sequence_number known_origin_seq(crypto::public_key_id const& origin) const;
+
 	struct commit_outcome {
 		util::result<chain_block> block;
 		/// the signed sequence assignment; set when the server has a signing key

@@ -147,9 +147,16 @@ public:
 		return record_key_;
 	}
 
-	void set_assignment(octet_vector const& env) override {
-		auto q = db_->prepare("UPDATE record SET envelope = :e WHERE key = :k;");
+	void set_assignment(octet_vector const& env, octet_vector const& origin, sequence_number origin_seq) override {
+		auto q = db_->prepare("UPDATE record SET envelope = :e, origin = :o, origin_seq = :os WHERE key = :k;");
 		q.bind(":e", env);
+		if(origin.empty()) {
+			q.bind(":o");
+			q.bind(":os");
+		} else {
+			q.bind(":o", origin);
+			q.bind(":os", static_cast<std::uint64_t>(origin_seq.value));
+		}
 		q.bind(":k", record_key_);
 		q.execute();
 	}
@@ -233,6 +240,8 @@ private:
 		state: record state as integer, this is the record_state enum in record_interface.hpp
 		record: serialised chain_block as blob
 		type: type of the record
+		origin: public key id of the origin server of the stored assignment (plan 4.4)
+		origin_seq: the origin server's sequence for the record (plan 4.4)
 		unique_seq_selector: used to make combination state == insync and seq unique
 
 	database table 'record_objects':
@@ -259,6 +268,8 @@ struct record_storage::impl {
 				"type INTEGER, "
 				"op_id BLOB UNIQUE,"
 				"envelope BLOB,"
+				"origin BLOB,"
+				"origin_seq INTEGER,"
 				"unique_seq_selector INTEGER DEFAULT NULL,"
 				"UNIQUE(seq, unique_seq_selector));").execute();
 		}
@@ -721,6 +732,30 @@ std::vector<chain_block> record_storage::truncate_prefix(sequence_number first_k
 		}
 	}
 	return removed;
+}
+
+std::vector<octet_vector> record_storage::find_origin_assignments(octet_vector const& origin,
+	sequence_number from, sequence_number to, std::size_t max) const {
+	auto q = impl_->db->prepare(
+		"SELECT envelope FROM record WHERE state = :state AND origin = :o"
+		" AND origin_seq >= :from AND origin_seq <= :to ORDER BY origin_seq ASC LIMIT :max;");
+	q.bind(":state", std::to_underlying(record_state::in_sync));
+	q.bind(":o", origin);
+	q.bind(":from", static_cast<std::uint64_t>(from.value));
+	q.bind(":to", static_cast<std::uint64_t>(to.value));
+	// LIMIT takes the plain value: the unsigned bind offsets values for ordered columns
+	q.bind(":max", static_cast<std::int64_t>(std::min<std::size_t>(max
+		, std::numeric_limits<std::int64_t>::max())));
+
+	std::vector<octet_vector> ret;
+	auto res = q.execute();
+	for(; res; res.next()) {
+		auto env = res.value<octet_vector>(0);
+		if(env) {
+			ret.push_back(std::move(*env));
+		}
+	}
+	return ret;
 }
 
 record_handle record_storage::find_internal(record_internal_id iid) const {

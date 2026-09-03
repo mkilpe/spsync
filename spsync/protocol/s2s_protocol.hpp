@@ -79,11 +79,14 @@ struct response_envelopes : reply_base {
 
 	response_envelopes(pull_records const& p, util::sequence_number origin_max, std::deque<block_envelope> env)
 	: reply_base(p)
+	, origin(p.origin)
 	, requested_max(p.to)
 	, origin_max(origin_max)
 	, envelopes(std::move(env))
 	{}
 
+	/// the pulled origin (the puller's continuation loop keys on it, plan 4.4)
+	crypto::public_key_id origin;
 	util::sequence_number requested_max;
 	/// the highest origin sequence the sender holds for the requested origin
 	util::sequence_number origin_max;
@@ -92,7 +95,7 @@ struct response_envelopes : reply_base {
 	template<typename S>
 	void serialise(S& s) {
 		serialisation::sequence<S> seq(s);
-		seq & static_cast<reply_base&>(*this) & requested_max & origin_max & envelopes;
+		seq & static_cast<reply_base&>(*this) & origin & requested_max & origin_max & envelopes;
 	}
 };
 

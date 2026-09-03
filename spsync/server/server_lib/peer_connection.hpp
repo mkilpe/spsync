@@ -12,6 +12,8 @@
 #include <map>
 #include <mutex>
 #include <optional>
+#include <set>
+#include <utility>
 #include <vector>
 
 namespace securepath::sync {
@@ -45,6 +47,10 @@ public:
 	/// send a commit push to the peer when the connection is ready (plan 4.2)
 	void push(protocol::push_records const&);
 
+	/// announce the heads of our replicated storages (the periodic anti-entropy tick,
+	/// plan 4.4); a no-op until the hello exchange is done
+	void announce_heads();
+
 protected:
 	void on_connected() override;
 	void on_disconnected(securepath::error const& error) override;
@@ -66,6 +72,9 @@ private:
 	void send_our_heads();
 	void send_packet(auto const& packet);
 	bool check_ready(char const* what);
+	void start_pulls(protocol::peer_heads const&);
+	void request_pull(protocol::storage_id const&, crypto::public_key_id const&,
+		sequence_number from, sequence_number to);
 
 private:
 	serialisation::packet_deserialiser<protocol::s2s_types> deser_;
@@ -78,6 +87,9 @@ private:
 	std::optional<crypto::public_key_id> peer_id_;
 	std::map<protocol::storage_id, std::vector<origin_head>> peer_heads_;
 	std::function<void(securepath::error const&)> on_disconnect_;
+	/// (storage, origin) pulls in flight, so periodic heads do not double-pull
+	std::set<std::pair<protocol::storage_id, octet_vector>> pulling_;
+	protocol::call_id next_cid_{1};
 };
 
 }

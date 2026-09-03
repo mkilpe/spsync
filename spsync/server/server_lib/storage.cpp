@@ -113,6 +113,24 @@ std::deque<block_envelope> storage::get_envelopes(sequence_number start, sequenc
 	return sync_->get_envelopes(start, end);
 }
 
+std::deque<block_envelope> storage::get_envelopes_by_origin(crypto::public_key_id const& origin,
+	sequence_number from, sequence_number to) const {
+	std::unique_lock l{mutex_};
+	return sync_->get_envelopes_by_origin(origin, from, to);
+}
+
+sequence_number storage::known_origin_seq(crypto::public_key_id const& origin) const {
+	std::unique_lock l{mutex_};
+	if(origin == own_id_) {
+		return sync_->current_sequence_number();
+	}
+	sequence_number ret;
+	if(auto head = heads_->find(origin)) {
+		ret = head->block.sequence;
+	}
+	return ret;
+}
+
 std::optional<block_envelope> storage::make_envelope(chain_block const& block) const {
 	std::optional<block_envelope> env;
 	if(private_data_) {

@@ -280,6 +280,30 @@ public:
 			links_.push_back(std::make_unique<peer_link>(context_.io_context(), peer));
 			connect_link(*links_.back());
 		}
+		ae_timer_.emplace(context_.io_context());
+		schedule_anti_entropy();
+	}
+
+	/// the periodic heads announcement (plan 4.4); receivers pull what they are missing
+	void schedule_anti_entropy() {
+		std::unique_lock lock{mutex_};
+		if(closing_ || !ae_timer_) {
+			return;
+		}
+		ae_timer_->expires_after(params_.anti_entropy_interval);
+		ae_timer_->async_wait([this](std::error_code const& ec) {
+			if(!ec) {
+				run_anti_entropy();
+			}
+		});
+	}
+
+	void run_anti_entropy() {
+		LOG_TRACE("anti-entropy tick");
+		for(auto const& conn : peer_connections()) {
+			conn->announce_heads();
+		}
+		schedule_anti_entropy();
 	}
 
 	void connect_link(peer_link& link) {
@@ -324,6 +348,9 @@ public:
 		{
 			std::unique_lock lock{mutex_};
 			closing_ = true;
+			if(ae_timer_) {
+				ae_timer_->cancel();
+			}
 			links.swap(links_);
 			listener.swap(s2s_);
 		}
@@ -370,6 +397,7 @@ public:
 	// -- the s2s side (plan 4.1) --
 	std::shared_ptr<s2s_listener> s2s_;
 	std::vector<std::unique_ptr<peer_link>> links_;
+	std::optional<asio::steady_timer> ae_timer_;
 	bool closing_{};
 };
 

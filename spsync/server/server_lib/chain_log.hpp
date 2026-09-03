@@ -45,6 +45,13 @@ public:
 	 */
 	void store_assignment(octet_vector const& tag, block_envelope const&);
 
+	/**
+	 * The stored assignment envelopes of one origin server with origin sequence in
+	 * [from, to], in origin sequence order, at most max entries (plan 4.4 anti-entropy).
+	 */
+	std::deque<block_envelope> get_by_origin(crypto::public_key_id const& origin,
+		sequence_number from, sequence_number to, std::size_t max) const;
+
 	/// remove every record with sequence >= first_removed and recompute the head;
 	/// returns the removed blocks (see record_storage::truncate_from)
 	std::vector<chain_block> truncate_from(sequence_number first_removed);

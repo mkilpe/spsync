@@ -38,6 +38,11 @@ std::deque<block_envelope> chain_sync::get_envelopes(sequence_number start, sequ
 	return log_.get(start, end, config_.max_returned_records);
 }
 
+std::deque<block_envelope> chain_sync::get_envelopes_by_origin(crypto::public_key_id const& origin,
+	sequence_number from, sequence_number to) const {
+	return log_.get_by_origin(origin, from, to, config_.max_returned_records);
+}
+
 std::vector<chain_block> chain_sync::truncate_from(sequence_number first_removed) {
 	auto removed = log_.truncate_from(first_removed);
 	last_data_add_remove_ = log_.records().last_data_add_sequence();

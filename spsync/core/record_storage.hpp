@@ -84,6 +84,13 @@ public:
 	 */
 	std::vector<record_tag> object_chain_tags_below(sequence_number below) const;
 
+	/**
+	 * The stored assignment envelopes of the given origin server with origin sequence in
+	 * [from, to], in origin sequence order, at most max entries (plan 4.4 anti-entropy).
+	 */
+	std::vector<octet_vector> find_origin_assignments(octet_vector const& origin,
+		sequence_number from, sequence_number to, std::size_t max) const;
+
 
 	// -- truncation --
 

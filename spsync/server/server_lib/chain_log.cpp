@@ -47,7 +47,7 @@ void chain_log::append(block_envelope const& env) {
 	}
 	auto handle = records_.create(block, record_state::in_sync);
 	if(env.is_signed()) {
-		handle->set_assignment(serialisation::asn_der_serialise(env));
+		handle->set_assignment(serialisation::asn_der_serialise(env), env.origin().data(), env.block().sequence());
 	}
 	head_ = block.id();
 }
@@ -57,7 +57,17 @@ void chain_log::store_assignment(octet_vector const& tag, block_envelope const& 
 	if(!handle) {
 		throw make_error(sync::errc::constraint_violation, "storing assignment for unknown record");
 	}
-	handle->set_assignment(serialisation::asn_der_serialise(env));
+	// indexed by the origin so anti-entropy can serve pulls by origin sequence (plan 4.4)
+	handle->set_assignment(serialisation::asn_der_serialise(env), env.origin().data(), env.block().sequence());
+}
+
+std::deque<block_envelope> chain_log::get_by_origin(crypto::public_key_id const& origin,
+	sequence_number from, sequence_number to, std::size_t max) const {
+	std::deque<block_envelope> ret;
+	for(auto const& env : records_.find_origin_assignments(origin.data(), from, to, max)) {
+		ret.push_back(serialisation::asn_der_deserialise<block_envelope>(env));
+	}
+	return ret;
 }
 
 std::vector<chain_block> chain_log::truncate_from(sequence_number first_removed) {

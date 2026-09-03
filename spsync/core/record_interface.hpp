@@ -85,8 +85,13 @@ public:
 	/// Set the record data, this used in case the record is changed due to being out of sync
 	virtual void set_record(chain_block const&) = 0;
 
-	/// Store the serialised server signed sequence assignment (block_envelope) for this record
-	virtual void set_assignment(octet_vector const&) = 0;
+	/**
+	 * Store the serialised server signed sequence assignment (block_envelope) for this
+	 * record. origin/origin_seq index the assignment by its origin server (plan 4.4:
+	 * anti-entropy pulls records by origin-local sequence); empty leaves them unset.
+	 */
+	virtual void set_assignment(octet_vector const&, octet_vector const& origin = {},
+		sequence_number origin_seq = {}) = 0;
 
 	/// The serialised server signed sequence assignment, empty when none was received
 	virtual octet_vector assignment() const = 0;

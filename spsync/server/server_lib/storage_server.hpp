@@ -51,6 +51,10 @@ struct storage_server_params {
 	/// overrides the s2s port when set
 	std::optional<asio::ip::tcp::endpoint> s2s_endpoint;
 
+	/// how often the replicated storage heads are re-announced to the peers (plan 4.4);
+	/// every announcement makes a behind peer pull what it is missing
+	std::chrono::seconds anti_entropy_interval{30s};
+
 	asio::ip::tcp::endpoint create_s2s_endpoint() const;
 };
 
