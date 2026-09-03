@@ -388,6 +388,57 @@ TEST_CASE("chain_sync history cut at segment", "[unit]") {
 	}
 }
 
+// (6f) the weak-mode seen rule is tag bound (plan 4.3/D4): judged by the referenced
+// special tag, not by replica-local sequences
+TEST_CASE("chain_sync tag bound special references", "[unit]") {
+	auto mode = GENERATE(sync_mode::require_special_seen, sync_mode::require_data_add_remove_seen);
+	remove_database_test_db();
+	chain_sync sync(database::sqlite::create_sqlite_connection(db_name), chain_sync_config{mode});
+
+	test_block_creator creator;
+	CHECK(sync.commit_block(creator.test_user_change()));
+	auto stale = creator; // has seen only the first special record
+	CHECK(sync.commit_block(creator.test_user_change()));
+
+	// referencing the newest special by tag is accepted
+	CHECK(sync.commit_block(creator.test_data_change()));
+
+	// a stale special reference is rejected, whatever its local sequence claims
+	CHECK(check_result_error(sync.commit_block(stale.test_data_change()), protocol::errc::record_out_of_sync));
+
+	{ // an unknown special reference is rejected
+		auto c = creator;
+		c.last_special_tag = securepath::test::random_octet_vector(16);
+		CHECK(check_result_error(sync.commit_block(c.test_data_change()), protocol::errc::record_out_of_sync));
+	}
+	{ // a reference to a non-special record is malformed
+		auto c = creator;
+		c.last_special_tag = c.created_tags.back(); // the data change
+		CHECK(check_result_error(sync.commit_block(c.test_user_change()), protocol::errc::invalid_record));
+	}
+}
+
+// (6g) foreign commits skip the seen rules (plan 4.3): the origin enforced them against
+// its own order, re-checking here would make replicas diverge on concurrent records
+TEST_CASE("chain_sync commit_foreign is lenient", "[unit]") {
+	remove_database_test_db();
+	chain_sync sync(database::sqlite::create_sqlite_connection(db_name), chain_sync_config{sync_mode::require_special_seen});
+
+	test_block_creator creator;
+	CHECK(sync.commit_block(creator.test_user_change()));
+	auto other = creator; // another replica's client state after the first special
+	CHECK(sync.commit_block(creator.test_user_change()));
+
+	// a concurrent special accepted by the other replica fails the local seen rule but
+	// is applied through the foreign path; duplicates stay rejected
+	auto foreign = other.test_user_change();
+	CHECK(check_result_error(sync.commit_block(foreign), protocol::errc::record_out_of_sync));
+	auto res = sync.commit_foreign(foreign);
+	REQUIRE(res);
+	CHECK(res.value().sequence() == sequence_number{3});
+	CHECK(check_result_error(sync.commit_foreign(foreign), protocol::errc::record_already_committed));
+}
+
 // (7) validate/apply split behaves like commit_block
 TEST_CASE("chain_sync validate and apply", "[unit]") {
 	remove_database_test_db();

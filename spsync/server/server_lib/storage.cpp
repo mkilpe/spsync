@@ -166,7 +166,7 @@ error storage::apply_foreign(block_envelope const& env) {
 	if(sync_->records().find_tag(block.tag())) {
 		return {};
 	}
-	auto res = sync_->commit_block(block);
+	auto res = sync_->commit_foreign(block);
 	if(!res) {
 		if(check_result_error(res, protocol::errc::record_already_committed)) {
 			// same operation under another tag was adopted already (op id dedup)

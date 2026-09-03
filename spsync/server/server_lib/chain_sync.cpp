@@ -9,6 +9,8 @@
 #include <securepath/crypto/error.hpp>
 #include <securepath/crypto/public_key_access.hpp>
 
+#include <algorithm>
+
 namespace securepath::sync {
 
 chain_sync::chain_sync(database::connection_ptr db, chain_sync_config config, crypto::public_key_access* keys)
@@ -104,6 +106,59 @@ chain_sync::rule_result chain_sync::evaluate(chain_block const& block) const {
 	return r;
 }
 
+chain_sync::rule_result chain_sync::evaluate_foreign(chain_block const& block) const {
+	rule_result r;
+	auto handle = log_.find_by_tag(block.tag());
+	if(!handle) {
+		if(config_.auth_mode == auth_mode::sign_records) {
+			r.err = verify_signature(block, r.signer);
+			if(r.err) {
+				return r;
+			}
+		}
+		r = block.deserialise_record<rule_result>([this](auto const& rec) {
+				if(!rec.op_id().empty() && log_.find_by_op_id(rec.op_id())) {
+					return rule_result{make_error(protocol::errc::record_already_committed)};
+				}
+				// classification only: the seen rules were enforced by the origin against
+				// its own order (plan 4.3, D9 union merge)
+				rule_result fr;
+				if constexpr(!std::is_same_v<std::decay_t<decltype(rec)>, data_change_record>) {
+					fr.type = rec_type::special;
+				} else {
+					bool const has_add = std::ranges::any_of(rec, [](auto const& c) {
+							return c.data.previous_oid_record_tag.empty();
+						});
+					fr.type = has_add ? rec_type::data_add_remove : rec_type::none;
+				}
+				return fr;
+			});
+	} else {
+		r.err = make_error(protocol::errc::record_already_committed);
+	}
+	return r;
+}
+
+util::result<chain_block> chain_sync::commit_foreign(chain_block const& block) {
+	LOG_TRACE("commit_foreign (rsid={})", config_.log_id);
+	util::result<chain_block> res;
+	try {
+		auto r = evaluate_foreign(block);
+		if(!r.err) {
+			res = set_and_save_block(block, r.type);
+		} else {
+			res = r.err;
+		}
+	} catch(error const& err) {
+		LOG_WARN("exception while processing foreign block [err={}, block tag={}] (rsid={})", err, to_hex(block.tag()), config_.log_id);
+		res = err;
+	} catch(std::exception const& exp) {
+		LOG_WARN("exception while processing foreign block [exp={}, block tag={}] (rsid={})", exp.what(), to_hex(block.tag()), config_.log_id);
+		res = make_error(securepath::errc::exception_occurred);
+	}
+	return res;
+}
+
 error chain_sync::check_rules_add(data_change_record const& rec) const {
 	error err;
 	if(config_.mode == sync_mode::require_all_seen) {
@@ -114,7 +169,7 @@ error chain_sync::check_rules_add(data_change_record const& rec) const {
 			err = make_error(protocol::errc::record_out_of_sync);
 		}
 	} else {
-		err = check_rules_special_seen(rec.last_seen_block());
+		err = check_rules_special_seen(rec.last_seen_special_tag());
 		if(!err && config_.mode == sync_mode::require_data_add_remove_seen) {
 			if(last_data_add_remove_.is_valid() && last_data_add_remove_ > rec.last_seen_block().sequence) {
 				err = make_error(protocol::errc::record_out_of_sync);
@@ -136,7 +191,7 @@ error chain_sync::check_rules_existing(data_change_record const& rec) const {
 			err = make_error(protocol::errc::record_out_of_sync);
 		}
 	} else {
-		err = check_rules_special_seen(rec.last_seen_block());
+		err = check_rules_special_seen(rec.last_seen_special_tag());
 	}
 	return err;
 }
@@ -163,13 +218,28 @@ chain_sync::rule_result chain_sync::check_rules(data_change_record const& rec) c
 	return r;
 }
 
-error chain_sync::check_rules_special_seen(chain_block_id const& last_seen_block) const {
+/**
+ * Weak-mode seen rule, tag bound (plan 4.3/D4): the referenced special record must be in
+ * our log and no special record may have been applied after it in our local order. Tags
+ * are replica independent, so the rule judges a client identically no matter which
+ * replica the record lands on; the strict mode keeps its positional head rule.
+ */
+error chain_sync::check_rules_special_seen(record_tag const& last_seen_special) const {
 	error err;
-	if(config_.mode >= sync_mode::require_special_seen) {
-		if(last_user_change_or_segment_.is_valid() && last_user_change_or_segment_ > last_seen_block.sequence) {
+	if(config_.mode >= sync_mode::require_special_seen && last_user_change_or_segment_.is_valid()) {
+		auto handle = log_.find_by_tag(last_seen_special);
+		if(!handle) {
 			err = make_error(protocol::errc::record_out_of_sync);
-			LOG_TRACE("out of sync (not seen all special changes) [{} > {} ({})] (rsid={})"
-				, last_user_change_or_segment_, last_seen_block.sequence, to_hex(last_seen_block.hash), config_.log_id);
+			LOG_TRACE("out of sync (special reference not in the log) [tag={}] (rsid={})"
+				, to_hex(last_seen_special), config_.log_id);
+		} else if(handle->type() != user_change_record_tag && handle->type() != segment_record_tag) {
+			err = make_error(protocol::errc::invalid_record, "special reference is not a special record");
+			LOG_TRACE("special reference is not a special record [tag={}] (rsid={})"
+				, to_hex(last_seen_special), config_.log_id);
+		} else if(handle->block_id().sequence < last_user_change_or_segment_) {
+			err = make_error(protocol::errc::record_out_of_sync);
+			LOG_TRACE("out of sync (special changes applied after the reference) [{} < {}] (rsid={})"
+				, handle->block_id().sequence, last_user_change_or_segment_, config_.log_id);
 		}
 	}
 	return err;
@@ -186,7 +256,7 @@ chain_sync::rule_result chain_sync::check_rules(user_change_record const& rec) c
 				, head.sequence, to_hex(head.hash), rec.last_seen_block().sequence, to_hex(rec.last_seen_block().hash), config_.log_id);
 		}
 	} else {
-		r.err = check_rules_special_seen(rec.last_seen_block());
+		r.err = check_rules_special_seen(rec.last_seen_special_tag());
 	}
 	return r;
 }

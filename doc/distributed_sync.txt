@@ -791,7 +791,7 @@ Phase 4  Server-to-server, weak mode  (M3)
       resumes inline). Test: push on commit A->B with origin assignment + head
       checks, duplicate ignored, concurrent commits converge to one tag set.
 
-- 4.3 Tag-bound special references for weak modes  (D4)                           [2d]
++ 4.3 Tag-bound special references for weak modes  (D4) -- done 2026-09-03        [2d]
       Problem: check_rules_special_seen compares last_seen_block.sequence against
       last_user_change_or_segment_; sequences differ per replica.
       Fix: record_base gains last_seen_special_tag (record_tag of the newest special
@@ -802,6 +802,22 @@ Phase 4  Server-to-server, weak mode  (M3)
       Test: membership change on A, concurrent message on B not yet seeing it ->
       B's server accepts (allow_all) / rejects (require_special_seen) consistently
       regardless of which replica the message lands on.
+      Implemented: last_seen_special_tag in the authenticated record_base (before
+      trailing_data), filled by every creator (engine last_special_tag() from the
+      in sync storage, recomputed on rebase; test_block_creator tracks it).
+      check_rules_special_seen is tag bound: reference must be in the log, be a
+      special record (else invalid_record) and be the newest special by our local
+      order. Extra beyond the plan: chain_sync::commit_foreign (signature + dedup
+      + classification, NO seen rules) used by apply_foreign - the origin already
+      enforced the rules against its own order, re-checking against ours would
+      make replicas diverge on concurrent records (D9 union). Engine weak-mode
+      2.6 check logs unknown special references only (inconclusive by design).
+      Left positional: the data-add cursor rule and the segment at-head rule
+      (revisit with 4.4 anti-entropy). Tests: tag rule unit cases (stale/unknown/
+      non-special refs), commit_foreign leniency + dedup, s2s scenario - stale
+      client rejected on both replicas, the client that saw the membership change
+      accepted on the OTHER replica where it sits at a different local sequence,
+      tag sets converge.
 
 - 4.4 Anti-entropy                                                                [2d]
       Periodic (and on reconnect): exchange heads; for each origin where the peer is

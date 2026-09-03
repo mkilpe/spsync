@@ -18,10 +18,12 @@ public:
 	/**
 	 * Construct to create the record_base which is common to all records and initialise
 	 * encryption+authentication. op_id: the stable operation id; empty generates a new
-	 * one, a rebase passes the original (the base is authenticated at construction, so
-	 * the op id cannot change afterwards).
+	 * one, a rebase passes the original. last_seen_special: tag of the newest special
+	 * record the client has in sync (plan 4.3/D4). The base is authenticated at
+	 * construction, so none of it can change afterwards.
 	 */
-	record_creator_base(encryption_key const& key, chain_block_id last_seen, std::optional<crypto::private_key> = std::nullopt, octet_vector op_id = {});
+	record_creator_base(encryption_key const& key, chain_block_id last_seen, std::optional<crypto::private_key> = std::nullopt,
+		octet_vector op_id = {}, record_tag last_seen_special = {});
 
 	/// Returns authentication tag for the record, this can be called only once after constructing the record has been done
 	util::content_auth authentication_tag();

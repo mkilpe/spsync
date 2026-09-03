@@ -16,7 +16,8 @@ struct test_block_creator {
 	record_base next_record_base() {
 		auto op = force_op_id.value_or(securepath::test::random_octet_vector(16));
 		force_op_id.reset();
-		return record_base{chain_block_id{last_server_seq++, last_chain_hash}, octet_vector{}, sequence_number{1}, std::move(op)};
+		return record_base{chain_block_id{last_server_seq++, last_chain_hash}, octet_vector{}, sequence_number{1}
+			, std::move(op), last_special_tag};
 	}
 
 	template<typename Record>
@@ -29,6 +30,10 @@ struct test_block_creator {
 		last_chain_hash = block.hash();
 		last_tag = test_record.auth.tag();
 		created_tags.push_back(last_tag);
+		if constexpr(Record::tag == user_change_record_tag || Record::tag == segment_record_tag) {
+			// this creator has now "seen" the special record it just made (plan 4.3)
+			last_special_tag = last_tag;
+		}
 		return block;
 	}
 
@@ -83,6 +88,9 @@ struct test_block_creator {
 	sequence_number last_server_seq{};
 	record_tag last_tag{};
 	octet_vector last_chain_hash{};
+
+	/// tag of the newest special record this creator made or saw (goes into record_base)
+	record_tag last_special_tag{};
 
 	/// tags of every created block in creation order (e.g. to build segment tag lists)
 	std::deque<record_tag> created_tags;

@@ -8,9 +8,10 @@
 
 namespace securepath::sync {
 
-record_creator_base::record_creator_base(encryption_key const& key, chain_block_id last_seen, std::optional<crypto::private_key> signer, octet_vector op_id)
+record_creator_base::record_creator_base(encryption_key const& key, chain_block_id last_seen, std::optional<crypto::private_key> signer,
+	octet_vector op_id, record_tag last_seen_special)
 : base_(std::move(last_seen), crypto::random_octet_vector(crypto::aes_gcm_iv_size()), key.key_seq,
-	op_id.empty() ? crypto::random_octet_vector(16) : std::move(op_id))
+	op_id.empty() ? crypto::random_octet_vector(16) : std::move(op_id), std::move(last_seen_special))
 , encryptor_(crypto::create_aes_gcm_stream_encryptor(key.key, base_.iv()))
 , signer_(signer)
 {

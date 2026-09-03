@@ -3,6 +3,8 @@
 #include <spsync/server/server_lib/storage_server.hpp>
 #include <spsync/server/server_lib/storage.hpp>
 
+#include <spsync/protocol/error.hpp>
+
 #include <spsync/test/test_block_creator.hpp>
 
 #include <securepath/test_frame/test_suite.hpp>
@@ -21,6 +23,16 @@ storage_server_params s2s_test_params(std::string root, std::uint16_t port, std:
 	p.s2s_endpoint = asio::ip::tcp::endpoint(asio::ip::make_address("127.0.0.1"), s2s_port);
 	p.peers = std::move(peers);
 	return p;
+}
+
+/// the sorted record tags of [1, last]; equal sets mean converged (sequences may differ, D4)
+std::vector<octet_vector> tag_set(storage& s, sequence_number last) {
+	std::vector<octet_vector> tags;
+	for(auto const& r : s.get_records(sequence_number{1}, last)) {
+		tags.push_back(r.tag());
+	}
+	std::ranges::sort(tags);
+	return tags;
 }
 
 }
@@ -160,20 +172,79 @@ TEST_CASE("s2s weak push on commit", "[unit]") {
 	WAIT_CHECK(sa->current_sequence_number() == sequence_number{2}, 5s);
 	WAIT_CHECK(sb->current_sequence_number() == sequence_number{2}, 5s);
 
-	auto tag_set = [](storage& s) {
-		std::vector<octet_vector> tags;
-		for(auto const& r : s.get_records(sequence_number{1}, sequence_number{2})) {
-			tags.push_back(r.tag());
-		}
-		std::ranges::sort(tags);
-		return tags;
-	};
-	CHECK(tag_set(*sa) == tag_set(*sb));
+	CHECK(tag_set(*sa, sequence_number{2}) == tag_set(*sb, sequence_number{2}));
 
 	a.close();
 	b.close();
 	std::filesystem::remove_all("test-s2s-pa");
 	std::filesystem::remove_all("test-s2s-pb");
+}
+
+// tag-bound seen rule across replicas (plan 4.3/D4): a stale client is rejected and a
+// fresh one accepted on either replica, with replica-local sequences free to differ
+TEST_CASE("s2s tag bound rules across replicas", "[unit]") {
+	std::filesystem::remove_all("test-s2s-ta");
+	std::filesystem::remove_all("test-s2s-tb");
+
+	test::test_context tctx;
+	tctx.add_client(2);
+	tctx.share_client_keys();
+	network::enable_pk_handshake(tctx.client_context(0));
+	network::enable_pk_handshake(tctx.client_context(1));
+
+	auto const key_a = tctx.key_id(0);
+	auto const key_b = tctx.key_id(1);
+
+	storage_server a(tctx.client_context(0),
+		s2s_test_params("test-s2s-ta", 42754, 42764, {peer_config{"127.0.0.1", 42765, key_b}}));
+	storage_server b(tctx.client_context(1),
+		s2s_test_params("test-s2s-tb", 42755, 42765, {peer_config{"127.0.0.1", 42764, key_a}}));
+
+	protocol::storage_id const sid = securepath::test::random_octet_vector(8);
+	storage_modes const modes{sync_mode::require_special_seen, auth_mode::sign_records, replication_mode::weak};
+	auto sa = a.open_storage(sid, modes);
+	auto sb = b.open_storage(sid, modes);
+	REQUIRE(sa);
+	REQUIRE(sb);
+	a.start();
+	b.start();
+	WAIT_CHECK((!a.connected_peers().empty() && !b.connected_peers().empty()), 5s);
+
+	// the first special record spreads to both replicas
+	test::test_block_creator client_a;
+	client_a.signer = *tctx.client_context(0).private_data().my_private_key();
+	REQUIRE(sa->commit_block(client_a.test_user_change()).block);
+	WAIT_CHECK(sb->current_sequence_number() == sequence_number{1}, 5s);
+
+	auto stale = client_a;      // saw only the first special record
+	auto client_b = client_a;   // a client of B with the same view
+	client_b.signer = *tctx.client_context(1).private_data().my_private_key();
+	auto fresh = client_a;
+
+	// a data change lands on B, then a membership change on A; the change ends up at
+	// different local sequences on the two replicas
+	REQUIRE(sb->commit_block(client_b.test_data_change()).block);
+	REQUIRE(sa->commit_block(fresh.test_user_change()).block);
+	WAIT_CHECK(sa->current_sequence_number() == sequence_number{3}, 5s);
+	WAIT_CHECK(sb->current_sequence_number() == sequence_number{3}, 5s);
+
+	{ // the stale client is rejected on either replica
+		auto on_a = stale;
+		CHECK(check_result_error(sa->commit_block(on_a.test_data_change()).block, protocol::errc::record_out_of_sync));
+		auto on_b = stale;
+		CHECK(check_result_error(sb->commit_block(on_b.test_data_change()).block, protocol::errc::record_out_of_sync));
+	}
+
+	// the client that saw the membership change is accepted on the OTHER replica even
+	// though the change sits at a different local sequence there
+	REQUIRE(sb->commit_block(fresh.test_data_change()).block);
+	WAIT_CHECK(sa->current_sequence_number() == sequence_number{4}, 5s);
+	CHECK(tag_set(*sa, sequence_number{4}) == tag_set(*sb, sequence_number{4}));
+
+	a.close();
+	b.close();
+	std::filesystem::remove_all("test-s2s-ta");
+	std::filesystem::remove_all("test-s2s-tb");
 }
 
 }

@@ -235,6 +235,13 @@ public:
 	 */
 	template<typename Record>
 	void check_fork(chain_block const& record, Record const& rec) {
+		if(config.mode != sync_mode::require_all_seen) {
+			// the weak-mode cross-check is tag existence only (plan 4.3): an unknown
+			// special reference is inconclusive - the record may simply arrive before it
+			if(!rec.last_seen_special_tag().empty() && !records.find_tag(rec.last_seen_special_tag())) {
+				LTRACE("special reference not yet known [tag = {}]", to_hex(rec.last_seen_special_tag()));
+			}
+		}
 		if(config.mode == sync_mode::require_all_seen && !fork_suspected) {
 			auto const& ls = rec.last_seen_block();
 			if(ls.is_valid()) {
@@ -357,6 +364,18 @@ public:
 		}
 	}
 
+	/// tag of the newest in sync special record; goes into every created record base (plan 4.3)
+	record_tag last_special_tag() const {
+		record_tag tag;
+		auto seq = records.last_special_sequence();
+		if(seq.is_valid()) {
+			if(auto h = records.find(seq)) {
+				tag = h->tag();
+			}
+		}
+		return tag;
+	}
+
 	auth_record<data_change_record> update_record(encryption_key const& key, data_change_record_verifier& ver) const {
 		auto last_block = records.last_block();
 		LINFO("updating last block to {}", last_block);
@@ -366,7 +385,7 @@ public:
 			signer = my_private_key(crypto.private_data());
 		}
 
-		data_change_record_creator creator(key, last_block, signer, ver.base().op_id());
+		data_change_record_creator creator(key, last_block, signer, ver.base().op_id(), last_special_tag());
 		for(auto const& r : ver.headers()) {
 			auto data = r.data;
 			if(!data.previous_oid_record_tag.empty()) {
@@ -393,7 +412,7 @@ public:
 			signer = my_private_key(crypto.private_data());
 		}
 
-		user_change_record_creator creator(key, last_block, signer, ver.base().op_id());
+		user_change_record_creator creator(key, last_block, signer, ver.base().op_id(), last_special_tag());
 		creator.set_data(ver.header(), ver.data());
 		return creator.result();
 	}
@@ -424,7 +443,7 @@ public:
 			signer = my_private_key(crypto.private_data());
 		}
 
-		segment_record_creator creator(key, last_block, signer, ver.base().op_id());
+		segment_record_creator creator(key, last_block, signer, ver.base().op_id(), last_special_tag());
 		// the covered range moved underneath the segment: recompute the end and the tag
 		// list from the storage, keeping the caller's header (metadata, creation time)
 		creator.set_data(ver.header(), make_segment_data(last_block));
@@ -753,7 +772,8 @@ record_handle sync_engine::sync_object_change(object_id oid, metadata mdata, rec
 	if(impl_->config.auth_mode == auth_mode::sign_records) {
 		signer = my_private_key(impl_->crypto.private_data());
 	}
-	data_change_record_creator creator(impl_->crypto.enc_keys().current_key(), last_block, signer);
+	data_change_record_creator creator(impl_->crypto.enc_keys().current_key(), last_block, signer
+		, {}, impl_->last_special_tag());
 	creator.add_change(std::move(oid), last_oid_tag, std::move(mdata));
 
 	record_handle h = impl_->records.create(creator.result());
@@ -774,7 +794,8 @@ record_handle sync_engine::sync_user_change(plain_user_change_data change_data, 
 	if(impl_->config.auth_mode == auth_mode::sign_records) {
 		signer = my_private_key(impl_->crypto.private_data());
 	}
-	user_change_record_creator creator(impl_->crypto.enc_keys().current_key(), last_block, signer);
+	user_change_record_creator creator(impl_->crypto.enc_keys().current_key(), last_block, signer
+		, {}, impl_->last_special_tag());
 	creator.set_change(std::move(change_data), std::move(mdata));
 
 	record_handle h = impl_->records.create(creator.result());
@@ -802,7 +823,8 @@ record_handle sync_engine::sync_segment_end(metadata mdata) {
 	if(impl_->config.auth_mode == auth_mode::sign_records) {
 		signer = my_private_key(impl_->crypto.private_data());
 	}
-	segment_record_creator creator(impl_->crypto.enc_keys().current_key(), last_block, signer);
+	segment_record_creator creator(impl_->crypto.enc_keys().current_key(), last_block, signer
+		, {}, impl_->last_special_tag());
 	creator.set_change(impl_->make_segment_data(last_block), std::move(mdata));
 
 	record_handle h = impl_->records.create(creator.result());

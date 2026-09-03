@@ -71,6 +71,14 @@ public:
 	/// try to commit chain block (validate + apply)
 	util::result<chain_block> commit_block(chain_block const&);
 
+	/**
+	 * Commit a block another server already accepted (plan 4.2/4.3): signatures and
+	 * duplicates are checked but the seen rules are not re-enforced - the origin
+	 * enforced them against its own order and re-checking against ours would make
+	 * replicas diverge on concurrent records (D9: the merge is a union).
+	 */
+	util::result<chain_block> commit_foreign(chain_block const&);
+
 	/// truncate the log from the given sequence and re-derive the mode cursors;
 	/// returns the removed blocks (see chain_log::truncate_from)
 	std::vector<chain_block> truncate_from(sequence_number first_removed);
@@ -94,6 +102,9 @@ private:
 	/// duplicate check + rule evaluation + classification; does not change any state
 	rule_result evaluate(chain_block const& block) const;
 
+	/// duplicate + signature check and classification only, for foreign blocks
+	rule_result evaluate_foreign(chain_block const& block) const;
+
 	error verify_signature(chain_block const& block, std::optional<crypto::public_key_id>& signer) const;
 	chain_block set_and_save_block(chain_block block, rec_type type);
 	rule_result check_rules(data_change_record const& rec) const;
@@ -101,7 +112,7 @@ private:
 	rule_result check_rules(segment_record const& rec) const;
 	error check_rules_add(data_change_record const& rec) const;
 	error check_rules_existing(data_change_record const& rec) const;
-	error check_rules_special_seen(chain_block_id const& last_seen_block) const;
+	error check_rules_special_seen(record_tag const& last_seen_special) const;
 	error check_rules_segment(segment_record const& rec) const;
 	error check_segment_backbone(segment_record const& rec) const;
 private:
