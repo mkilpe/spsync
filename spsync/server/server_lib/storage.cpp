@@ -60,6 +60,7 @@ storage::storage(protocol::storage_id id, storage_config config, std::optional<s
 	crypto::public_key_access* keys, crypto::private_data_access* private_data)
 : config_(std::move(config))
 , id_(std::move(id))
+, keys_(keys)
 , private_data_(private_data)
 {
 	std::string path = config_.storage_root_path() + "/" + to_hex(id_);
@@ -132,10 +133,59 @@ storage::commit_outcome storage::commit_block(chain_block const& cb) {
 		if(outcome.envelope) {
 			// keep the signed assignment in the log so replication can serve it later
 			sync_->log().store_assignment(outcome.block.value().tag(), *outcome.envelope);
+			// weak replication: the origin pushes its own commits to the peers (plan 4.2)
+			if(modes_.replication == replication_mode::weak && peer_push_) {
+				peer_push_(id_, *outcome.envelope);
+			}
 		}
 		notify_listeners(outcome.block.value(), outcome.envelope);
 	}
 	return outcome;
+}
+
+error storage::apply_foreign(block_envelope const& env) {
+	std::unique_lock l{mutex_};
+	if(modes_.replication != replication_mode::weak) {
+		return make_error(protocol::errc::invalid_state, "storage does not replicate in weak mode");
+	}
+	if(!keys_) {
+		return make_error(securepath::errc::invalid_state, "no key access to verify the origin");
+	}
+	if(auto err = env.verify(id_, *keys_)) {
+		LOG_WARN("foreign envelope does not verify [origin={}] (rsid={})", env.origin(), to_hex(id_));
+		return err;
+	}
+	if(env.origin() == own_id_) {
+		// our own record came back around
+		return {};
+	}
+	// the origin head is kept fresh even for records we already hold
+	heads_->advance(origin_head{env.origin(), env.term(), env.block().id()});
+
+	auto const& block = env.block();
+	if(sync_->records().find_tag(block.tag())) {
+		return {};
+	}
+	auto res = sync_->commit_block(block);
+	if(!res) {
+		if(check_result_error(res, protocol::errc::record_already_committed)) {
+			// same operation under another tag was adopted already (op id dedup)
+			return {};
+		}
+		LOG_WARN("foreign record was not accepted [origin={}, err={}] (rsid={})"
+			, env.origin(), res.get_error(), to_hex(id_));
+		return res.get_error();
+	}
+	// the record now lives under our own sequence; the log keeps the ORIGIN's signed
+	// assignment - it is the durable (origin id, origin seq) needed by anti-entropy
+	sync_->log().store_assignment(block.tag(), env);
+	notify_listeners(res.value(), make_envelope(res.value()));
+	return {};
+}
+
+void storage::set_peer_push(peer_push_hook hook) {
+	std::unique_lock l{mutex_};
+	peer_push_ = std::move(hook);
 }
 
 void storage::add_listener(std::shared_ptr<connection> const& p) {

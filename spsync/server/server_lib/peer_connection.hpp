@@ -42,6 +42,9 @@ public:
 	/// called on the connection strand when the connection went down (reconnect hook)
 	void set_disconnect_handler(std::function<void(securepath::error const&)>);
 
+	/// send a commit push to the peer when the connection is ready (plan 4.2)
+	void push(protocol::push_records const&);
+
 protected:
 	void on_connected() override;
 	void on_disconnected(securepath::error const& error) override;

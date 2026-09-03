@@ -73,6 +73,9 @@ public:
 
 	/// the last heads the given peer announced for the storage (plan 4.1/4.4)
 	std::vector<origin_head> heads_of_peer(crypto::public_key_id const& peer, protocol::storage_id const&) const;
+
+	/// ids of the peers with an authenticated live connection
+	std::vector<crypto::public_key_id> connected_peers() const;
 private:
 	class impl;
 	// encrypted_server requires this to be shared_ptr

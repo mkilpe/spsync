@@ -204,6 +204,11 @@ public:
 		if(it == storages_.end()) {
 			LOG_TRACE("creating storage object (id={})", to_hex(id));
 			std::shared_ptr<storage> p = std::make_shared<storage>(id, default_storage_config_, create_modes, &context_.public_keys(), &context_.private_data());
+			if(p->modes().replication != replication_mode::none) {
+				p->set_peer_push([this](protocol::storage_id const& sid, block_envelope const& env) {
+						push_to_peers(sid, env);
+					});
+			}
 			it = storages_.emplace(id, std::move(p)).first;
 		} else if(create_modes && it->second->modes() != *create_modes) {
 			throw make_error(protocol::errc::storage_mode_mismatch, "storage exists with different modes");
@@ -217,6 +222,20 @@ public:
 			LOG_TRACE("destroying storage object (id={})", to_hex(storage->id()));
 			storages_.erase(storage->id());
 			storage.reset();
+		}
+	}
+
+	virtual std::shared_ptr<storage> find_open_sync(protocol::storage_id const& id) override {
+		std::unique_lock lock{mutex_};
+		auto it = storages_.find(id);
+		return it != storages_.end() ? it->second : nullptr;
+	}
+
+	/// fan a committed envelope out to every authenticated peer (plan 4.2)
+	void push_to_peers(protocol::storage_id const& sid, block_envelope const& env) {
+		protocol::push_records packet{sid, {env}};
+		for(auto const& conn : peer_connections()) {
+			conn->push(packet);
 		}
 	}
 
@@ -392,6 +411,16 @@ std::optional<asio::ip::tcp::endpoint> storage_server::s2s_local_endpoint() cons
 	std::unique_lock lock{impl_->mutex_};
 	if(impl_->s2s_) {
 		ret = impl_->s2s_->local_endpoint();
+	}
+	return ret;
+}
+
+std::vector<crypto::public_key_id> storage_server::connected_peers() const {
+	std::vector<crypto::public_key_id> ret;
+	for(auto const& conn : impl_->peer_connections()) {
+		if(auto id = conn->peer_id()) {
+			ret.push_back(std::move(*id));
+		}
 	}
 	return ret;
 }

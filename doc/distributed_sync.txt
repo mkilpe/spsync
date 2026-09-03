@@ -760,7 +760,7 @@ Phase 4  Server-to-server, weak mode  (M3)
       gain get_envelopes. Test: test_s2s.cpp - two storage_servers on loopback,
       both directions authenticated, heads exchanged and verified per origin.
 
-- 4.2 Weak-mode replication: push on commit                                       [2d]
++ 4.2 Weak-mode replication: push on commit -- done 2026-09-02                    [2d]
       storage::commit_block (weak): validate+apply locally, set acked->in_sync
       (local durability is the weak-mode definition), push envelope to peers.
       Receiving side: storage::apply_foreign(envelope):
@@ -772,6 +772,24 @@ Phase 4  Server-to-server, weak mode  (M3)
       keeps it simple, no flooding.
       Test: commit on A, appears on B; commit on both concurrently, both converge to
       the same tag set (different local sequences is fine by D4).
+      Implemented: storage::set_peer_push hook (set by storage_server acquire for
+      replicated storages, fans out push_records to authenticated peers);
+      commit_block pushes the signed envelope after the local apply.
+      storage::apply_foreign: envelope verify against the key store, own-origin
+      echoes ignored, origin head advanced even for known records, tag/op-id dups
+      no-ops, then chain_sync::commit_block assigns OUR sequence and the log
+      stores the ORIGIN's envelope (the durable origin id + origin seq for
+      anti-entropy); local clients are notified with a freshly signed own
+      envelope. Client signature checked by the weak validation (sign_records).
+      s2s handlers now use context::find_open_sync - a peer can no longer cause
+      storage creation (4.1 acquire had that side effect); pushes/pulls for
+      unknown or non-replicated storages answer not_replicating. Note: 4.3 still
+      pending, the seen-mode rules compare per-replica sequences - tests run
+      allow_all. Also adapted spsync to the github securepath lineage:
+      future::then is gone (coroutine API), async_key_query rewritten as a
+      detached coroutine with queries started outside the lock (a ready future
+      resumes inline). Test: push on commit A->B with origin assignment + head
+      checks, duplicate ignored, concurrent commits converge to one tag set.
 
 - 4.3 Tag-bound special references for weak modes  (D4)                           [2d]
       Problem: check_rules_special_seen compares last_seen_block.sequence against

@@ -30,6 +30,10 @@ public:
 	/// Release the storage object
 	virtual void release_sync(std::shared_ptr<storage> storage) = 0;
 
+	/// An already open storage, or null; never creates one (the s2s handlers use this,
+	/// a peer must not create storages on this server, plan 4.2)
+	virtual std::shared_ptr<storage> find_open_sync(protocol::storage_id const&) = 0;
+
 	/// The resolved server identity (plan 3.3); empty when the server has no signing key
 	virtual server_identity const& identity() const = 0;
 

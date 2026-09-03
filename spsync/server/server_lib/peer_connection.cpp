@@ -52,6 +52,17 @@ void peer_connection::set_disconnect_handler(std::function<void(securepath::erro
 	on_disconnect_ = std::move(f);
 }
 
+void peer_connection::push(protocol::push_records const& p) {
+	bool ready{};
+	{
+		std::unique_lock lock{mutex_};
+		ready = peer_id_.has_value();
+	}
+	if(ready) {
+		send_packet(p);
+	}
+}
+
 void peer_connection::terminate(securepath::error const& err) {
 	encrypted_connection::close();
 	on_disconnected(err);
@@ -124,10 +135,9 @@ void peer_connection::send_hello() {
 /// announce the heads of every replicated open storage (the 3.4 exchange)
 void peer_connection::send_our_heads() {
 	for(auto const& sid : sctx_.replicated_storages()) {
-		auto handle = sctx_.acquire_sync(sid);
+		auto handle = sctx_.find_open_sync(sid);
 		if(handle) {
 			send_packet(protocol::peer_heads{sid, handle->heads()});
-			sctx_.release_sync(std::move(handle));
 		}
 	}
 }
@@ -168,18 +178,19 @@ void peer_connection::operator()(protocol::peer_heads const& p) {
 
 void peer_connection::operator()(protocol::pull_records const& p) {
 	if(check_ready("pull_records")) {
-		auto handle = sctx_.acquire_sync(p.sid);
+		auto handle = sctx_.find_open_sync(p.sid);
 		if(!handle) {
+			send_packet(protocol::not_replicating{0, p.sid});
 			send_packet(protocol::response_envelopes{p, make_error(protocol::errc::no_such_storage)});
 		} else {
-			// until foreign origins are stored (plan 4.2) only the own log can be served
+			// origin-indexed serving arrives with anti-entropy (plan 4.4); the own log
+			// can be served directly
 			if(p.origin == sctx_.identity().server_id) {
 				send_packet(protocol::response_envelopes{p, handle->current_sequence_number()
 					, handle->get_envelopes(p.from, p.to)});
 			} else {
 				send_packet(protocol::response_envelopes{p, sequence_number{}, {}});
 			}
-			sctx_.release_sync(std::move(handle));
 		}
 	}
 }
@@ -191,9 +202,18 @@ void peer_connection::operator()(protocol::response_envelopes const& p) {
 
 void peer_connection::operator()(protocol::push_records const& p) {
 	if(check_ready("push_records")) {
-		// applied with storage::apply_foreign in plan 4.2
-		LOG_INFO("peer pushed {} records for storage {} (apply lands with plan 4.2)"
-			, p.envelopes.size(), to_hex(p.sid));
+		auto handle = sctx_.find_open_sync(p.sid);
+		if(!handle || handle->modes().replication == replication_mode::none) {
+			send_packet(protocol::not_replicating{0, p.sid});
+		} else {
+			LOG_TRACE("peer pushed {} records for storage {}", p.envelopes.size(), to_hex(p.sid));
+			for(auto const& env : p.envelopes) {
+				if(auto err = handle->apply_foreign(env)) {
+					// pushes are fire and forget; anti-entropy reconciles later (plan 4.4)
+					LOG_WARN("failed to apply pushed record [origin={}, err={}]", env.origin(), err);
+				}
+			}
+		}
 	}
 }
 

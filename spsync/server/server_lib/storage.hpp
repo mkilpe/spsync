@@ -7,6 +7,7 @@
 
 #include <spsync/protocol/protocol_base.hpp>
 
+#include <functional>
 #include <mutex>
 #include <unordered_map>
 
@@ -52,8 +53,24 @@ public:
 	};
 
 	/// forwarded to chain_sync; on success the envelope is signed once and shared by the
-	/// commit response and the listener notifications
+	/// commit response and the listener notifications; weak replication pushes the
+	/// envelope to the peers through the peer push hook (plan 4.2)
 	commit_outcome commit_block(chain_block const&);
+
+	/**
+	 * Apply a record another server committed (plan 4.2, weak mode): the origin's
+	 * envelope signature and the client signature are verified, known tags/op ids are
+	 * ignored, otherwise the block is validated with the weak rules and applied under
+	 * our own sequence. The origin's signed assignment is what the log keeps (it carries
+	 * origin id + origin sequence for anti-entropy) and the origin head is advanced.
+	 * Foreign records are never pushed onward (peers pull the rest, plan 4.4).
+	 */
+	error apply_foreign(block_envelope const&);
+
+	using peer_push_hook = std::function<void(protocol::storage_id const&, block_envelope const&)>;
+
+	/// set by the storage server: fans a committed envelope out to the connected peers
+	void set_peer_push(peer_push_hook);
 
 	void add_listener(std::shared_ptr<connection> const&);
 
@@ -76,7 +93,9 @@ private:
 	storage_config config_;
 	protocol::storage_id id_;
 	storage_modes modes_;
+	crypto::public_key_access* keys_{};
 	crypto::private_data_access* private_data_{};
+	peer_push_hook peer_push_;
 
 	std::unique_ptr<chain_sync> sync_;
 	std::unique_ptr<storage_heads> heads_;
