@@ -1,6 +1,8 @@
 #include "test_sync_server.hpp"
 #include <spsync/client/record_util.hpp>
 
+#include <securepath/test_frame/test_utils.hpp>
+
 namespace securepath::sync::test {
 
 test_sync_server_client::test_sync_server_client(database::connection_ptr db)
@@ -54,7 +56,7 @@ request_handle test_sync_server_client::fetch_sequence_number() {
 	assert(output_ && server_);
 	request_handle ret = ++req_handle;
 	events_.push_back([=, this] {
-		output_->on_sequence_number_response(ret, server_->sync.current_sequence_number());
+		output_->on_sequence_number_response(ret, sequence_info{server_->sync.current_sequence_number(), server_->id});
 	});
 	return ret;
 }
@@ -108,8 +110,10 @@ test_sync_server_client_context::test_sync_server_client_context(int n, sync_mod
 	io.set_output(engine);
 }
 
-test_sync_server::test_sync_server(chain_sync_config config)
-: sync(database, config)
+test_sync_server::test_sync_server(chain_sync_config config, std::string const& db_name)
+: database(create_test_database(db_name))
+, sync(database, config)
+, id(securepath::test::random_octet_vector(32))
 {
 }
 

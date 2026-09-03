@@ -71,6 +71,9 @@ struct gc_servers {
 	std::uint16_t sync_server_port;
 	std::uint16_t packet_server_port;
 
+	/// further replicas of the sync server, tried in order after the primary (plan 4.5)
+	std::vector<host_port> fallback_sync_servers{};
+
 	host_port key_server() const { return host_port{host, key_server_port}; }
 	host_port sync_server() const { return host_port{host, sync_server_port}; }
 	host_port packet_server() const { return host_port{host, packet_server_port}; }

@@ -73,6 +73,12 @@ public:
 	}
 
 	void update_record_commit_state(record_handle h, chain_block const& record, chain_block_id const& id) {
+		if(h->state() == record_state::in_sync || h->state() == record_state::acked) {
+			// already confirmed: the server's record push can beat the commit response
+			// (it is sent first) and the pending adoption confirmed the record there
+			LTRACE("commit response for an already confirmed record [block id = {}]", id);
+			return;
+		}
 		// a commit response is conceptually only an ack (record_state::acked); on a single
 		// server acked is durable, so the record moves acked -> in_sync in the same step.
 		// The replication work (plan phase 6) splits this into ack now, in_sync on commit.
@@ -350,6 +356,10 @@ public:
 							this->handle_block(record, id, rec);
 						});
 				}
+			} else if(handle->state() == record_state::pending_commit) {
+				// the server's copy of a record we hold as pending: a lost commit response
+				// or a replica resync (plan 4.5) - confirm it under the server's cursor
+				update_record_commit_state(handle, record, id);
 			} else {
 				LTRACE("record block already known [block id = {}, tag = {}]", id, to_hex(record.tag()));
 			}
@@ -361,6 +371,45 @@ public:
 			}
 		} else {
 			LWARN("server sent invalid record block");
+		}
+	}
+
+	/**
+	 * Switch to another replica of the storage (plan 4.5, weak modes): every confirmed
+	 * record is demoted to pending_commit (op id and content survive), the partial
+	 * records of the old replica are dropped and the chain is refetched from the start.
+	 * The new replica's copies re-confirm the records under its cursor (the pending
+	 * adoption in handle_incoming_record); records only we hold are committed to it.
+	 */
+	void begin_replica_resync(crypto::public_key_id const& owner) {
+		LINFO("resyncing with a different replica [owner = {}]", owner);
+		auto const all = sequence_number{std::numeric_limits<std::uint64_t>::max()};
+		for(auto const& h : records.find_range(sequence_number{1}, all, record_state::in_sync)) {
+			h->set_state(record_state::pending_commit);
+		}
+		for(auto const& h : records.find_range(sequence_number{1}, all, record_state::acked)) {
+			h->set_state(record_state::pending_commit);
+		}
+		// only the pending_sync partials are left with server sequences; drop them
+		records.truncate_from(sequence_number{1});
+		records.set_cursor_owner(owner.data());
+		server_seq = sequence_number{};
+	}
+
+	/// replica switch detection (plan 4.5); no-op for servers without an identity
+	void check_cursor_owner(crypto::public_key_id const& server_id) {
+		if(server_id.is_valid()) {
+			auto owner = records.cursor_owner();
+			if(owner.empty()) {
+				records.set_cursor_owner(server_id.data());
+			} else if(owner != server_id.data()) {
+				if(config.mode == sync_mode::require_all_seen) {
+					// strict mode pins the client to one chain; switching needs phase 6
+					LWARN("connected to a different replica in strict mode [owner = {}]", server_id);
+				} else {
+					begin_replica_resync(server_id);
+				}
+			}
 		}
 	}
 
@@ -643,13 +692,14 @@ void sync_engine::on_disconnected(std::optional<error> err) {
 	// nothing for sync_engine
 }
 
-void sync_engine::on_sequence_number_response(request_handle req_handle, result<sequence_number> const& res) {
+void sync_engine::on_sequence_number_response(request_handle req_handle, result<sequence_info> const& res) {
 	std::unique_lock lock{impl_->mutex};
 	if(res) {
-		LINFO("on_sequence_number_response: {} (request handle {})", res.value(), req_handle);
-		impl_->update_server_seq(res.value());
+		LINFO("on_sequence_number_response: {} (request handle {})", res.value().sequence, req_handle);
+		impl_->check_cursor_owner(res.value().server_id);
+		impl_->update_server_seq(res.value().sequence);
 		auto highest_seq = impl_->records.highest_sequence_number();
-		if(highest_seq < res.value()) {
+		if(highest_seq < res.value().sequence) {
 			// try to fetch all records we don't have
 			auto req_h = impl_->comm.fetch_records(highest_seq, sequence_number{});
 			LTRACE("requested records [{},-] (request handle {})", highest_seq, req_h);

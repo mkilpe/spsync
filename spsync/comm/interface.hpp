@@ -46,7 +46,8 @@ struct comm_output : event_system::event_handler {
 	virtual void on_disconnected(std::optional<error>) = 0;
 
 	/// called as a response to fetch_sequence_number, newest sequence number on server
-	virtual void on_sequence_number_response(request_handle, result<sequence_number> const&) = 0;
+	/// together with the server identity (plan 4.5)
+	virtual void on_sequence_number_response(request_handle, result<sequence_info> const&) = 0;
 
 	/// called when record is received as a response to fetch_records call
 	virtual void on_record_response(request_handle, record_response const&) = 0;
@@ -77,7 +78,7 @@ struct on_disconnected {
 	typedef void type(std::optional<error>);
 };
 struct on_sequence_number_response {
-	typedef void type(request_handle, result<sequence_number> const&);
+	typedef void type(request_handle, result<sequence_info> const&);
 };
 struct on_record_response {
 	typedef void type(request_handle, record_response const&);

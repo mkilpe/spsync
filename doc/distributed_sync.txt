@@ -844,7 +844,7 @@ Phase 4  Server-to-server, weak mode  (M3)
       commit on both sides, restart B on the same root -> both converge to the
       same tag set in both directions; the periodic ticks do not duplicate.
 
-- 4.5 Client: replica awareness                                                   [2d]
++ 4.5 Client: replica awareness -- done 2026-09-03                                [2d]
       comm layer: server_id from server_hello; record storage remembers which server
       a sequence cursor belongs to. On connecting to a different replica of the same
       storage in weak mode: fetch from 1, dedup by op_id/tag, adopt the new cursor;
@@ -853,6 +853,30 @@ Phase 4  Server-to-server, weak mode  (M3)
       order.
       Test: client commits on A, disconnects, connects to B, sees everything, commits
       more, reconnects to A, all in sync.
+      Implemented: the server identity is the TRANSPORT key - the pk handshake
+      already authenticated it, so no packet field is needed; comm reads
+      remote_key_id() off the connection and delivers sequence_info{sequence,
+      server_id} with the sequence answer (where fetch decisions happen). The
+      engine tracks the owner in the new sync_state table (record_storage
+      cursor_owner). Owner change in a weak
+      mode -> begin_replica_resync: every confirmed record demotes to
+      pending_commit (op id/content survive), old pending_sync partials dropped,
+      cursor owner adopted, refetch from the start. The new replica's copies
+      re-confirm the pendings through the extended incoming handling: a known tag
+      held as pending_commit is confirmed under the server's cursor (also fixes
+      lost commit responses); records the replica lacks are recommitted with
+      their tags intact. Strict mode logs and refuses to switch (phase 6).
+      Fallout fix: on the real network the record push reaches the committer
+      BEFORE the commit response, so the new adoption confirmed records early and
+      the response then invalidated them ("sequence already in use") - commit
+      responses for already confirmed records are now no-ops. Correction to the
+      plan text: gc_servers held a single host; it and chat_conn_context gained
+      fallback_sync_servers and chat_connection::connect() rotates through the
+      replicas (population from app config comes with the 4.7 cli work).
+      Test: (22) full hop A->B->A with a divergent-order replica B holding an
+      extra record and missing one - resync adopts B's cursor, missing record
+      recommitted tag-intact, more commits on B, hop back onto A's cursor after
+      simulated s2s catch-up, full storage compare green.
 
 - 4.6 Client semantic merge for user changes  (D9)                                [3d]
       client_sync::add_or_remove_user_access becomes a fold over all in_sync

@@ -19,6 +19,8 @@ struct chat_conn_context {
 	channel_list& channels;
 	sync::util::config& config;
 	std::string const path;
+	/// further replicas of the sync server, tried in order after the primary (plan 4.5)
+	std::vector<host_port> const fallback_sync_servers{};
 };
 
 }

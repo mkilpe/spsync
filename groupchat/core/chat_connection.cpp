@@ -109,17 +109,38 @@ struct chat_connection::impl
 		return *ret.first->second;
 	}
 
+	/// endpoints in connection order: the primary followed by the fallback replicas
+	std::vector<host_port> sync_endpoints() const {
+		std::vector<host_port> eps{ccontext.sync_server};
+		eps.insert(eps.end(), ccontext.fallback_sync_servers.begin(), ccontext.fallback_sync_servers.end());
+		return eps;
+	}
+
+	/**
+	 * Connect to the sync server, trying the replicas in order (plan 4.5). After a
+	 * failed session the next connect() starts from the endpoint after the one used, so
+	 * repeated reconnects rotate through the replicas.
+	 */
 	std::future<void> connect() {
 		connect_promise = {};
 		std::chrono::seconds timeout{ccontext.config.get_default("network.timeout", 10).as_int64()};
-		error err = net.connect(ccontext.sync_server.host, ccontext.sync_server.port, timeout);
-		if(err) {
-			if(make_error_code(network::errc::already_connected) == err.code()) {
+		auto const eps = sync_endpoints();
+		error err;
+		bool done = false;
+		for(std::size_t tried = 0; tried != eps.size() && !done; ++tried) {
+			auto const index = (next_server + tried) % eps.size();
+			err = net.connect(eps[index].host, eps[index].port, timeout);
+			if(!err) {
+				done = true;
+				next_server = (index + 1) % eps.size();
+			} else if(make_error_code(network::errc::already_connected) == err.code()) {
 				// connected already, just set the value
+				done = true;
 				connect_promise.set_value();
-			} else {
-				throw err;
 			}
+		}
+		if(!done) {
+			throw err;
 		}
 		return connect_promise.get_future();
 	}
@@ -128,6 +149,8 @@ struct chat_connection::impl
 
 	chat_conn_context ccontext;
 	std::promise<void> connect_promise;
+	/// index of the sync endpoint the next connect() starts from (plan 4.5)
+	std::size_t next_server{};
 
 	std::flat_map<sync::storage_id, std::unique_ptr<channel>> channels;
 	sync::network_connection net;

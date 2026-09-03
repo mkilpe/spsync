@@ -78,7 +78,8 @@ bool comm_test_interface::process_event() {
 request_handle comm_test_interface::fetch_sequence_number() {
 	request_handle ret = ++impl_->req_handle;
 	impl_->event_queue.push_back([=, this] {
-		impl_->output->on_sequence_number_response(ret, impl_->current_seq);
+		// no identity: the owner tracking is a no-op for this harness (plan 4.5)
+		impl_->output->on_sequence_number_response(ret, sequence_info{impl_->current_seq, {}});
 	});
 	return ret;
 }

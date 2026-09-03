@@ -281,6 +281,11 @@ struct record_storage::impl {
 				"oid BLOB,"
 				"data_ref INTEGER UNIQUE);").execute();
 		}
+		if(!db->has_table("sync_state")) {
+			db->prepare("CREATE TABLE sync_state("
+				"key INTEGER PRIMARY KEY CHECK(key = 1),"
+				"cursor_owner BLOB);").execute();
+		}
 	}
 
 	// construct record handle from query (SELECT key, tag, seq, hash, parent_hash, state, ... )
@@ -756,6 +761,24 @@ std::vector<octet_vector> record_storage::find_origin_assignments(octet_vector c
 		}
 	}
 	return ret;
+}
+
+octet_vector record_storage::cursor_owner() const {
+	auto q = impl_->db->prepare("SELECT cursor_owner FROM sync_state WHERE key = 1;");
+	octet_vector ret;
+	auto res = q.execute();
+	if(res) {
+		ret = res.value<octet_vector>(0).value_or(octet_vector{});
+	}
+	return ret;
+}
+
+void record_storage::set_cursor_owner(octet_vector const& owner) {
+	auto q = impl_->db->prepare(
+		"INSERT INTO sync_state(key, cursor_owner) VALUES(1, :o)"
+		" ON CONFLICT(key) DO UPDATE SET cursor_owner = excluded.cursor_owner;");
+	q.bind(":o", owner);
+	q.execute();
 }
 
 record_handle record_storage::find_internal(record_internal_id iid) const {

@@ -34,7 +34,7 @@ public:
 	// --- comm_output interface, see comm/interface.hpp ---
 	virtual void on_connected();
 	virtual void on_disconnected(std::optional<error>);
-	virtual void on_sequence_number_response(request_handle, result<sequence_number> const&);
+	virtual void on_sequence_number_response(request_handle, result<sequence_info> const&);
 	virtual void on_record_response(request_handle, record_response const&);
 	virtual void on_data_response(request_handle, result<record_data_handle> const&);
 	virtual void on_commit_response(request_handle, commit_response const&);

@@ -88,11 +88,13 @@ public:
  */
 class test_sync_server {
 public:
-	test_sync_server(chain_sync_config config = {});
+	test_sync_server(chain_sync_config config = {}, std::string const& db_name = "test_sync_server.db");
 
 public:
-	database::connection_ptr database{create_test_database("test_sync_server.db")};
+	database::connection_ptr database;
 	chain_sync sync;
+	/// identity reported to the clients (plan 4.5); every test server has its own
+	crypto::public_key_id id;
 };
 
 /**

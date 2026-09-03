@@ -1,4 +1,5 @@
 #include <spsync/test/test_sync_server.hpp>
+#include <spsync/test/test_block_creator.hpp>
 
 #include <spsync/client/record_util.hpp>
 #include <spsync/engine/record_creator.hpp>
@@ -628,6 +629,74 @@ TEST_CASE("engine sync local prune at segment", "[unit]") {
 	CHECK(context.server.sync.current_sequence_number() == sequence_number{7});
 	CHECK(recs.find(sequence_number{7}));
 	CHECK(context.client(1).io.records().find(sequence_number{6}));
+}
+
+// (22) replica switch (plan 4.5): connecting to another replica of the same storage in a
+// weak mode refetches from the start, dedups by tag/op and adopts the new cursor; a
+// record only known locally is committed to the new replica
+TEST_CASE("engine sync replica switch", "[unit]") {
+	test::test_sync_context context(chain_sync_config{sync_mode::require_special_seen});
+	context.add_client();
+	context.create_initial_record();
+	while(context.handle_events()) {}
+
+	auto oid = create_object_id();
+	context.client(0).engine.sync_object_change(oid, metadata{});                  // A: 2
+	while(context.handle_events()) {}
+	context.client(0).engine.sync_object_change(create_object_id(), metadata{});   // A: 3
+	while(context.handle_events()) {}
+	REQUIRE(context.compare_record_storages(sequence_number{3}));
+
+	// replica B: the same records in a different local order, one missing, plus one of
+	// its own (as if replicated s2s while the client was away)
+	test::test_sync_server b(chain_sync_config{sync_mode::require_special_seen}, "test_sync_server_b.db");
+	auto recs = context.server.sync.get_records(sequence_number{1}, sequence_number{3});
+	REQUIRE(recs.size() == 3);
+	REQUIRE(b.sync.commit_foreign(recs[0]));
+	REQUIRE(b.sync.commit_foreign(recs[2]));
+
+	// another client committing directly on B; a real record so the hopping client can
+	// verify it (the block creator makes records without usable encryption)
+	encryption_key const key{sequence_number{1}, to_octet_vector("12345678901234567890123456789012")};
+	data_change_record_creator other(key, chain_block_id{sequence_number{2}, recs[2].hash()},
+		std::nullopt, {}, recs[0].tag());
+	other.add_change(create_object_id(), {}, metadata{});
+	auto extra = chain_block{other.result()};
+	REQUIRE(b.sync.commit_block(extra));
+
+	// the client hops from A to B
+	context.disconnect_client(0);
+	while(context.handle_events()) {}
+	context.client(0).io.connect(b);
+	while(context.handle_events()) {}
+
+	auto& recs0 = context.client(0).io.records();
+	// converged under B's cursor: the missing record was recommitted with its tag intact
+	CHECK(b.sync.current_sequence_number() == sequence_number{4});
+	CHECK(recs0.last_block().sequence == sequence_number{4});
+	CHECK(recs0.cursor_owner() == b.id.data());
+	REQUIRE(b.sync.records().find_tag(recs[1].tag()));
+	REQUIRE(recs0.find_tag(recs[1].tag()));
+	CHECK(recs0.find_tag(recs[1].tag())->state() == record_state::in_sync);
+	CHECK(recs0.find_tag(extra.tag()));
+
+	// committing more on B works (the object chain survived the switch)
+	context.client(0).engine.sync_object_change(oid, metadata{});                  // B: 5
+	while(context.handle_events()) {}
+	CHECK(b.sync.current_sequence_number() == sequence_number{5});
+
+	// A catches up s2s (simulated); the client hops back and resyncs onto A's cursor
+	for(auto const& r : b.sync.get_records(sequence_number{1}, sequence_number{5})) {
+		std::ignore = context.server.sync.commit_foreign(r);
+	}
+	REQUIRE(context.server.sync.current_sequence_number() == sequence_number{5});
+	context.disconnect_client(0);
+	while(context.handle_events()) {}
+	context.connect_client(0);
+	while(context.handle_events()) {}
+
+	CHECK(recs0.cursor_owner() == context.server.id.data());
+	CHECK(context.compare_record_storages(sequence_number{5}));
 }
 
 }

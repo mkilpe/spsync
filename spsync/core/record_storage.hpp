@@ -91,6 +91,14 @@ public:
 	std::vector<octet_vector> find_origin_assignments(octet_vector const& origin,
 		sequence_number from, sequence_number to, std::size_t max) const;
 
+	/**
+	 * The id of the server the sequence cursor belongs to (plan 4.5): the sequences of
+	 * the in sync records are that server's assignments. Empty when never set; a client
+	 * connecting to a different replica in weak mode resyncs and adopts its cursor.
+	 */
+	octet_vector cursor_owner() const;
+	void set_cursor_owner(octet_vector const&);
+
 
 	// -- truncation --
 

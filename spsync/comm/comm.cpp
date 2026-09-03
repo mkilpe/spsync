@@ -38,11 +38,14 @@ void comm::on_disconnected(error const& err) {
 
 void comm::handle(protocol::response_sequence_number const& p) {
 	assert(output_);
-	result<sequence_number> arg;
+	result<sequence_info> arg;
 	if(p.error) {
-		arg = result<sequence_number>{protocol::to_error(p.error)};
+		arg = result<sequence_info>{protocol::to_error(p.error)};
 	} else {
-		arg = result<sequence_number>{p.sequence};
+		// the server identity is the transport key: the pk handshake authenticated it,
+		// so it needs no packet field (plan 4.5)
+		arg = result<sequence_info>{sequence_info{p.sequence
+			, nc_impl_->remote_key_id().value_or(crypto::public_key_id{})}};
 	}
 	output_->emit<comm_events::on_sequence_number_response>(p.cid, std::move(arg));
 }

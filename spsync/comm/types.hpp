@@ -4,6 +4,8 @@
 #include <spsync/core/records/block_envelope.hpp>
 #include <spsync/util/result.hpp>
 
+#include <securepath/crypto/public_key_id.hpp>
+
 #include <cstdint>
 
 namespace securepath::sync {
@@ -17,6 +19,13 @@ using util::result;
 
 /// arbitrary number that associates comm_input request to comm_output response
 using request_handle = std::uint32_t;
+
+/// the sequence number answer together with the identity of the answering server (plan 4.5)
+struct sequence_info {
+	sequence_number sequence;
+	/// signing key id of the server; invalid when the server states no identity
+	crypto::public_key_id server_id;
+};
 
 struct record_response {
 	/// the biggest sequence that was returned
