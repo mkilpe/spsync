@@ -73,6 +73,7 @@ storage::storage(protocol::storage_id id, storage_config config, std::optional<s
 	auto db_conn = database::sqlite::create_sqlite_connection(db);
 	modes_ = load_or_create_modes(*db_conn, create_modes, to_hex(id_));
 	chain_sync_config sync_config{modes_.mode, modes_.auth, to_hex(id_)};
+	sync_config.replication = modes_.replication;
 
 	sync_ = std::make_unique<chain_sync>(db_conn, sync_config, keys);
 	heads_ = std::make_unique<storage_heads>(db_conn);

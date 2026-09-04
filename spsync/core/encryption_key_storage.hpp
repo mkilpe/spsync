@@ -38,14 +38,27 @@ public:
 	encryption_key_storage(encryption_key_storage const&) = delete;
 	encryption_key_storage operator=(encryption_key_storage const&) = delete;
 
-	/// returns the current encryption key to use (key with highest sequence number)
+	/// returns the current encryption key to use (key with highest sequence number;
+	/// colliding keys of that sequence are ordered by carrier tag, plan 4.6/D9)
 	encryption_key current_key() const;
 
-	/// returns encryption key with given sequence number is exists
+	/// returns encryption key with given sequence number if it exists; when concurrent
+	/// key rotations collided on the sequence, the carrier tag order decides (D9)
 	std::optional<encryption_key> find(util::sequence_number const&) const;
 
-	/// insert encryption key to the storage
-	void insert(encryption_key const& key);
+	/**
+	 * All keys stored for the sequence, in the deterministic order. Concurrent key
+	 * rotations can produce different keys under one sequence (D9: both are kept);
+	 * decryption tries each candidate.
+	 */
+	std::vector<encryption_key> find_all(util::sequence_number const&) const;
+
+	/**
+	 * Insert an encryption key. A key already known for its sequence is kept as well
+	 * (union, D9); carrier_tag is the tag of the user change record that delivered the
+	 * key and makes the collision order deterministic across replicas.
+	 */
+	void insert(encryption_key const& key, octet_vector const& carrier_tag = {});
 
 	/// get the sequence number of the latest key
 	util::sequence_number last_seq() const;

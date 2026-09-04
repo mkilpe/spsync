@@ -66,6 +66,10 @@ public:
 	/// find the newest in sync record of the given type (e.g. the newest segment record)
 	record_handle find_last_of_type(record_type_tag) const;
 
+	/// all in sync records of the given type in sequence order (e.g. the user change
+	/// records for the membership merge, plan 4.6)
+	std::vector<record_handle> find_all_of_type(record_type_tag) const;
+
 	/// tags of the in sync records with sequence in [first, last], in sequence order
 	std::deque<record_tag> tags_in_range(sequence_number first, sequence_number last) const;
 

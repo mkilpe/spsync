@@ -439,6 +439,27 @@ TEST_CASE("chain_sync commit_foreign is lenient", "[unit]") {
 	CHECK(check_result_error(sync.commit_foreign(foreign), protocol::errc::record_already_committed));
 }
 
+// (6h) a replicated storage accepts only delta mode user changes (plan 4.6/D9)
+TEST_CASE("chain_sync replicated storage requires delta user changes", "[unit]") {
+	remove_database_test_db();
+	chain_sync_config config{sync_mode::allow_all};
+	config.replication = replication_mode::weak;
+	chain_sync sync(database::sqlite::create_sqlite_connection(db_name), config);
+
+	test_block_creator creator;
+	// the test creator makes delta free user changes with an empty (default) user set;
+	// craft records with explicit modes
+	auto make_change = [&](users_change_mode mode) {
+		auth_record<user_change_record> rec{
+			user_change_record{creator.next_record_base(), plain_user_change_data{users{mode}},
+				encrypted_record_header<user_change_header>{}}, util::content_auth{securepath::test::random_octet_vector(16)}};
+		return creator.next_block(rec);
+	};
+
+	CHECK(check_result_error(sync.commit_block(make_change(users_change_mode::full)), protocol::errc::invalid_record));
+	CHECK(sync.commit_block(make_change(users_change_mode::delta)));
+}
+
 // (7) validate/apply split behaves like commit_block
 TEST_CASE("chain_sync validate and apply", "[unit]") {
 	remove_database_test_db();

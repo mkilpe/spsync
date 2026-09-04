@@ -30,6 +30,9 @@ struct chain_sync_config {
 	std::string log_id;
 	/// maximum records returned for one call
 	std::size_t max_returned_records{30};
+	/// how the storage replicates; replicated storages accept only delta mode user
+	/// changes (plan 4.6/D9)
+	replication_mode replication{replication_mode::none};
 };
 
 /**

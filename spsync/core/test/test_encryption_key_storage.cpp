@@ -46,4 +46,36 @@ TEST_CASE("encryption_key_storage", "[unit]") {
 	CHECK(storage.export_keys().size() == 2);
 }
 
+// concurrent key rotations can collide on a sequence (plan 4.6/D9): both keys are kept,
+// the pick for the sequence is deterministic and decryption can try every candidate
+TEST_CASE("encryption key storage keeps colliding keys", "[unit]") {
+	remove_database_test_db();
+	auto db_conn = database::sqlite::create_sqlite_connection(db_name);
+	encryption_key_storage storage(db_conn);
+
+	encryption_key const a{sequence_number{1}, to_octet_vector("key aaaaaaaaaaaa")};
+	encryption_key const b{sequence_number{1}, to_octet_vector("key bbbbbbbbbbbb")};
+	storage.insert(a, to_octet_vector("tag1"));
+	storage.insert(b, to_octet_vector("tag2"));
+	// an identical key is not duplicated
+	storage.insert(a, to_octet_vector("tag3"));
+
+	auto all = storage.find_all(sequence_number{1});
+	REQUIRE(all.size() == 2);
+	CHECK((all[0] == a || all[1] == a));
+	CHECK((all[0] == b || all[1] == b));
+
+	// the single pick is deterministic (ordered by the key bytes)
+	auto picked = storage.find(sequence_number{1});
+	REQUIRE(picked);
+	CHECK(*picked == all[0]);
+	CHECK(storage.current_key() == all[0]);
+
+	// a newer sequence takes over as current
+	encryption_key const c{sequence_number{2}, to_octet_vector("key cccccccccccc")};
+	storage.insert(c);
+	CHECK(storage.current_key() == c);
+	CHECK(storage.find_all(sequence_number{2}).size() == 1);
+}
+
 }

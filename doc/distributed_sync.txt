@@ -878,7 +878,7 @@ Phase 4  Server-to-server, weak mode  (M3)
       recommitted tag-intact, more commits on B, hop back onto A's cursor after
       simulated s2s catch-up, full storage compare green.
 
-- 4.6 Client semantic merge for user changes  (D9)                                [3d]
++ 4.6 Client semantic merge for user changes  (D9) -- done 2026-09-03             [3d]
       client_sync::add_or_remove_user_access becomes a fold over all in_sync
       user_change records in local order with the D9 rules; recomputed when a foreign
       user_change arrives out of order (weak modes only). Delta mode enforced on
@@ -890,6 +890,28 @@ Phase 4  Server-to-server, weak mode  (M3)
       keys are kept.
       Test: concurrent add X on A and remove X on B -> X removed everywhere; concurrent
       key rotation on both -> both keys present, everyone can decrypt everything.
+      Implemented: core/user_merge merge_user_changes - a pure fold whose
+      concurrency decisions ride the 4.3 last_seen_special_tag causal tree (user
+      changes are specials, so concurrent = sibling branches): a removal defeats
+      every addition that did not see it, an addition with the removal in its
+      causal past wins (re-invitation), concurrent updates resolve to the
+      smallest record tag and apply ONE signed access (no union, no escalation);
+      deterministic on the record SET, local order irrelevant -> every replica
+      derives the same membership. client_sync::recompute_members rebuilds the
+      members table with the fold on every incoming user change (pending local
+      changes re-applied on top); the old incremental process_user_change is
+      gone. chain_sync_config gains replication; check_rules(user_change)
+      rejects full mode on replicated storages. Keys: encryption_key_storage
+      keeps EVERY key of a sequence (UNIQUE(seq,key), INSERT OR IGNORE); the
+      deterministic pick is by KEY BYTES, deviating from the planned tag order -
+      carrier tags are not replica stable when a later invite re-delivers a key,
+      the key bytes are (carrier_tag stored as information). The engine and
+      client_sync try every candidate key of a sequence, treating decrypt-parse
+      exceptions as wrong-key. test_block_creator user changes became delta mode.
+      Tests: fold unit cases (both local orders, re-invitation, no-escalation
+      tiebreak, causal supersede, legacy full reset), key collision storage
+      cases, delta enforcement, engine case (23) reading records under two
+      colliding keys.
 
 - 4.7 Multi-server system test harness                                            [2d]
       test_sync_context -> N test servers sharing a peer table, controllable links

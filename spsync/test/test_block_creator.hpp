@@ -37,11 +37,12 @@ struct test_block_creator {
 		return block;
 	}
 
-	/// Create empty user change record for testing
+	/// Create empty user change record for testing (delta mode: replicated storages
+	/// refuse full mode changes, plan 4.6)
 	chain_block test_user_change() {
 		record_tag tag = securepath::test::random_octet_vector(16);
 		auth_record<user_change_record> test_record{
-			user_change_record{next_record_base(), plain_user_change_data{},
+			user_change_record{next_record_base(), plain_user_change_data{users{users_change_mode::delta}},
 				encrypted_record_header<user_change_header>{}}, util::content_auth{tag}};
 		return next_block(test_record);
 	}

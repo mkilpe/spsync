@@ -253,6 +253,14 @@ error chain_sync::check_rules_special_seen(record_tag const& last_seen_special) 
 chain_sync::rule_result chain_sync::check_rules(user_change_record const& rec) const {
 	rule_result r;
 	r.type = rec_type::special;
+	// the D9 merge is defined over deltas only: a full mode change on a replicated
+	// storage could silently drop members added on another replica (plan 4.6)
+	if(config_.replication != replication_mode::none
+		&& rec.data().access().mode() != users_change_mode::delta) {
+		LOG_TRACE("full mode user change on a replicated storage [tag rejected] (rsid={})", config_.log_id);
+		r.err = make_error(protocol::errc::invalid_record, "replicated storage requires delta mode user changes");
+		return r;
+	}
 	if(config_.mode == sync_mode::require_all_seen) {
 		auto const head = log_.head();
 		if(rec.last_seen_block() != head) {

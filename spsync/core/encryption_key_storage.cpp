@@ -8,9 +8,15 @@ namespace securepath::sync {
 
 /*
 	database table 'encryption_key_storage':
-		seq: key sequence number as integer (primary key)
+		seq: key sequence number as integer
 		key: encryption key as blob
+		carrier_tag: tag of the user change record that delivered the key (empty for own
+		             created keys); orders colliding keys of one sequence (plan 4.6/D9)
 
+	Concurrent key rotations on different replicas can produce different keys under the
+	same sequence; all of them are kept (D9). The pick for a sequence is ordered by the
+	key bytes: carrier tags are not replica stable (a key can be re-delivered by a later
+	invite), the key bytes are - every replica picks the same one.
 */
 
 encryption_key_storage::encryption_key_storage(database::connection_ptr conn)
@@ -18,18 +24,21 @@ encryption_key_storage::encryption_key_storage(database::connection_ptr conn)
 {
 	auto q = db_->prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='encryption_key_storage';");
 	if(!q.execute()) {
-		db_->prepare("CREATE TABLE encryption_key_storage(seq INTEGER PRIMARY KEY, key BLOB);").execute();
+		db_->prepare("CREATE TABLE encryption_key_storage(seq INTEGER, key BLOB, carrier_tag BLOB,"
+			" UNIQUE(seq, key));").execute();
 	}
 }
 
 encryption_key encryption_key_storage::current_key() const {
-	auto q = db_->prepare("SELECT * FROM encryption_key_storage WHERE seq = (SELECT max(seq) FROM encryption_key_storage);");
+	auto q = db_->prepare("SELECT key FROM encryption_key_storage"
+		" WHERE seq = (SELECT max(seq) FROM encryption_key_storage)"
+		" ORDER BY key ASC LIMIT 1;");
 	auto res = q.execute();
 
 	if(!res) {
 		throw make_error(errc::no_encryption_key_set);
 	}
-	std::optional<octet_vector> data = res.value<octet_vector>(1);
+	std::optional<octet_vector> data = res.value<octet_vector>(0);
 	if(!data) {
 		throw make_error(securepath::errc::invalid_data, "failed to get encryption key data column");
 	}
@@ -38,15 +47,14 @@ encryption_key encryption_key_storage::current_key() const {
 }
 
 std::optional<encryption_key> encryption_key_storage::find(util::sequence_number const& seq) const {
-	//LOG_TRACE("encryption_key_storage::find (seq={}) {}", seq, static_cast<void const*>(this));
-
-	auto q = db_->prepare("SELECT * FROM encryption_key_storage WHERE seq = :i LIMIT 1;");
+	auto q = db_->prepare("SELECT key FROM encryption_key_storage WHERE seq = :i"
+		" ORDER BY key ASC LIMIT 1;");
 	q.bind(":i", seq.value);
 	auto res = q.execute();
 
 	std::optional<encryption_key> result;
 	if(res) {
-		std::optional<octet_vector> data = res.value<octet_vector>(1);
+		std::optional<octet_vector> data = res.value<octet_vector>(0);
 		if(data) {
 			result = serialisation::asn_der_deserialise<encryption_key>(*data);
 		}
@@ -55,13 +63,31 @@ std::optional<encryption_key> encryption_key_storage::find(util::sequence_number
 	return result;
 }
 
-void encryption_key_storage::insert(encryption_key const& key) {
+std::vector<encryption_key> encryption_key_storage::find_all(util::sequence_number const& seq) const {
+	auto q = db_->prepare("SELECT key FROM encryption_key_storage WHERE seq = :i"
+		" ORDER BY key ASC;");
+	q.bind(":i", seq.value);
+
+	std::vector<encryption_key> ret;
+	auto res = q.execute();
+	for(; res; res.next()) {
+		std::optional<octet_vector> data = res.value<octet_vector>(0);
+		if(data) {
+			ret.push_back(serialisation::asn_der_deserialise<encryption_key>(*data));
+		}
+	}
+	return ret;
+}
+
+void encryption_key_storage::insert(encryption_key const& key, octet_vector const& carrier_tag) {
 	LOG_TRACE("encryption_key_storage::insert (seq={}) {}", key.key_seq, static_cast<void const*>(this));
 
 	octet_vector data = serialisation::asn_der_serialise(key);
-	auto q = db_->prepare("INSERT OR REPLACE INTO encryption_key_storage VALUES(:a,:b);");
+	auto q = db_->prepare("INSERT OR IGNORE INTO encryption_key_storage(seq, key, carrier_tag)"
+		" VALUES(:a, :b, :c);");
 	q.bind(":a", key.key_seq.value);
 	q.bind(":b", data);
+	q.bind(":c", carrier_tag);
 	q.execute();
 }
 

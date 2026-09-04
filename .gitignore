@@ -41,3 +41,14 @@ build*/
 compile_commands.json
 .cache/
 debug.log
+
+# test binaries run from the repo root leave these behind (all regenerated;
+# test_keys/*.db stay tracked - only root level databases are ignored)
+/*.db
+:memory
+/record-storages/
+/test-storage-root*/
+/test-s2s-*/
+/client_*/
+/gc_test_c*/
+/spsync_server.log

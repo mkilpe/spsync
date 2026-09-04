@@ -6,6 +6,8 @@
 
 #include <spsync/core/crypto_context.hpp>
 #include <spsync/core/progress.hpp>
+#include <spsync/core/user_merge.hpp>
+#include <spsync/core/records/segment_record.hpp>
 #include <spsync/engine/sync_engine.hpp>
 #include <spsync/engine/record_verifier.hpp>
 #include <spsync/comm/net_connection.hpp>
@@ -79,37 +81,68 @@ struct client_sync::impl : engine_output {
 		}
 	}
 
-	//todo: handle return correct for higher level notification
-	users process_user_change(plain_user_change_data const& change) {
-		LOG_TRACE("process_user_change [users={}]", change.access());
-		users delta;
-		auto us = change.access();
-		database::transaction trans{*db};
-
-		if(us.mode() == users_change_mode::full) {
-			//t: consider how to do this so that we don't overwrite possible pending changes
-			remove_all_members();
-			for(auto const& v : change.access()) {
-				create_member(v.user, member_status::member);
-			}
-		} else {
-			delta = change.access();
-			for(auto const& v : change.access()) {
-				member_status status;
-				auto k = find_member(v.user, status);
-				if(k && v.access == util::access_type::no_access) {
-					LOG_TRACE("process_user_change remove [user={}]", v.user);
-					remove_member(v.user);
-				} else if(!k) {
-					LOG_TRACE("process_user_change create [user={}]", v.user);
-					create_member(v.user, member_status::member);
-				} else {
-					LOG_TRACE("process_user_change set [user={}]", v.user);
-					set_member_status(v.user, member_status::member);
+	/// the stored key of the record's sequence that authenticates the user change;
+	/// colliding key rotations keep several keys per sequence (D9), each is tried
+	std::optional<encryption_key> find_user_change_key(sync::user_change_record const& rec, chain_block const& block) const {
+		std::optional<encryption_key> ret;
+		for(auto const& key : enc_keys.find_all(rec.encryption_key())) {
+			if(!ret) {
+				try {
+					sync::user_change_record_verifier ver(key, rec, block.auth());
+					if(ver.is_authentic()) {
+						ret = key;
+					}
+				} catch(std::exception const&) {
+					// a wrong candidate decrypts garbage that fails to parse
 				}
 			}
 		}
-		return delta;
+		return ret;
+	}
+
+	/**
+	 * Rebuild the membership from every in sync user change with the D9 merge fold
+	 * (plan 4.6). The fold is deterministic on the record set, so every replica derives
+	 * the same members even when the local orders differ; the local pending user
+	 * changes are re-applied on top as pending states.
+	 */
+	void recompute_members() {
+		std::vector<user_change_entry> entries;
+		std::map<record_tag, record_tag> parent_special;
+
+		for(auto const& h : storage.find_all_of_type(segment_record_tag)) {
+			auto block = h->record();
+			parent_special[block.tag()] = block.deserialise_to<segment_record>().last_seen_special_tag();
+		}
+		for(auto const& h : storage.find_all_of_type(user_change_record_tag)) {
+			auto block = h->record();
+			auto rec = block.deserialise_to<sync::user_change_record>();
+			parent_special[block.tag()] = rec.last_seen_special_tag();
+			if(auto key = find_user_change_key(rec, block)) {
+				sync::user_change_record_verifier ver(*key, rec, block.auth());
+				entries.push_back(user_change_entry{ver.data().access(), block.tag(), rec.last_seen_special_tag()});
+			} else {
+				LOG_WARN("skipping user change without a verifying key [tag={}]", to_hex(block.tag()));
+			}
+		}
+		auto const merged = merge_user_changes(entries, parent_special);
+		LOG_TRACE("recomputed members [changes={}, members={}]", entries.size(), merged.size());
+
+		database::transaction trans{*db};
+		remove_all_members();
+		for(auto const& ua : merged) {
+			create_member(ua.user, member_status::member);
+		}
+		for(auto h = storage.find_first_pending_commit(); h; h = storage.find_next_pending_commit(h)) {
+			if(h->type() == user_change_record_tag) {
+				auto block = h->record();
+				auto rec = block.deserialise_to<sync::user_change_record>();
+				if(auto key = find_user_change_key(rec, block)) {
+					sync::user_change_record_verifier ver(*key, rec, block.auth());
+					update_members(ver.data().access());
+				}
+			}
+		}
 	}
 
 	void on_user_changed(record_handle rec) override {
@@ -118,21 +151,19 @@ struct client_sync::impl : engine_output {
 		auto record = rec->record();
 		auto user_rec = record.deserialise_to<sync::user_change_record>();
 
-		auto key = enc_keys.find(user_rec.encryption_key());
+		auto key = find_user_change_key(user_rec, record);
 		if(key) {
 			sync::user_change_record_verifier ver(*key, user_rec, record.auth());
-			if(ver.is_authentic()) {
-				process_user_change(ver.data());
-				parent->on_user_change(rec,
-					user_change{
-						ver.data().access(),
-						ver.header().metadata(),
-						record.auth().signature_issuer()});
-			} else {
-				LOG_WARN("message not authentic");
-			}
+			// the membership is re-derived with the D9 fold: a foreign user change can
+			// arrive anywhere in the local order (plan 4.6)
+			recompute_members();
+			parent->on_user_change(rec,
+				user_change{
+					ver.data().access(),
+					ver.header().metadata(),
+					record.auth().signature_issuer()});
 		} else {
-			LOG_WARN("could not find key to decrypt message (seq={})", user_rec.encryption_key());
+			LOG_WARN("could not verify user change (seq={})", user_rec.encryption_key());
 		}
 	}
 

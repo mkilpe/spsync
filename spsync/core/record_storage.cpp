@@ -667,6 +667,21 @@ record_handle record_storage::find_last_of_type(record_type_tag type) const {
 	return impl_->load_record(q.execute());
 }
 
+std::vector<record_handle> record_storage::find_all_of_type(record_type_tag type) const {
+	auto q = impl_->db->prepare(
+		"SELECT key, tag, seq, hash, parent_hash, state FROM record"
+		" WHERE state = :state AND type = :type ORDER BY seq ASC;");
+	q.bind(":state", std::to_underlying(record_state::in_sync));
+	q.bind(":type", std::to_underlying(type));
+
+	std::vector<record_handle> ret;
+	auto res = q.execute();
+	for(; res; res.next()) {
+		ret.push_back(impl_->load_record(res));
+	}
+	return ret;
+}
+
 std::deque<record_tag> record_storage::tags_in_range(sequence_number first, sequence_number last) const {
 	auto q = impl_->db->prepare(
 		"SELECT tag FROM record WHERE state = :state AND seq >= :first AND seq <= :last"

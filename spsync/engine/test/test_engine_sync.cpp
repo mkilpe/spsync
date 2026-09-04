@@ -699,4 +699,35 @@ TEST_CASE("engine sync replica switch", "[unit]") {
 	CHECK(context.compare_record_storages(sequence_number{5}));
 }
 
+// (23) colliding encryption keys (plan 4.6/D9): concurrent key rotations leave two keys
+// under one sequence; records encrypted with either of them stay readable
+TEST_CASE("engine sync colliding encryption keys", "[unit]") {
+	test::test_sync_context context(chain_sync_config{sync_mode::allow_all});
+	context.add_client();
+	context.create_initial_record();
+	while(context.handle_events()) {}
+
+	// two rotations collided on sequence 2 (as merged from another replica)
+	encryption_key const key_a{sequence_number{2}, to_octet_vector("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")};
+	encryption_key const key_b{sequence_number{2}, to_octet_vector("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")};
+	context.client(0).enc_keys.insert(key_a, securepath::test::random_octet_vector(16));
+	context.client(0).enc_keys.insert(key_b, securepath::test::random_octet_vector(16));
+
+	// records committed under each of the colliding keys
+	auto make_change = [&](encryption_key const& key) {
+		data_change_record_creator creator(key, context.server.sync.records().last_block(), std::nullopt);
+		creator.add_change(create_object_id(), {}, metadata{});
+		return chain_block{creator.result()};
+	};
+	REQUIRE(context.server.sync.commit_block(make_change(key_a)));
+	REQUIRE(context.server.sync.commit_block(make_change(key_b)));
+	while(context.handle_events()) {}
+
+	// the client verified and applied both
+	auto& recs = context.client(0).io.records();
+	CHECK(recs.last_block().sequence == sequence_number{3});
+	CHECK(recs.find(sequence_number{2}));
+	CHECK(recs.find(sequence_number{3}));
+}
+
 }

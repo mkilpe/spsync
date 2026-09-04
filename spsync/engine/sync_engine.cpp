@@ -52,6 +52,7 @@ public:
 	}
 
 	void extract_encryption_key(chain_block const& rec) {
+		auto const carrier_tag = rec.tag();
 		auto user_change = rec.deserialise_to<user_change_record>();
 		auto env_c = user_change.data().enveloped_content();
 		if(!env_c.empty()) {
@@ -59,12 +60,10 @@ public:
 				//t: handle overwriting pending keys etc
 				auto plain_env = serialisation::asn_der_deserialise<env_structure>(env_c.decrypt(my_private_key(crypto.private_data())));
 				for(auto&& v : plain_env.enc_keys) {
-					if(!crypto.enc_keys().find(v.key_seq)) {
-						LINFO("saving not seen encryption key (seq={})", v.key_seq);
-						crypto.enc_keys().insert(v);
-					} else {
-						LTRACE("already known encryption key (seq={})", v.key_seq);
-					}
+					// keys are unioned (D9): a colliding sequence keeps both keys and
+					// the insert ignores an identical one
+					LTRACE("saving encryption key (seq={})", v.key_seq);
+					crypto.enc_keys().insert(v, carrier_tag);
 				}
 			} catch(std::exception const& exp) {
 				LWARN("exception while handling encryption key from user change record (tag={}, exp={})", to_hex(rec.tag()), exp.what());
@@ -284,9 +283,37 @@ public:
 		}
 	}
 
+	/**
+	 * The key of the record's key sequence that authenticates it. Usually the single
+	 * stored key; concurrent key rotations can collide on a sequence with different
+	 * keys (D9: both are kept) and then every candidate is tried (plan 4.6).
+	 */
+	template<typename Record>
+	std::optional<encryption_key> find_record_key(Record const& rec, chain_block const& record) const {
+		auto candidates = crypto.enc_keys().find_all(rec.encryption_key());
+		std::optional<encryption_key> ret;
+		if(candidates.size() == 1) {
+			ret = candidates.front();
+		} else {
+			for(auto const& key : candidates) {
+				if(!ret) {
+					try {
+						record_verifier<Record> ver(key, rec, record.auth());
+						if(ver.is_authentic()) {
+							ret = key;
+						}
+					} catch(std::exception const&) {
+						// a wrong candidate decrypts garbage that fails to parse
+					}
+				}
+			}
+		}
+		return ret;
+	}
+
 	template<typename Record>
 	void handle_block(chain_block const& record, chain_block_id const& id, Record const& rec) {
-		auto enc_key = crypto.enc_keys().find(rec.encryption_key());
+		auto enc_key = find_record_key(rec, record);
 		if(enc_key) {
 			verify_block(*enc_key, record, id, rec);
 		} else {
