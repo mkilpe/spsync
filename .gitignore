@@ -52,3 +52,8 @@ debug.log
 /client_*/
 /gc_test_c*/
 /spsync_server.log
+
+# asciidoctor-diagram intermediate image cache
+doc/diagrams/diag-*.png
+doc/diagrams/diag-*.svg
+.asciidoctor/

@@ -913,14 +913,57 @@ Phase 4  Server-to-server, weak mode  (M3)
       cases, delta enforcement, engine case (23) reading records under two
       colliding keys.
 
-- 4.7 Multi-server system test harness                                            [2d]
++ 4.7 Multi-server system test harness -- done 2026-09-04                         [2d]
       test_sync_context -> N test servers sharing a peer table, controllable links
       (up/down/delay). compare_record_storages() becomes "same op_id set, same
       derived membership, same decrypted message set"; sequences may differ.
       Add [stress] test: random commits, random partitions, assert convergence.
+      Implemented: test_sync_context grows add_server/server_n, add_link/set_link
+      (up/down + per-record tick delay), connect_client_to, and replicate_tick -
+      the deterministic in-process stand-in for the 4.2 push and 4.4 anti-entropy:
+      per link direction a seen-set and an aging queue, delivery via
+      commit_foreign so dedup and op races behave exactly like the real path;
+      handle_events ticks replication so "loop until quiet" drains everything
+      (aging queues count as activity). servers_converged() is the semantic
+      compare: equal op id sets, equal D9-fold membership (user_merge over each
+      replica's records), equal decrypted data change multisets - local sequences
+      free to differ. The old positional compare stays for single-server tests.
+      Tests: (24) three replicas in a chain topology with clients on each -
+      transitive spread through the middle, partition/diverge/heal, a delayed
+      link converging late, then a client hops to another replica (4.5 resync)
+      and keeps working; (25) [stress] 120 rounds, SIX clients (two per server),
+      seeded-random commits, concurrent membership add/removes, link toggles and
+      clients hopping between replicas mid-flight, then drain and assert
+      convergence + equal head counts. Real-transport equivalents live in test_s2s.cpp (4.1-4.4).
+      Full-scenario test (25): three replicas, six clients (two each), phased so
+      each phase asserts convergence - data changes, a membership remove, a key
+      rotation with data under the new key, CONCURRENT rotations (colliding keys
+      at one sequence, D9), a SEGMENT seal with data on top, a partition with a
+      client hop and heal, then a mixed burst. Exercises every record kind and
+      event in one run. Needed engine work for real key rotation: keys are
+      extracted from ANY user change's KEM envelope (not just the first record),
+      a freshly learned key retries records that waited undecrypted in
+      pending_sync (out-of-order key arrival), and find_record_key now verifies
+      every candidate key of a sequence so a wrong colliding key is never handed
+      to a verifier. Note: this and the [stress] loop are the M3 shakedown.
+      Human-readable narration: set_trace(true) prints one line per event -
+      "[server N] commit #seq type tag", "[server N] replicate ... (from server
+      M)", link up/DOWN - and print_summary() the final per-server state
+      (records/ops/messages/members + the convergence verdict) including each
+      replica's local apply ORDER as a tag list - the same change set visibly
+      observed in different orders per replica (D4) - and every CLIENT's view:
+      which server it sits on (after any hop), record/pending counts, and its
+      own order (collapsed to 'same as its server' when identical - a lagging or
+      just-hopped client prints its own diverging order/pending count). Catch shows it
+      with -s and automatically for failed cases, so a failing stress run
+      narrates itself.
 
       M3 done when: 4.7 stress test passes for hours; cli groupchat works against
       two servers with one killed and restarted mid-conversation.
+      M3 status 2026-09-04: all phase 4 code + tests in place; the bounded stress
+      passes ([stress] tag, bump `rounds` for long runs). Remaining verification
+      is operational: an hours-long stress run and the two-server cli groupchat
+      session (needs the 4.5 fallback endpoints wired into the cli config).
 
 
 Phase 5  Server recovery and evidence  (M4)

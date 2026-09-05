@@ -51,24 +51,32 @@ public:
 		}
 	}
 
-	void extract_encryption_key(chain_block const& rec) {
+	/// extract the keys a user change carries in its per-member KEM envelope; returns true
+	/// when a not yet known key was added. The envelope is decrypted with our KEM private
+	/// key, independent of the AES record key and of chain order, so a rotated key can be
+	/// learned even before the record that uses it (plan 4.6)
+	bool extract_encryption_key(chain_block const& rec) {
 		auto const carrier_tag = rec.tag();
 		auto user_change = rec.deserialise_to<user_change_record>();
 		auto env_c = user_change.data().enveloped_content();
+		bool learned = false;
 		if(!env_c.empty()) {
 			try {
-				//t: handle overwriting pending keys etc
 				auto plain_env = serialisation::asn_der_deserialise<env_structure>(env_c.decrypt(my_private_key(crypto.private_data())));
 				for(auto&& v : plain_env.enc_keys) {
 					// keys are unioned (D9): a colliding sequence keeps both keys and
 					// the insert ignores an identical one
+					if(crypto.enc_keys().find_all(v.key_seq).empty()) {
+						learned = true;
+					}
 					LTRACE("saving encryption key (seq={})", v.key_seq);
 					crypto.enc_keys().insert(v, carrier_tag);
 				}
 			} catch(std::exception const& exp) {
-				LWARN("exception while handling encryption key from user change record (tag={}, exp={})", to_hex(rec.tag()), exp.what());
+				LTRACE("could not extract keys from user change (not a member or wrong key) [tag={}, exp={}]", to_hex(rec.tag()), exp.what());
 			}
 		}
+		return learned;
 	}
 
 	void update_record_commit_state(record_handle h, chain_block const& record, chain_block_id const& id) {
@@ -290,21 +298,20 @@ public:
 	 */
 	template<typename Record>
 	std::optional<encryption_key> find_record_key(Record const& rec, chain_block const& record) const {
-		auto candidates = crypto.enc_keys().find_all(rec.encryption_key());
 		std::optional<encryption_key> ret;
-		if(candidates.size() == 1) {
-			ret = candidates.front();
-		} else {
-			for(auto const& key : candidates) {
-				if(!ret) {
-					try {
-						record_verifier<Record> ver(key, rec, record.auth());
-						if(ver.is_authentic()) {
-							ret = key;
-						}
-					} catch(std::exception const&) {
-						// a wrong candidate decrypts garbage that fails to parse
+		// try each key stored for the sequence and return the one that authenticates the
+		// record; concurrent key rotations leave several keys at one sequence and only one
+		// is right for a given record (plan 4.6/D9). Returns nullopt when none matches
+		// (e.g. the record's key is not learned yet), keeping callers off a wrong key.
+		for(auto const& key : crypto.enc_keys().find_all(rec.encryption_key())) {
+			if(!ret) {
+				try {
+					record_verifier<Record> ver(key, rec, record.auth());
+					if(ver.is_authentic()) {
+						ret = key;
 					}
+				} catch(std::exception const&) {
+					// a wrong candidate decrypts garbage that fails to parse
 				}
 			}
 		}
@@ -314,26 +321,58 @@ public:
 	template<typename Record>
 	void handle_block(chain_block const& record, chain_block_id const& id, Record const& rec) {
 		auto enc_key = find_record_key(rec, record);
+		bool learned = false;
+		if(!enc_key) {
+			// a user change carries its keys in a KEM envelope we can open regardless of
+			// the AES key; extract them so the initial record and any later key rotation
+			// become readable (plan 4.6)
+			if constexpr(std::is_same_v<Record, user_change_record>) {
+				learned = extract_encryption_key(record);
+				enc_key = find_record_key(rec, record);
+			}
+		}
 		if(enc_key) {
 			verify_block(*enc_key, record, id, rec);
 		} else {
-			auto last_block = records.last_block();
-			if(last_block.sequence == sequence_number{} && record.sequence() == sequence_number{1}) {
-				LTRACE("first record, attempting to extract encryption key");
-				//t: optional check of the tag of the first record (i.e. if given from above)
-				//this is first record, try to extract enc key
-				extract_encryption_key(record);
-				auto enc_key = crypto.enc_keys().find(rec.encryption_key());
-				if(enc_key) {
-					verify_block(*enc_key, record, id, rec);
-				} else {
-					LINFO("Failed to extract encryption key from first record");
-					records.create(record, record_state::pending_sync);
-				}
-			} else {
-				LINFO("No valid key for record [block id = {}, tag = {}, key id = {}]", id, to_hex(record.tag()), rec.encryption_key());
-				// store for later, when we hopefully have the key
-				records.create(record, record_state::pending_sync);
+			LINFO("No valid key for record [block id = {}, tag = {}, key id = {}]", id, to_hex(record.tag()), rec.encryption_key());
+			// store for later, when we hopefully have the key
+			records.create(record, record_state::pending_sync);
+		}
+		if(learned) {
+			// a record that arrived before its key waits in pending_sync; a freshly
+			// learned key may now unlock it (plan 4.6, out of order key arrival)
+			retry_undecrypted_pending();
+		}
+	}
+
+	/// re-attempt pending_sync records that could not be decrypted for a missing key;
+	/// a now readable record is verified and promoted through the normal chain check
+	void retry_undecrypted_pending() {
+		bool progress = true;
+		while(progress) {
+			progress = false;
+			for(auto const& h : records.find_range(sequence_number{1},
+				sequence_number{std::numeric_limits<std::uint64_t>::max()}, record_state::pending_sync)) {
+				auto block = h->record();
+				progress |= block.deserialise_record<bool>([&](auto const& r) {
+						auto key = find_record_key(r, block);
+						if(!key) {
+							return false;
+						}
+						record_verifier<std::decay_t<decltype(r)>> ver(*key, r, block.auth());
+						if(!ver.is_authentic()) {
+							return false;
+						}
+						if constexpr(std::is_same_v<std::decay_t<decltype(r)>, user_change_record>) {
+							extract_encryption_key(block);
+						}
+						if(check_chain_block(block, h->block_id()) == record_state::in_sync) {
+							h->set_state(record_state::in_sync);
+							notify_on_record(h);
+							return true;
+						}
+						return false;
+					});
 			}
 		}
 	}
