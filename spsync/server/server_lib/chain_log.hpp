@@ -26,6 +26,15 @@ public:
 	chain_block_id head() const;
 
 	/**
+	 * The head of the given origin in this log (plan 5.2): the newest record it assigned.
+	 * For the own origin this is the last locally committed record, NOT the local head -
+	 * records applied from other origins sit in between under local sequences and are not
+	 * ours to announce (a peer pulling "our" sequences up to the local head would never
+	 * reach it).
+	 */
+	chain_block_id origin_head(crypto::public_key_id const& origin) const;
+
+	/**
 	 * Get envelopes for the records [start, end], at most max entries. An invalid start
 	 * defaults to the first record and an invalid end to the head.
 	 */

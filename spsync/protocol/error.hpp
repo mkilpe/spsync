@@ -18,6 +18,8 @@ enum class errc {
 	storage_mode_mismatch,
 	unknown_signer,
 	invalid_storage_modes,
+	/// the replica is still catching up with its peers (bootstrap, plan 5.2): try another one
+	storage_syncing,
 	end_of_list
 };
 

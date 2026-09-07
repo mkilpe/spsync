@@ -78,7 +78,11 @@ void connection::handle(protocol::request_sequence_number const& p) {
 	storage_modes smodes{};
 	try {
 		auto handle = find_storage(p.sid);
-		if(handle) {
+		if(handle && context_.is_syncing(p.sid)) {
+			// a bootstrapping replica sends the client to another one (plan 5.2)
+			LOG_INFO("storage {} is still syncing, client {} told to try another replica", to_hex(p.sid), id_);
+			error = make_error(protocol::errc::storage_syncing);
+		} else if(handle) {
 			smodes = handle->modes();
 			auto expected = modes_from_wire(p.expected_mode, p.expected_amode, p.expected_repl);
 			if(expected && expected->replication == replication_mode::none) {
@@ -152,7 +156,9 @@ void connection::handle(protocol::request_commit const& p) {
 	sequence_number server_max;
 	try {
 		auto handle = find_storage(p.sid);
-		if(handle) {
+		if(handle && context_.is_syncing(p.sid)) {
+			result = make_error(protocol::errc::storage_syncing);
+		} else if(handle) {
 			auto outcome = handle->commit_block(p.record);
 			result = std::move(outcome.block);
 			envelope = std::move(outcome.envelope);

@@ -249,6 +249,8 @@ public:
 				&& valid_storage_modes(*peer_modes)) {
 				LOG_INFO("creating the replica of storage {} with the modes a peer announced", to_hex(id));
 				ret = acquire_sync(id, *peer_modes);
+				// it answers clients storage_syncing until the peers' heads are covered (plan 5.2)
+				ret->set_bootstrapping(true);
 			}
 		} catch(securepath::error const& err) {
 			LOG_WARN("cannot open the replica of storage {}: {}", to_hex(id), err);
@@ -318,6 +320,44 @@ public:
 		if(!context_.public_keys().find(key.id())) {
 			LOG_INFO("trusting the key of peer {}", key.id());
 			context_.public_keys().insert(key);
+		}
+	}
+
+	void learn_signer_key(crypto::public_key const& key) override {
+		if(!key.verify_me()) {
+			LOG_WARN("peer sent a public key that is not self authentic [id={}]", key.id());
+		} else if(!context_.public_keys().find(key.id())) {
+			LOG_INFO("learned the key of record signer {} from a peer", key.id());
+			context_.public_keys().insert(key);
+		}
+	}
+
+	std::optional<crypto::public_key> find_key(crypto::public_key_id const& id) const override {
+		return context_.public_keys().find(id);
+	}
+
+	/// a connected peer announced a head of the storage we have not reached
+	bool behind_a_peer(std::shared_ptr<storage> const& handle) {
+		auto const& own = identity_.server_id;
+		for(auto const& conn : peer_connections()) {
+			for(auto const& head : conn->heads_of_peer(handle->id())) {
+				if(head.origin != own && handle->known_origin_seq(head.origin) < head.block.sequence) {
+					return true;
+				}
+			}
+		}
+		return false;
+	}
+
+	bool is_syncing(protocol::storage_id const& sid) override {
+		auto handle = find_open_sync(sid);
+		return handle && (handle->bootstrapping() || behind_a_peer(handle));
+	}
+
+	void note_caught_up(protocol::storage_id const& sid) override {
+		auto handle = find_open_sync(sid);
+		if(handle && handle->bootstrapping() && !behind_a_peer(handle)) {
+			handle->set_bootstrapping(false);
 		}
 	}
 
@@ -488,6 +528,10 @@ void storage_server::start() {
 
 bool storage_server::has_storage(protocol::storage_id const& sid) const {
 	return impl_->find_open_sync(sid) != nullptr || impl_->exists_on_disk(sid);
+}
+
+bool storage_server::is_syncing(protocol::storage_id const& sid) const {
+	return impl_->is_syncing(sid);
 }
 
 void storage_server::close() {

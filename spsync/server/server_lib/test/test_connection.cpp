@@ -3,6 +3,8 @@
 
 #include <spsync/client/record_util.hpp>
 #include <spsync/comm/net_connection.hpp>
+#include <spsync/protocol/error.hpp>
+#include <spsync/server/server_lib/storage.hpp>
 #include <spsync/core/encryption_key_storage.hpp>
 #include <spsync/engine/sync_engine.hpp>
 #include <spsync/test/util.hpp>
@@ -17,6 +19,7 @@
 #include <infrastructure/key_client/key_client.hpp>
 #include <infrastructure/key_server/server_lib/defaults.hpp>
 
+#include <atomic>
 #include <future>
 
 // + (1) connect single client by registering key first
@@ -75,9 +78,17 @@ public:
 	}
 
 	void on_disconnect(error const& err) {
+		if(err.code() == make_error_code(protocol::errc::storage_syncing)) {
+			syncing_seen = true;
+		}
 		try {
 			connected_.set_exception(std::make_exception_ptr(err));
 		} catch(...) {}
+	}
+
+	/// arm wait_for_connection for another connect() after a disconnect
+	void reset_connection_wait() {
+		connected_ = std::promise<void>{};
 	}
 
 	void on_create_storage(storage_id const& sid, error const& err) {
@@ -129,6 +140,8 @@ public:
 	sync_engine_config engine_config;
 
 	std::unique_ptr<sync_engine> engine;
+	/// the server answered storage_syncing and the session was dropped (plan 5.2)
+	std::atomic<bool> syncing_seen{};
 
 private:
 	std::promise<void> connected_;
@@ -375,6 +388,49 @@ TEST_CASE("replicated storage modes not asserted", "[system]") {
 	client2.connect();
 	client2.wait_for_connection();
 	client2.connect_to_storage(sid);
+	WAIT_CHECK(client2.storage.last_block().sequence == sequence_number{1}, 2s);
+}
+
+
+// (7) a replica still catching up answers storage_syncing and drops the session so the
+// client can try another replica; once caught up the same client syncs normally (plan 5.2)
+TEST_CASE("storage syncing sends the client elsewhere", "[system]") {
+	event_system::single_thread_event_loop single_thread_event_loop;
+	test::test_context net_context;
+
+	net_context.add_client(2);
+	net_context.add_client_keys_for_server();
+	net_context.share_client_keys();
+
+	test::test_server server(net_context.server_context());
+	server.run();
+	std::this_thread::sleep_for(1s);
+
+	test_client client1(net_context.client_context(0), single_thread_event_loop, 0);
+	client1.connect();
+	client1.wait_for_connection();
+	auto sid = client1.create_remote_storage();
+	client1.wait_for_storage_created();
+	client1.create_initial_record({net_context.key_id(1)});
+	WAIT_CHECK(client1.storage.last_block().sequence == sequence_number{1}, 2s);
+
+	// what a replica created from a peer's announcement looks like until it caught up
+	auto handle = server.storages().open_storage(sid);
+	REQUIRE(handle);
+	handle->set_bootstrapping(true);
+
+	test_client client2(net_context.client_context(1), single_thread_event_loop, 1);
+	client2.connect();
+	client2.wait_for_connection();
+	client2.connect_to_storage(sid);
+	WAIT_CHECK(client2.syncing_seen.load(), 2s);
+	CHECK(client2.storage.last_block().sequence == sequence_number{});
+
+	// caught up: the same client reconnects (as its owner would, rotating) and syncs
+	handle->set_bootstrapping(false);
+	client2.reset_connection_wait();
+	client2.connect();
+	client2.wait_for_connection();
 	WAIT_CHECK(client2.storage.last_block().sequence == sequence_number{1}, 2s);
 }
 

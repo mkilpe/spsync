@@ -48,6 +48,12 @@ void comm::handle(protocol::response_sequence_number const& p) {
 			, nc_impl_->remote_key_id().value_or(crypto::public_key_id{})}};
 	}
 	output_->emit<comm_events::on_sequence_number_response>(p.cid, std::move(arg));
+	if(p.error && protocol::to_error(p.error).code() == make_error_code(protocol::errc::storage_syncing)) {
+		// the replica is still catching up (plan 5.2): drop the session so the
+		// connection owner reconnects, rotating to another replica when it has one
+		LOG_INFO("replica is syncing the storage, closing the session to try another replica");
+		nc_impl_->close(protocol::to_error(p.error));
+	}
 }
 
 void comm::handle(protocol::response_records const& p) {

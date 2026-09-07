@@ -6,7 +6,10 @@
 #include <spsync/core/records/block_envelope.hpp>
 #include <spsync/core/sync_mode.hpp>
 
+#include <securepath/crypto/public_key.hpp>
 #include <securepath/crypto/public_key_id.hpp>
+
+#include <optional>
 
 namespace securepath::sync::protocol {
 inline namespace v1 {
@@ -130,6 +133,44 @@ inline std::optional<storage_modes> peer_modes(wire_modes const& m) {
 	return modes_from_wire(m.mode, m.amode, m.repl);
 }
 
+/**
+ * Ask the peer for a public key it holds (plan 5.2): a replica bootstrapping a storage
+ * meets record signers it never saw (their clients registered elsewhere); the peer that
+ * accepted the record has the key. Public keys are self authenticating (id = hash).
+ */
+struct request_key : protocol_base {
+	request_key(call_id cid = 0, crypto::public_key_id k = {})
+	: cid(cid)
+	, key(std::move(k))
+	{}
+
+	call_id cid{};
+	crypto::public_key_id key;
+
+	template<typename S>
+	void serialise(S& s) {
+		serialisation::sequence<S> seq(s);
+		seq & static_cast<protocol_base&>(*this) & cid & key;
+	}
+};
+
+/// answer to request_key; the key is absent when the peer does not hold it either
+struct response_key : protocol_base {
+	response_key(call_id cid = 0, std::optional<crypto::public_key> k = {})
+	: cid(cid)
+	, key(std::move(k))
+	{}
+
+	call_id cid{};
+	std::optional<crypto::public_key> key;
+
+	template<typename S>
+	void serialise(S& s) {
+		serialisation::sequence<S> seq(s);
+		seq & static_cast<protocol_base&>(*this) & cid & key;
+	}
+};
+
 /// the sender does not replicate the storage (answer to heads/pull/push for it)
 struct not_replicating : storage_request_base {
 	using storage_request_base::storage_request_base;
@@ -147,7 +188,9 @@ using s2s_types = typelist<
 			type_tag<pull_records, 3>,
 			type_tag<response_envelopes, 4>,
 			type_tag<push_records, 5>,
-			type_tag<not_replicating, 6> >;
+			type_tag<not_replicating, 6>,
+			type_tag<request_key, 7>,
+			type_tag<response_key, 8> >;
 
 }
 }

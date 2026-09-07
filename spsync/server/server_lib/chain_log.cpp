@@ -61,6 +61,10 @@ void chain_log::store_assignment(octet_vector const& tag, block_envelope const& 
 	handle->set_assignment(serialisation::asn_der_serialise(env), env.origin().data(), env.block().sequence());
 }
 
+chain_block_id chain_log::origin_head(crypto::public_key_id const& origin) const {
+	return records_.last_of_origin(origin.data());
+}
+
 std::deque<block_envelope> chain_log::get_by_origin(crypto::public_key_id const& origin,
 	sequence_number from, sequence_number to, std::size_t max) const {
 	std::deque<block_envelope> ret;

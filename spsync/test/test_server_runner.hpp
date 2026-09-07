@@ -33,6 +33,9 @@ public:
 			});
 	}
 
+	/// the storage server side
+	storage_server& storages() { return server_.storages(); }
+
 	void stop() {
 		server_.close();
 		if(server_future_.valid()) {

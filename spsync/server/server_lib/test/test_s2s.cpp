@@ -435,4 +435,89 @@ TEST_CASE("s2s restart reopens replicated storages", "[unit]") {
 	std::filesystem::remove_all("test-s2s-rb");
 }
 
+
+// (plan 5.2) a new replica joins a running cluster: it learns every replicated storage
+// from the heads its peers announce, pulls every origin from the start, verifies the
+// origins' assignments and the clients' signatures - fetching the key of a signer it
+// never saw from the peer that holds the record - and reports syncing until caught up
+TEST_CASE("s2s bootstrap a new replica", "[unit]") {
+	for(auto d : {"test-s2s-ba", "test-s2s-bb", "test-s2s-bc"}) {
+		std::filesystem::remove_all(d);
+	}
+
+	test::test_context tctx;
+	tctx.add_client(4);   // 0 = A, 1 = B, 2 = C (the newcomer), 3 = a client that registered at A and B
+	for(int i = 0; i != 3; ++i) {
+		network::enable_pk_handshake(tctx.client_context(i));
+	}
+	auto const key_a = tctx.key_id(0);
+	auto const key_b = tctx.key_id(1);
+	auto const key_c = tctx.key_id(2);
+	auto const client_key = *tctx.client_context(3).private_data().my_private_key();
+	tctx.client_context(0).public_keys().insert(client_key.public_key());
+	tctx.client_context(1).public_keys().insert(client_key.public_key());
+
+	auto params_a = s2s_test_params("test-s2s-ba", 42784, 42794,
+		{peer_config{"127.0.0.1", 42795, key_b}, peer_config{"127.0.0.1", 42796, key_c}});
+	auto params_b = s2s_test_params("test-s2s-bb", 42785, 42795,
+		{peer_config{"127.0.0.1", 42794, key_a}, peer_config{"127.0.0.1", 42796, key_c}});
+	auto params_c = s2s_test_params("test-s2s-bc", 42786, 42796,
+		{peer_config{"127.0.0.1", 42794, key_a}, peer_config{"127.0.0.1", 42795, key_b}});
+	for(auto p : {&params_a, &params_b, &params_c}) {
+		p->anti_entropy_interval = std::chrono::seconds{1};
+	}
+
+	storage_server a(tctx.client_context(0), params_a);
+	storage_server b(tctx.client_context(1), params_b);
+	storage_modes const modes{sync_mode::allow_all, auth_mode::sign_records, replication_mode::weak};
+	protocol::storage_id const sid1 = securepath::test::random_octet_vector(8);
+	protocol::storage_id const sid2 = securepath::test::random_octet_vector(8);
+	protocol::storage_id const local_sid = securepath::test::random_octet_vector(8);
+	auto sa1 = a.open_storage(sid1, modes);
+	auto sb1 = b.open_storage(sid1, modes);
+	auto sa2 = a.open_storage(sid2, modes);
+	auto sb2 = b.open_storage(sid2, modes);
+	REQUIRE(a.open_storage(local_sid, storage_modes{sync_mode::allow_all, auth_mode::sign_records}));
+	a.start();
+	b.start();
+	WAIT_CHECK((!a.connected_peers().empty() && !b.connected_peers().empty()), 5s);
+
+	// records of both origins in both storages, all signed by the client
+	test::test_block_creator creator1;
+	creator1.signer = client_key;
+	REQUIRE(sa1->commit_block(creator1.test_user_change()).block);
+	REQUIRE(sa1->commit_block(creator1.test_data_change()).block);
+	WAIT_CHECK(sb1->current_sequence_number() == sequence_number{2}, 5s);
+	test::test_block_creator creator1b = creator1;
+	REQUIRE(sb1->commit_block(creator1b.test_data_change()).block);
+	WAIT_CHECK(sa1->current_sequence_number() == sequence_number{3}, 5s);
+	test::test_block_creator creator2;
+	creator2.signer = client_key;
+	REQUIRE(sb2->commit_block(creator2.test_user_change()).block);
+	WAIT_CHECK(sa2->current_sequence_number() == sequence_number{1}, 5s);
+
+	// C joins: nothing configured on it but the peers
+	storage_server c(tctx.client_context(2), params_c);
+	c.start();
+	WAIT_CHECK((c.has_storage(sid1) && c.has_storage(sid2)), 10s);
+	auto sc1 = c.open_storage(sid1, modes);
+	auto sc2 = c.open_storage(sid2, modes);
+	REQUIRE(sc1);
+	REQUIRE(sc2);
+	WAIT_CHECK(tag_set(*sc1, sequence_number{3}) == tag_set(*sa1, sequence_number{3}), 10s);
+	WAIT_CHECK(tag_set(*sc2, sequence_number{1}) == tag_set(*sa2, sequence_number{1}), 10s);
+	WAIT_CHECK((!c.is_syncing(sid1) && !c.is_syncing(sid2)), 10s);
+	CHECK(!sc1->bootstrapping());
+	CHECK(!c.has_storage(local_sid));
+	// the signer's key came from a peer
+	CHECK(tctx.client_context(2).public_keys().find(client_key.id()));
+
+	a.close();
+	b.close();
+	c.close();
+	for(auto d : {"test-s2s-ba", "test-s2s-bb", "test-s2s-bc"}) {
+		std::filesystem::remove_all(d);
+	}
+}
+
 }

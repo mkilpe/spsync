@@ -53,8 +53,9 @@ public:
 		sequence_number from, sequence_number to) const;
 
 	/**
-	 * The highest sequence we hold of the given origin (plan 4.4): the local head for
-	 * our own origin, the origin head table entry otherwise (invalid when unknown).
+	 * The highest sequence we hold of the given origin (plan 4.4): the last record we
+	 * assigned ourselves for our own origin (plan 5.2), the origin head table entry
+	 * otherwise (invalid when unknown).
 	 */
 	sequence_number known_origin_seq(crypto::public_key_id const& origin) const;
 
@@ -96,6 +97,15 @@ public:
 	/// the stored per-origin heads; phase 4 records foreign heads here when applying
 	storage_heads& origin_heads() { return *heads_; }
 
+	/**
+	 * A replica created from a peer's announcement is bootstrapping until the heads of
+	 * every connected peer are covered (plan 5.2); persisted so a restart in the middle
+	 * keeps answering clients with storage_syncing. Never set for a locally created
+	 * storage.
+	 */
+	bool bootstrapping() const;
+	void set_bootstrapping(bool);
+
 private:
 	std::optional<block_envelope> make_envelope(chain_block const&) const;
 	void notify_listeners(chain_block const& c, std::optional<block_envelope> const&);
@@ -111,8 +121,10 @@ private:
 
 	std::unique_ptr<chain_sync> sync_;
 	std::unique_ptr<storage_heads> heads_;
+	database::connection_ptr db_;
 	/// id of the server signing key; invalid when the server has no key
 	crypto::public_key_id own_id_;
+	bool bootstrapping_{};
 	std::unordered_map<void const*, std::weak_ptr<connection>> listeners_;
 };
 

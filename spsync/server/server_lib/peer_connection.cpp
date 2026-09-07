@@ -4,6 +4,8 @@
 #include <spsync/protocol/error.hpp>
 
 #include <securepath/log/log.hpp>
+
+#include <map>
 #include <securepath/util/conversions.hpp>
 
 #include <algorithm>
@@ -200,13 +202,95 @@ void peer_connection::start_pulls(protocol::peer_heads const& p) {
 	auto handle = sctx_.acquire_replica(p.sid, protocol::peer_modes(p.modes));
 	if(handle && handle->modes().replication == replication_mode::weak) {
 		auto const& own = sctx_.identity().server_id;
+		bool behind = false;
 		for(auto const& head : p.heads) {
 			if(head.origin != own) {
 				auto const known = handle->known_origin_seq(head.origin);
 				if(known < head.block.sequence) {
+					behind = true;
 					request_pull(p.sid, head.origin, known + 1, head.block.sequence);
 				}
 			}
+		}
+		if(!behind) {
+			sctx_.note_caught_up(p.sid);
+		}
+	}
+}
+
+/// re-run the pulls the last announced heads call for (after a signer key arrived)
+void peer_connection::resume_pulls() {
+	std::map<protocol::storage_id, std::vector<origin_head>> heads;
+	{
+		std::unique_lock lock{mutex_};
+		heads = peer_heads_;
+	}
+	for(auto const& [sid, h] : heads) {
+		if(auto handle = sctx_.find_open_sync(sid)) {
+			start_pulls(protocol::peer_heads{sid, h, handle->modes()});
+		}
+	}
+}
+
+/**
+ * Apply pulled or pushed envelopes; a record whose signer we do not know is not lost:
+ * the peer that holds the record holds the signer's key too, ask for it (plan 5.2) and
+ * the next pull round applies the record
+ */
+void peer_connection::apply_envelopes(std::shared_ptr<storage> const& handle,
+	std::deque<block_envelope> const& envelopes, char const* what)
+{
+	for(auto const& env : envelopes) {
+		if(auto err = handle->apply_foreign(env)) {
+			LOG_WARN("failed to apply {} record [origin={}, err={}]", what, env.origin(), err);
+			if(err.code() == make_error_code(protocol::errc::unknown_signer)) {
+				if(auto signer = env.block().auth().signature_issuer()) {
+					request_signer_key(*signer);
+				}
+			}
+		}
+	}
+}
+
+void peer_connection::request_signer_key(crypto::public_key_id const& id) {
+	bool ask{};
+	protocol::call_id cid{};
+	{
+		std::unique_lock lock{mutex_};
+		ask = key_requests_.insert(id).second;
+		cid = next_cid_++;
+	}
+	if(ask) {
+		LOG_INFO("asking peer for the key of record signer {}", id);
+		send_packet(protocol::request_key{cid, id});
+	}
+}
+
+void peer_connection::operator()(protocol::request_key const& p) {
+	if(check_ready("request_key")) {
+		auto key = sctx_.find_key(p.key);
+		LOG_TRACE("request_key [key={}, held={}]", p.key, key.has_value());
+		send_packet(protocol::response_key{p.cid, std::move(key)});
+	}
+}
+
+void peer_connection::operator()(protocol::response_key const& p) {
+	LOG_TRACE("response_key [held={}]", p.key.has_value());
+	if(check_ready("response_key")) {
+		if(p.key) {
+			bool asked{};
+			{
+				std::unique_lock lock{mutex_};
+				asked = key_requests_.erase(p.key->id()) != 0;
+			}
+			if(asked) {
+				sctx_.learn_signer_key(*p.key);
+				resume_pulls();
+			} else {
+				LOG_WARN("peer sent a key that was not asked for [id={}]", p.key->id());
+			}
+		} else {
+			LOG_INFO("peer does not hold the requested signer key either");
 		}
 	}
 }
@@ -233,8 +317,9 @@ void peer_connection::operator()(protocol::pull_records const& p) {
 			send_packet(protocol::not_replicating{0, p.sid});
 			send_packet(protocol::response_envelopes{p, make_error(protocol::errc::no_such_storage)});
 		} else if(p.origin == sctx_.identity().server_id) {
-			// the own log is served directly, local sequences are the origin sequences
-			send_packet(protocol::response_envelopes{p, handle->current_sequence_number()
+			// the own log is served directly: local sequences are the origin sequences, the
+			// foreign records in between ride along (the puller dedups them by tag)
+			send_packet(protocol::response_envelopes{p, handle->known_origin_seq(p.origin)
 				, handle->get_envelopes(p.from, p.to)});
 		} else {
 			send_packet(protocol::response_envelopes{p, handle->known_origin_seq(p.origin)
@@ -252,11 +337,7 @@ void peer_connection::operator()(protocol::response_envelopes const& p) {
 		LOG_TRACE("response_envelopes [sid={}, origin={}, envelopes={}]", to_hex(p.sid), p.origin, p.envelopes.size());
 		auto handle = sctx_.find_open_sync(p.sid);
 		if(handle && !p.error) {
-			for(auto const& env : p.envelopes) {
-				if(auto err = handle->apply_foreign(env)) {
-					LOG_WARN("failed to apply pulled record [origin={}, err={}]", env.origin(), err);
-				}
-			}
+			apply_envelopes(handle, p.envelopes, "pulled");
 			// keep pulling while the peer holds more of the origin AND this batch made
 			// progress (no progress means the applies failed, retried on the next tick)
 			auto const known = handle->known_origin_seq(p.origin);
@@ -264,6 +345,8 @@ void peer_connection::operator()(protocol::response_envelopes const& p) {
 				&& known >= p.envelopes.back().block().sequence();
 			if(progressed && p.origin_max.is_valid() && known < p.origin_max) {
 				request_pull(p.sid, p.origin, known + 1, p.origin_max);
+			} else if(progressed) {
+				sctx_.note_caught_up(p.sid);
 			}
 		}
 	}
@@ -276,12 +359,8 @@ void peer_connection::operator()(protocol::push_records const& p) {
 			send_packet(protocol::not_replicating{0, p.sid});
 		} else {
 			LOG_TRACE("peer pushed {} records for storage {}", p.envelopes.size(), to_hex(p.sid));
-			for(auto const& env : p.envelopes) {
-				if(auto err = handle->apply_foreign(env)) {
-					// pushes are fire and forget; anti-entropy reconciles later (plan 4.4)
-					LOG_WARN("failed to apply pushed record [origin={}, err={}]", env.origin(), err);
-				}
-			}
+			// pushes are fire and forget; anti-entropy reconciles later (plan 4.4)
+			apply_envelopes(handle, p.envelopes, "pushed");
 		}
 	}
 }

@@ -100,6 +100,9 @@ public:
 	 * The stored assignment envelopes of the given origin server with origin sequence in
 	 * [from, to], in origin sequence order, at most max entries (plan 4.4 anti-entropy).
 	 */
+	/// block id of the newest in sync record assigned by the given origin (invalid when none)
+	chain_block_id last_of_origin(octet_vector const& origin) const;
+
 	std::vector<octet_vector> find_origin_assignments(octet_vector const& origin,
 		sequence_number from, sequence_number to, std::size_t max) const;
 

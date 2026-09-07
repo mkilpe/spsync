@@ -64,6 +64,8 @@ public:
 	void operator()(protocol::response_envelopes const&);
 	void operator()(protocol::push_records const&);
 	void operator()(protocol::not_replicating const&);
+	void operator()(protocol::request_key const&);
+	void operator()(protocol::response_key const&);
 
 private:
 	void terminate(securepath::error const&);
@@ -75,6 +77,9 @@ private:
 	void start_pulls(protocol::peer_heads const&);
 	void request_pull(protocol::storage_id const&, crypto::public_key_id const&,
 		sequence_number from, sequence_number to);
+	void apply_envelopes(std::shared_ptr<storage> const&, std::deque<block_envelope> const&, char const* what);
+	void request_signer_key(crypto::public_key_id const&);
+	void resume_pulls();
 
 private:
 	serialisation::packet_deserialiser<protocol::s2s_types> deser_;
@@ -89,6 +94,8 @@ private:
 	std::function<void(securepath::error const&)> on_disconnect_;
 	/// (storage, origin) pulls in flight, so periodic heads do not double-pull
 	std::set<std::pair<protocol::storage_id, octet_vector>> pulling_;
+	/// record signer keys asked from the peer (plan 5.2), so one unknown signer is asked once
+	std::set<crypto::public_key_id> key_requests_;
 	protocol::call_id next_cid_{1};
 };
 

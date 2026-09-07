@@ -20,6 +20,9 @@ public:
 	int run_and_wait();
 	void close() override;
 
+	/// the storage server side (tests and tooling)
+	storage_server& storages() { return storage_server_; }
+
 private:
 	bool init() override;
 	void check_key();

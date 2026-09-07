@@ -52,6 +52,24 @@ public:
 	 */
 	virtual void trust_peer_key(crypto::public_key const&) = 0;
 
+	/// a public key of a record signer learned from a peer (plan 5.2); it is checked to be
+	/// self authentic and to match the id that was asked for before it is stored
+	virtual void learn_signer_key(crypto::public_key const&) = 0;
+
+	/// a public key this server holds, for a peer's request_key
+	virtual std::optional<crypto::public_key> find_key(crypto::public_key_id const&) const = 0;
+
+	/**
+	 * The storage is still catching up (plan 5.2): it is bootstrapping, or a connected
+	 * peer announced a head we have not reached. Clients are answered storage_syncing so
+	 * they try another replica.
+	 */
+	virtual bool is_syncing(protocol::storage_id const&) = 0;
+
+	/// a heads exchange or a pull chain for the storage found nothing more to fetch from
+	/// a peer: when no connected peer is ahead any more, the bootstrap is over
+	virtual void note_caught_up(protocol::storage_id const&) = 0;
+
 	/// Ids of the open storages that replicate to peers (replication mode != none)
 	virtual std::vector<protocol::storage_id> replicated_storages() const = 0;
 };

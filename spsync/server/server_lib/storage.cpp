@@ -84,6 +84,16 @@ storage::storage(protocol::storage_id id, storage_config config, std::optional<s
 
 	sync_ = std::make_unique<chain_sync>(db_conn, sync_config, keys);
 	heads_ = std::make_unique<storage_heads>(db_conn);
+	db_ = db_conn;
+	if(!db_->has_table("replica_state")) {
+		db_->prepare("CREATE TABLE replica_state("
+			"key INTEGER PRIMARY KEY CHECK(key = 1),"
+			"bootstrapping INTEGER);").execute();
+	}
+	auto q = db_->prepare("SELECT bootstrapping FROM replica_state WHERE key = 1;");
+	if(auto res = q.execute()) {
+		bootstrapping_ = res.value<std::int64_t>(0).value_or(0) != 0;
+	}
 	if(private_data_) {
 		if(auto key = private_data_->my_private_key()) {
 			own_id_ = key->id();
@@ -94,9 +104,13 @@ storage::storage(protocol::storage_id id, storage_config config, std::optional<s
 std::vector<origin_head> storage::heads() const {
 	std::unique_lock l{mutex_};
 	std::vector<origin_head> ret;
-	if(own_id_.is_valid() && sync_->log().head().is_valid()) {
-		// the own head is derived live from the log so it cannot go stale; term 0 until phase 6
-		ret.push_back(origin_head{own_id_, 0, sync_->log().head()});
+	if(own_id_.is_valid()) {
+		// the own head is derived live from the log so it cannot go stale: the last record
+		// we assigned ourselves (plan 5.2), term 0 until phase 6
+		auto own = sync_->log().origin_head(own_id_);
+		if(own.is_valid()) {
+			ret.push_back(origin_head{own_id_, 0, own});
+		}
 	}
 	for(auto& head : heads_->all()) {
 		if(head.origin != own_id_) {
@@ -130,7 +144,7 @@ std::deque<block_envelope> storage::get_envelopes_by_origin(crypto::public_key_i
 sequence_number storage::known_origin_seq(crypto::public_key_id const& origin) const {
 	std::unique_lock l{mutex_};
 	if(origin == own_id_) {
-		return sync_->current_sequence_number();
+		return sync_->log().origin_head(own_id_).sequence;
 	}
 	sequence_number ret;
 	if(auto head = heads_->find(origin)) {
@@ -185,28 +199,48 @@ error storage::apply_foreign(block_envelope const& env) {
 		// our own record came back around
 		return {};
 	}
-	// the origin head is kept fresh even for records we already hold
-	heads_->advance(origin_head{env.origin(), env.term(), env.block().id()});
-
 	auto const& block = env.block();
+	// the origin head is kept fresh for records we already hold, but never advanced past
+	// a record that did not apply: anti-entropy pulls from the head, so the record would
+	// be skipped for good (found by the 5.2 bootstrap: a signer key learned later)
+	origin_head const head{env.origin(), env.term(), block.id()};
 	if(sync_->records().find_tag(block.tag())) {
+		heads_->advance(head);
 		return {};
 	}
 	auto res = sync_->commit_foreign(block);
 	if(!res) {
 		if(check_result_error(res, protocol::errc::record_already_committed)) {
 			// same operation under another tag was adopted already (op id dedup)
+			heads_->advance(head);
 			return {};
 		}
 		LOG_WARN("foreign record was not accepted [origin={}, err={}] (rsid={})"
 			, env.origin(), res.get_error(), to_hex(id_));
 		return res.get_error();
 	}
+	heads_->advance(head);
 	// the record now lives under our own sequence; the log keeps the ORIGIN's signed
 	// assignment - it is the durable (origin id, origin seq) needed by anti-entropy
 	sync_->log().store_assignment(block.tag(), env);
 	notify_listeners(res.value(), make_envelope(res.value()));
 	return {};
+}
+
+bool storage::bootstrapping() const {
+	std::unique_lock l{mutex_};
+	return bootstrapping_;
+}
+
+void storage::set_bootstrapping(bool on) {
+	std::unique_lock l{mutex_};
+	if(bootstrapping_ != on) {
+		LOG_INFO("replica {} (rsid={})", on ? "bootstrapping" : "caught up with its peers", to_hex(id_));
+		bootstrapping_ = on;
+		auto q = db_->prepare("INSERT OR REPLACE INTO replica_state(key, bootstrapping) VALUES(1, :b);");
+		q.bind(":b", static_cast<std::int64_t>(on ? 1 : 0));
+		q.execute();
+	}
 }
 
 void storage::set_peer_push(peer_push_hook hook) {

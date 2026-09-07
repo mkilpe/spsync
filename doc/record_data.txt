@@ -2,9 +2,11 @@ SPSync record data support plan
 ===============================
 
 Markers as in dev-phases.txt:  + done   * in progress   - todo
-Written 2026-08-30. Cross-references: use_cases.txt (1: file-like sync on mobile),
-progress_indication.txt, segments.txt (S6 retention), distributed_sync.txt (D1
-content-blind servers, phase 4 s2s), data_changes.txt, dev-phases.txt phase 2.
+Written 2026-08-30, decisions RD11-RD13 and the resolved questions added 2026-09-07
+(after distributed phase 4 / M3). Cross-references: use_cases.txt (1: file-like
+sync on mobile), progress_indication.txt, segments.txt (S6 retention),
+distributed_sync.txt (D1 content-blind servers, phase 4 s2s), data_changes.txt,
+dev-phases.txt phase 2.
 
 
 Purpose
@@ -128,9 +130,11 @@ RD7 Engine flow. sync_object_change with a data handle: stream the source once -
     entity upload/download progress).
 
 RD8 Replication (details belong to distributed_sync.txt): data is not in the
-    chain_log and not in the Raft log; peers exchange data completeness alongside
-    heads (3.4) and pull missing chunks by data_id manifest from any peer that has
-    them - same verification path as clients. Weak and strict mode identical here.
+    chain_log and not in the Raft log. Only servers with the data role (RD12) hold
+    chunks; they announce availability per data_id (RD13) and replicate chunks
+    among themselves by data_id manifest - same verification path as clients -
+    according to the copy count of RD13. Record servers never carry bulk bytes.
+    Weak and strict mode identical here.
 
 RD9 Lifecycle. A newer change to the same oid supersedes the old data (old one
     becomes prunable at the next segment cut unless retained); remove-type changes
@@ -190,81 +194,218 @@ RD10 Quotas and limits - data AND the record chain. Today the only bound is the
     hardening, phase 7 territory; the transfer quota above is the cumulative
     counterpart.
 
+RD11 Size hiding (2026-09-07). The server must know the ciphertext size and the
+    chunk count (it stores, verifies, serves ranges and counts quota) and traffic
+    volume reveals the same to anyone on the path (the securepath threat model
+    keeps traffic analysis out of scope), so the achievable goal is: the server
+    learns a size class, never the plaintext length.
+      - Data is padded before chunking, inside the ciphertext, with a size-class
+        rule (Padme style: the padded length keeps only a few significant bits;
+        overhead capped at ~12% and shrinking with size, floor 4 KiB). Padding
+        to chunk_size would turn a 3 KB file into 1 MiB. plain_size in the
+        encrypted header is the true length, so readers strip the padding and
+        progress stays exact; enc_size is the padded ciphertext size and quota
+        counts that.
+      - The encrypted record header gets a trailing padding field inside the
+        AEAD with the same rule: message texts and inline payloads leak only a
+        size class. Cheap, independent of data support, needs the record
+        structure version bump.
+      - Accepted leaks: chunk count (coarse once padded), the presence of a
+        descriptor, access patterns. No dummy data or cover traffic at this
+        layer.
+    The rest of RD3 stands; the manifest digest in the authenticated record
+    already stops a server from truncating or reordering chunks.
+
+RD12 Server roles, data endpoints, tickets (2026-09-07). Bulk bytes never pass
+    through a server that will not keep them (servers are traffic bound, traffic
+    costs money): no pull-through proxying.
+      roles       every server has the record role (chain, commits, s2s heads)
+                  and optionally the data role (chunk store). Same binary, same
+                  protocol; the data role is its own listener and port so it can
+                  sit on another box or link. Deployments: record servers A, B
+                  plus data server D; a data server set D1..Dn; or A, B with both
+                  roles (the all-in-one replicas of distributed phase 4).
+      endpoints   the storage info exchange (the sequence response carries the
+                  modes already; add the RD10 limits and the data endpoints)
+                  lists the data-role servers of the storage: host, port, key id,
+                  optional region label. Cluster configuration on the record
+                  servers next to the peer list; the client persists it per
+                  storage like the cursor owner.
+      direct      clients upload to and download from data servers directly; in
+                  the all-in-one setup a client on B wanting data only A holds is
+                  told that A has it (redirect, not proxy). Proxying is an
+                  explicit fallback for a client that cannot reach any holder,
+                  off by default.
+      tickets     a data server has no chain, so it can check neither membership
+                  nor a manifest against a committed record. The record server
+                  issues a signed data_ticket {sid, data_id, manifest_digest,
+                  enc_size, chunk_size, member key id, right (upload/download),
+                  expiry}; the client presents it, the data server verifies the
+                  record server signature (it trusts record server keys the way
+                  peers trust each other on hello) and then verifies manifest and
+                  chunks exactly as RD4. Quota accounting happens where the ticket
+                  is issued. The data server stays blind to content and history;
+                  an all-in-one server issues tickets to itself.
+      client auth the data listener requires certified client keys (as the
+                  packet server does); no shared-secret variant.
+
+RD13 Availability, holder lists, load balancing, copy count (2026-09-07). Two
+    pieces of "where is the data", in two places:
+      endpoint list   static, RD12 (which servers may hold data of the storage).
+      holder list     dynamic: data servers announce availability per data_id
+                      (have-bitmap, complete flag, plus load signals: free space,
+                      bytes in flight) to the record servers they are configured
+                      with, when chunks complete and again in anti-entropy;
+                      record servers keep a per-storage availability table and
+                      relay it to each other with the heads. The ticket response
+                      carries the ordered holder list of the data; the ticket is
+                      valid at any holder (it names the data, not the server).
+    Holder lists are transient, a fresh ticket always gives the current view; the
+    client persists only its own data state and have-bitmap.
+    Load balancing is the ordering of that list, decided by the record server
+    which issues every ticket anyway:
+      downloads   holders ordered by completeness, load, locality; a client may
+                  fetch chunk ranges of one data from several holders in parallel
+                  (every chunk verifies on its own, the manifest fixes the set).
+      uploads     the upload ticket names the preferred data servers in order:
+                  round robin / least loaded for ingress, a consistent hash of the
+                  data_id for even storage across a set.
+      failover    a holder that is down is the next entry; none reachable ->
+                  remote_not_complete and a retry with the next ticket.
+    Copy count k per storage class instead of eager/on-demand modes: the primary
+    holders of a data are the first k servers on the data_id hash ring, data
+    servers replicate among themselves until k copies exist, clients download
+    from any holder. k = number of data servers is full replication, k = 1 a
+    single copy (durability = that disk, no cross-server traffic), k = 2 the
+    usual choice. k is server-side policy (operators know the disks), not a
+    storage mode; a data server at its quota behaves as if not on the ring for
+    new data - availability degrades, nothing diverges. The granularity of the
+    balancing is per data and per ticket; finer is the client's chunk-range
+    choice. A deployment with one data server degenerates to a list of one.
+    Later: surface "held by k replicas" as a data state, the way records
+    distinguish acked from in_sync (D8).
+
 
 Implementation steps
 --------------------
 
 - RDS 1  Descriptor and chunk crypto                                           [1d]
       Descriptor v2 in single_change + encrypted header (RD2), per-data key
-      derivation, chunker with manifest build/verify (RD3). Unit tests: round
-      trip, tamper per chunk, reorder, wrong manifest. data_change_info retired.
+      derivation, chunker with manifest build/verify (RD3), size-class padding of
+      the data and the trailing padding field of the encrypted record header
+      (RD11, structure version bump). Unit tests: round trip, tamper per chunk,
+      reorder, wrong manifest, padding classes and stripping, header padding
+      invisible to readers. data_change_info retired.
 
 - RDS 2  Client data store                                                   [1.5d]
       record_data implementation over chunk files + state table, data_ref wiring
-      in record storage, eviction. Tests: offset read/write across chunk
-      boundaries, remove/refetch state, big-file streaming without loading whole
-      blobs.
+      in record storage, eviction, data_id reference counting. Tests: offset
+      read/write across chunk boundaries, remove/refetch state, big-file
+      streaming without loading whole blobs.
 
 - RDS 3  Engine create path and upload                                       [1.5d]
       sync_object_change streams source -> local chunks + descriptor; upload
-      queue in comm (manifest, chunks, resume), states and progress events.
-      Tests: commit-then-upload ordering, interrupted upload resume.
+      queue in comm (ticket, manifest, chunks, resume; two datas in flight, a
+      window of 4-8 chunks, commit order), states and progress events, skip of
+      a download whose content_digest the client already holds. Tests:
+      commit-then-upload ordering, interrupted upload resume.
 
-- RDS 4  Server data store and upload handling                               [1.5d]
-      Chunk files + data table, manifest verification, data quota (RD10 resource
-      side), expiry of incomplete uploads, the upload packets (RD4). Tests: junk
-      chunk rejected, resume reply, quota errors.
+- RDS 4  Data role: server store and upload handling                         [1.5d]
+      The data listener (own port), chunk files + data table, ticket
+      verification (RD12), manifest verification, data quota (RD10 resource
+      side), expiry of incomplete uploads, availability announcements to the
+      record servers (RD13). Tests: junk chunk rejected, bad/expired ticket
+      rejected, resume reply, quota errors, announcement after completion.
 
-- RDS 5  Download path                                                         [1d]
-      request_data/response_data ranges, notify_data, lazy/auto fetch policy,
-      verification on fetch, transfer quota windows (RD10) on serving. Tests:
-      second client fetches while upload in progress (remote_not_complete),
-      completes after notify, quota-exceeded fetch resumes in the next window.
+- RDS 5  Record role: tickets, endpoints, availability table                   [1d]
+      Ticket issue (upload placement, download holder ordering, quota
+      accounting), data endpoints + limits in the storage info, the availability
+      table fed by data servers and relayed between record servers with the
+      heads, load fields. Tests: holder order by completeness/load, endpoint list
+      persisted by the client, ticket for an unknown data refused.
 
-- RDS 6  End to end                                                            [1d]
+- RDS 6  Download path                                                         [1d]
+      Client data connections to the holders, request_data/response_data ranges
+      with parallel ranges across holders, notify_data, lazy/auto fetch policy,
+      verification on fetch, redirect handling and failover down the holder
+      list, transfer quota windows (RD10) on serving. Tests: second client
+      fetches while upload in progress (remote_not_complete), completes after
+      notify, holder down -> next holder, quota-exceeded fetch resumes in the
+      next window.
+
+- RDS 7  End to end                                                            [1d]
       System test: multi-hundred-MB object between two clients over the test
       server incl. kill/resume both directions; mobile-style lazy fetch of one
-      object among many.
+      object among many; the two deployment shapes of RD12 (record servers +
+      separate data server, all-in-one replicas).
 
-- RDS 7  Chain validity limits                                             [0.5d]
-      max_record_size as a per-storage creation parameter (RD10 validity side):
-      wire + persistence next to storage_modes, chain_sync validation,
-      record_too_big error, limits reported to clients, engine pre-check.
-      Size-aware record batching in response_records (fixes the frame-cap wedge
-      hazard, RD10). Independent of the data work and SHOULD land before
-      distributed phase 4 (replicas must already agree on validity limits).
-      Tests: oversized record rejected identically on reopen, mismatching
-      creation limits refused, a range of large records still fetchable.
+- RDS 8  Chain validity limits                                             [0.5d]
+      max_record_size and chunk_size as per-storage creation parameters (RD10
+      validity side, RD3): wire + persistence next to storage_modes, chain_sync
+      validation, record_too_big error, limits reported to clients, engine
+      pre-check. Size-aware record batching in response_records (fixes the
+      frame-cap wedge hazard, RD10). Independent of the data work; wanted before
+      distributed phase 4 and now overdue - do it first. Tests: oversized record
+      rejected identically on reopen, mismatching creation limits refused, a
+      range of large records still fetchable.
 
-- RDS 8  Retention / segment interaction                                   [defer]
-      With segments.txt SEG 5: prune data at segment cut, retained live objects
-      keep theirs; server GC by data_id references.
+- RDS 9  Retention / segment interaction                                       [1d]
+      With segments.txt SEG 5 (done 2026-09-01): prune data at segment cut,
+      retained live objects keep theirs; server GC by data_id references.
 
-- RDS 9  Replication interactions                                          [defer]
-      With distributed_sync.txt phase 4+: completeness exchange, peer pulls
-      (RD8).
+- RDS 10 Replication among data servers                                        [2d]
+      Copy count k with hash placement, availability exchange between data
+      servers over the s2s link (reduced packet set, no heads), pulls by
+      manifest, the all-in-one setup where every replica has both roles
+      (distributed phase 4 done 2026-09-04, so this is unblocked).
 
-Ordering: RDS 1-7 are single-server and independent of the distributed plan; they
-unblock file sync (use case 1) and groupchat attachments. RDS 7 is also
-independent of RDS 1-6 and is wanted before distributed phase 4. RDS 8 rides on
-the segments plan, RDS 9 on the distributed plan.
+Ordering: RDS 8 first (half a day, fixes a hazard that exists today). RDS 1-7 are
+then single-server work with the data role split in from the start; they unblock
+file sync (use case 1) and groupchat attachments. RDS 9 and 10 follow.
+
+
+Resolved questions (2026-09-07)
+-------------------------------
+
+q: inline threshold - keep the metadata path for small payloads (group chat
+   messages today), no inline field in the descriptor: one mechanism per size
+   class keeps the chain small. Hard bound is max_record_size (RDS 8), the
+   advisory application cutoff a fraction of it (~32 KiB). Header padding (RD11)
+   gives inline payloads the same size hiding as messages.
+q: dedup by content_digest - no server-side dedup: data_id depends on the
+   per-data nonce, so two uploads of one file are unrelated to the server by
+   construction, which hides that two members share a file (convergent
+   encryption would give it away). content_digest stays in the encrypted header
+   for the client: a client holding a file with that digest skips the download.
+   Local reference counting by data_id (RDS 2). Full content addressing deferred.
+q: compression - a reserved flag in the encrypted header, client-side only,
+   implementation deferred. If it comes: per chunk (random access survives),
+   then pad, then encrypt; most large payloads are media and gain nothing.
+q: chunk_size - per storage, immutable creation parameter next to the modes and
+   the validity limits (RDS 8), range 256 KiB .. 8 MiB (headroom under the
+   16 MiB frame cap); the descriptor still carries it so every data is
+   self-describing.
+q: transfer scheduling - two datas in flight per connection, a window of 4-8
+   chunks each; explicit fetches first, then auto-fetches newest first, uploads
+   in commit order; no bandwidth caps in the engine (phase 7 rate limiting);
+   resume is free through the manifest exchange (RDS 3, RDS 6).
+q: fetch access control - membership is enough; the meaningful later split is
+   upload rights versus read, not history versus data; wired to the phase 7
+   rights when they exist.
+q: per-member quotas - server-local only, attributed by the connection's
+   authenticated key id for uploads and by the record signer for chain growth;
+   only per-storage limits are advertised to clients; after phase 7 rights.
+q: replication of data - not a storage mode: server roles, copy count k as
+   server policy, no proxying (RD12, RD13).
 
 
 Open questions
 --------------
 
-q: inline threshold - tiny payloads already ride in record metadata today (group
-   chat messages); keep that as the small-data path and document the cutoff, or
-   add an inline data field to the descriptor?
-q: dedup by content_digest (same file attached twice) - client-side reference
-   counting of data_id, or full content addressing later?
-q: compression before encryption (the old q in data_change_info) - probably a
-   flag in the encrypted header, client-side only, opaque to the server.
-q: chunk_size fixed per storage or per data? per-storage config is simpler and
-   keeps manifests comparable for dedup.
-q: transfer scheduling - how many datas/chunks in flight, priority (newest
-   first?), and per-storage bandwidth caps?
-q: does fetch need finer access control than membership (phase 7 rights), e.g.
-   read-only members allowed data but not history?
-q: per-member quotas (fair share inside one storage) - needs the signer identity
-   (2.3) for attribution; server-side only, or advertised to clients too?
+q: per-storage override of the server-side data policy (k, quota) - operator
+   configuration by storage id pattern, or a hint from the creating client in
+   the storage info?
+q: region labels on endpoints and their use for holder ordering - needed for the
+   first deployments or later?
+q: should the data role keep a small cache of foreign data it served as a
+   proxy fallback (RD12), or serve and forget?

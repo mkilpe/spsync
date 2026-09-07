@@ -17,6 +17,7 @@ namespace {
 		, "storage mode mismatch"
 		, "unknown signer"
 		, "invalid storage modes"
+		, "storage syncing"
 		};
 
 	using category_type = def_error_category<errc>;

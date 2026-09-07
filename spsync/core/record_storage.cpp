@@ -776,6 +776,18 @@ std::vector<chain_block> record_storage::truncate_prefix(sequence_number first_k
 	return removed;
 }
 
+chain_block_id record_storage::last_of_origin(octet_vector const& origin) const {
+	auto q = impl_->db->prepare(
+		"SELECT seq, hash FROM record WHERE state = :state AND origin = :o ORDER BY origin_seq DESC LIMIT 1;");
+	q.bind(":state", std::to_underlying(record_state::in_sync));
+	q.bind(":o", origin);
+	chain_block_id ret;
+	if(auto res = q.execute()) {
+		ret = chain_block_id{sequence_number{res.value<std::uint64_t>(0).value_or(0)}, res.value<octet_vector>(1).value_or(octet_vector{})};
+	}
+	return ret;
+}
+
 std::vector<octet_vector> record_storage::find_origin_assignments(octet_vector const& origin,
 	sequence_number from, sequence_number to, std::size_t max) const {
 	auto q = impl_->db->prepare(

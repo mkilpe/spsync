@@ -1026,14 +1026,52 @@ Phase 4  Server-to-server, weak mode  (M3)
 Phase 5  Server recovery and evidence  (M4)
 -------------------------------------------
 
-- 5.1 Restart                                                                     [0.5d]
++ 5.1 Restart -- done 2026-09-07                                                  [0.5d]
       = 0.2 (replay cursors) + 4.4 anti-entropy on startup. Verify nothing else needed.
+      Verified: nothing else was needed once the M3 gate made a server reopen its
+      replicated storages at start (B11). Covered by chain_sync "cursor replay on
+      reopen" (both cursor classes), s2s "restart reopens replicated storages"
+      (announces, takes pushes, serves pulls without any client) and s2s
+      "anti-entropy heals partitions" (a restarted replica catches up in both
+      directions); the M3 cli session killed and restarted both replicas.
 
-- 5.2 Bootstrap a new replica                                                     [1d]
++ 5.2 Bootstrap a new replica -- done 2026-09-07                                  [1d]
       storage_config.peers updated on an existing replica; new server learns the
       storage from heads and pulls from seq 1 for every origin, verifying both
       signatures per block. Until caught up it answers clients with
       errc::storage_syncing (new) so clients try another replica.
+      Implemented: peers are configured on the existing replicas and the newcomer
+      (a restart of the existing ones, --peers is static); the newcomer creates
+      every announced replicated storage (B11) marked bootstrapping (persisted in
+      the storage db, replica_state table) and pulls every origin from 1. Record
+      signers it never saw - their clients registered at the other replicas -
+      are fetched from the peer holding the record: new s2s packets request_key /
+      response_key, the key is checked to be self authentic and to match the id
+      asked for, then the stalled pulls resume (peer_connection::apply_envelopes
+      / request_signer_key / resume_pulls). storage_server::is_syncing = the
+      storage is bootstrapping or behind a head a connected peer announced; the
+      client-facing request_sequence_number and request_commit answer
+      errc::storage_syncing then, and the comm layer closes the session on that
+      error so the connection owner reconnects - chat_connection rotates to the
+      next replica (4.5). Bootstrapping ends when a heads exchange or a completed
+      pull chain finds no connected peer ahead (note_caught_up).
+      Two defects found on the way:
+        B17 the announced own head was the local chain head, which includes
+            records applied from other origins; a peer pulling "our" sequences up
+            to it could never reach it (harmless over-pull in 4.4, permanent
+            "syncing" now). The own head is the last locally committed record
+            (chain_log::origin_head, record_storage::last_of_origin); the served
+            range still carries the foreign records in between, deduped by tag.
+        B18 apply_foreign advanced the origin head before the record applied, so a
+            record that failed to apply (unknown signer) was skipped by anti-entropy
+            for good. The head advances only after a successful apply, a known tag
+            or an op dedup.
+      Tests: s2s "bootstrap a new replica" (three servers, two storages, records of
+      both origins signed by a client key only the old replicas know, an
+      unreplicated storage that must not spread; the newcomer converges, stops
+      syncing and holds the signer key), connection "storage syncing sends the
+      client elsewhere" (the client's session is dropped with storage_syncing
+      while bootstrapping, syncs after).
 
 - 5.3 Divergence finder                                                           [1d]
       chain_log::find_divergence: given a peer's (origin, seq, hash) samples, binary
