@@ -1,0 +1,170 @@
+// asciidoctor-pdf -r asciidoctor-diagram multi_server_scenario.adoc
+
+= SPSync Multi-Server Scenario (plan 4.7)
+:toc: left
+
+This is a walk-through of the `multi server full scenario` test
+(`spsync/engine/test/test_multi_server.cpp`): three server replicas, six clients
+(two per server), exercising every record kind and event and asserting the replicas
+converge. The record tags below are from one real run of the test.
+
+== Topology
+
+Three servers in a *chain*: server 0 and server 2 are not linked directly, so
+everything between them must relay through server 1. Two clients sit on each server.
+
+[ditaa]
+----
+   client 0            client 1            client 2
+   client 3            client 4            client 5
+      |                   |                   |
+      v                   v                   v
+  +---------+  0<->1  +---------+  1<->2  +---------+
+  |cGRE     |=========|cYEL     |=========|cGRE     |
+  | server0 |         | server1 |         | server2 |
+  +---------+         +---------+         +---------+
+   record log          record log          record log
+----
+
+Each server keeps its own record log. A client is synced with the records of the
+server it is attached to; a server never decrypts (it is content-blind).
+
+== Records and events
+
+[cols="1,3",options="header"]
+|===
+| Kind | Meaning
+| `(u)` user change   | membership + encryption-key delivery (D9 merge)
+| `(d)` data change   | an application object change (a "message")
+| `(s)` segment       | a signed checkpoint sealing the history before it
+| commit              | a record created locally by a client on that server
+| replicate           | a record received from a peer server (anti-entropy / push)
+|===
+
+== Phase 1: a change spreads across the chain
+
+Server 0 commits the first user change; it relays 0 -> 1 -> 2. Then all three
+servers commit concurrently and the records cross-fill. Note how server 2 receives
+server 0's records *from server 1* -- the transitive relay through the middle.
+
+[plantuml]
+----
+@startuml
+participant "server 0" as S0
+participant "server 1" as S1
+participant "server 2" as S2
+
+S0 -> S0 : commit #1 24EDBA49 (u)
+S0 -> S1 : replicate 24EDBA49
+S1 -> S2 : replicate 24EDBA49
+
+== concurrent commits ==
+S0 -> S0 : commit E85AC6BB, 6C80883F (d)
+S1 -> S1 : commit FA471792, 7B7FFC32 (d)
+S2 -> S2 : commit AD459C10, 4203102B (d)
+
+== cross-fill (relayed through server 1) ==
+S0 -> S1 : E85AC6BB, 6C80883F
+S1 -> S0 : FA471792, 7B7FFC32
+S2 -> S1 : AD459C10, 4203102B
+S1 -> S2 : E85AC6BB, 6C80883F (from 0)
+S1 -> S0 : AD459C10, 4203102B (from 2)
+S1 -> S2 : FA471792, 7B7FFC32
+note over S0, S2 : all three now hold the same 7 records\n(each at its own local sequence)
+@enduml
+----
+
+== Phases 2-5: membership, key rotation, segment
+
+Committed in turn, each draining and asserting convergence:
+
+* *membership* -- a user change removes a member (re-affirmed later by a rotation).
+* *key rotation* -- a client creates a fresh key and hands it to the members inside
+  the user-change KEM envelope; data committed under the new key stays readable.
+* *concurrent rotation* -- two clients rotate at once, leaving two keys at one key
+  sequence (D9); a record is decrypted by trying each candidate key.
+* *segment* -- client seals a checkpoint after flushing its pending commits:
++
+[plantuml]
+----
+@startuml
+participant "server 0" as S0
+participant "server 1" as S1
+participant "server 2" as S2
+S0 -> S0 : commit #17 1460D4C8 (s)\ncovers records 1..16
+S0 -> S1 : replicate 1460D4C8
+S1 -> S2 : replicate 1460D4C8
+note over S0,S2 : the segment lands at the same\nlogical point on every replica
+@enduml
+----
+
+== Phase 6: partition and heal
+
+Both links go down, isolating server 1. Each side keeps committing and the replicas
+*diverge* (the test asserts this). When the links come back the missing records flow
+both ways and they converge again.
+
+[plantuml]
+----
+@startuml
+participant "server 0" as S0
+participant "server 1" as S1
+participant "server 2" as S2
+
+... links 0<->1 and 1<->2 DOWN ...
+S0 -> S0 : commit 2F89D071 (u), AD6DFCFB (d)
+S1 -> S1 : commit 1DC6A418 (d)
+S2 -> S2 : commit 5B46E2EA, 1DC6A418 (d)
+note over S0,S2 : diverged: servers_converged() == false
+
+... links restored ...
+S0 -> S1 : 2F89D071, AD6DFCFB
+S2 -> S1 : 5B46E2EA
+S1 -> S0 : 1DC6A418
+S1 -> S2 : 2F89D071, AD6DFCFB
+note over S0,S2 : converged again
+@enduml
+----
+
+A client on the isolated server 1 also *hops* to server 2 during the partition
+(the 4.5 replica resync): it demotes its records to pending, re-syncs on the new
+replica under its cursor, and keeps committing there.
+
+== Final situation: converged, but observed in different orders (D4)
+
+All three servers end with the *same 45 records, same 6 members, same 32 messages* --
+but each linearised the set in its own local order. The first records of each server's
+log (`u` = user change, `d` = data change, `s` = segment):
+
+[cols="1,6a",options="header"]
+|===
+| Server | Local order (first 16 of 45)
+| 0 | `24EDBA49(u) E85AC6BB(d) 6C80883F(d) FA471792(d) 7B7FFC32(d) AD459C10(d) 4203102B(d) B25E45DF(u) 6D076F62(u) 3D1F183A(d) 8DD15E60(d) 28FC8070(d) 9CC4CE81(u) 79B1E9D4(d) 689C7BF9(u) 255471B1(d)`
+| 1 | `24EDBA49(u) FA471792(d) 7B7FFC32(d) E85AC6BB(d) 6C80883F(d) AD459C10(d) 4203102B(d) B25E45DF(u) 6D076F62(u) 3D1F183A(d) 8DD15E60(d) 28FC8070(d) 9CC4CE81(u) 79B1E9D4(d) 689C7BF9(u) 255471B1(d)`
+| 2 | `24EDBA49(u) AD459C10(d) 4203102B(d) FA471792(d) 7B7FFC32(d) E85AC6BB(d) 6C80883F(d) B25E45DF(u) 6D076F62(u) 28FC8070(d) 3D1F183A(d) 8DD15E60(d) 689C7BF9(u) 255471B1(d) 9CC4CE81(u) 79B1E9D4(d)`
+|===
+
+Each server puts *its own* commits first and the peers' after, in arrival order --
+so the seven phase-1 records appear in three different orders, yet the set is identical
+and the segment `1460D4C8(s)` sits at record 17 on every replica. This is decision D4:
+sequence numbers are a per-server cursor, identity is the record tag, and convergence is
+the same tag set, not the same order.
+
+[cols="2,1,1,1",options="header"]
+|===
+| Property | server 0 | server 1 | server 2
+| records  | 45 | 45 | 45
+| ops      | 45 | 45 | 45
+| messages | 32 | 32 | 32
+| members  | 6  | 6  | 6
+| converged | ✓ | ✓ | ✓
+|===
+
+== The raw run log
+
+The full narration, exactly as the test prints it with `-s` (or on failure):
+
+[source]
+----
+include::run.txt[]
+----

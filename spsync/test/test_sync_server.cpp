@@ -282,7 +282,10 @@ bool test_sync_context::pump_link(replication_link& l, bool ab_direction) {
 	auto& dir = ab_direction ? l.ab : l.ba;
 
 	auto const head = from.sync.current_sequence_number();
-	sequence_number next{1};
+	if(head < dir.scanned) {
+		dir.scanned = sequence_number{};
+	}
+	sequence_number next{dir.scanned.value + 1};
 	while(next.is_valid() && next <= head) {
 		auto recs = from.sync.get_records(next, head);
 		if(recs.empty()) {
@@ -296,6 +299,7 @@ bool test_sync_context::pump_link(replication_link& l, bool ab_direction) {
 			next = recs.back().sequence() + 1;
 		}
 	}
+	dir.scanned = head;
 
 	bool moved = false;
 	for(auto& [countdown, rec] : dir.queue) {

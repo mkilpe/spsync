@@ -11,6 +11,9 @@
 #include <securepath/event_system/event_handler.hpp>
 #include <securepath/event_system/event_loop.hpp>
 
+#include <chrono>
+#include <memory>
+
 namespace securepath::groupchat {
 
 class gc_cli : public console::context, public event_system::event_handler {
@@ -42,10 +45,15 @@ private:
 	void send_message(std::string_view message);
 
 	void add_member(std::vector<std::wstring_view> const& args);
+	void invite(std::vector<std::wstring_view> const& args);
 	void join_chat(std::vector<std::wstring_view> const& args);
 	void my_info(std::vector<std::wstring_view> const& args);
 	void help(std::vector<std::wstring_view> const& args);
+
+	static std::vector<sync_replica> parse_fallbacks(std::vector<std::string> const&);
+	static gc_servers account_servers(gc_cli_config const&);
 private:
+	gc_cli_config const config_;
 	std::unique_ptr<cli_window> win_;
 	std::unique_ptr<cli_groupchat> gc_;
 	std::flat_map<std::wstring, cmd_data> cmds_;

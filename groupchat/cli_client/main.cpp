@@ -18,6 +18,12 @@ struct gc_cli_commands : gc_cli_config, command_parser {
 	gc_cli_commands() {
 		add(help, "help", "h", "show help");
 		add(path, "path", "p", "path to find gc_client.db");
+		add(root, "root", "", "DER file of the root public key anchoring certificate chains");
+		add(server, "server", "s", "home server host used when creating an account");
+		add(keyport, "keyport", "", "key server port of the home server");
+		add(syncport, "syncport", "", "storage server port of the home server");
+		add(packetport, "packetport", "", "packet server port of the home server");
+		add(fallbacks, "fallback", "", "replicas of the home sync server as host:syncport[:keyport]");
 	}
 };
 

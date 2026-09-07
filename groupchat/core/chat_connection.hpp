@@ -21,11 +21,20 @@ public:
 	chat_connection(chat_conn_context context);
 	~chat_connection();
 
-	/// connect to storage server
-	std::future<void> connect();
+	/**
+	 * Connect to the storage server; the replicas are tried in rotation (plan 4.5): after a
+	 * failed or lost session the next attempt goes to the next endpoint, and a lost session
+	 * reconnects by itself with a growing delay until disconnect() is called. The future is
+	 * ready once connected (or holds the error); a call while an attempt is in flight
+	 * returns that attempt's future, a call while connected a ready one
+	 */
+	std::shared_future<void> connect();
 
-	/// disconnect from server
+	/// disconnect from server and stop reconnecting
 	void disconnect();
+
+	/// true while the session with the sync server is up
+	bool is_connected() const;
 
 	/// Create chat on given server, will call on_create when fail or succeed
 	channel& create_chat(std::string name, users = {});
@@ -45,8 +54,11 @@ public:
 	/// Attached network context
 	network::context& context();
 
-	/// Host and port for this connection
+	/// Host and port for this connection (the primary endpoint the chats are recorded under)
 	host_port end_point() const;
+
+	/// the replica the latest connection attempt went to (the primary or one of the fallbacks)
+	host_port current_endpoint() const;
 
 	/// Get the id of this chat connection
 	server_id id() const;

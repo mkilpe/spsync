@@ -37,6 +37,11 @@ enum class record_state : std::int64_t {
 	acked
 };
 
+/// acked and in_sync both carry a server assigned sequence: the record is confirmed by the server
+inline bool is_server_confirmed(record_state state) {
+	return state == record_state::in_sync || state == record_state::acked;
+}
+
 /// returns true if in good state, ie. not unknown or invalid
 bool is_valid_state(record_state);
 

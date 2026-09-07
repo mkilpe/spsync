@@ -57,6 +57,14 @@ public:
 	/// highest sequence number of record received from server with state in_sync or pending_sync
 	sequence_number highest_sequence_number() const;
 
+	/**
+	 * Lowest sequence in [from, highest] without a record received from the server (states
+	 * in_sync, acked, pending_sync); invalid when those are contiguous. Weak modes accept
+	 * gapped records and a fetch interrupted by a lost connection or a replica hop leaves
+	 * a gap behind that must still be filled (plan 4.5).
+	 */
+	sequence_number first_missing_sequence(sequence_number from = sequence_number{1}) const;
+
 	/// highest in sync sequence of user change or segment records (used to replay server mode cursors)
 	sequence_number last_special_sequence() const;
 

@@ -9,6 +9,7 @@
 #include <securepath/event_system/event_handler.hpp>
 #include <securepath/network/encryption/error.hpp>
 
+#include <algorithm>
 #include <mutex>
 
 namespace securepath::groupchat {
@@ -57,13 +58,54 @@ struct chat_connection::impl
 	}
 
 	void on_connect() {
+		reconnect_delay = initial_reconnect_delay;
 		ccontext.callback.emit<events::on_connect>(ccontext.sid);
-		connect_promise.set_value();
+		if(promise_pending) {
+			promise_pending = false;
+			connect_promise.set_value();
+		}
 	}
 
+	/**
+	 * A failed attempt or a lost session: the next attempt goes to the next replica (plan
+	 * 4.5) and is scheduled with a growing delay unless disconnect() stopped the connection
+	 */
 	void on_disconnect(error const& err) {
+		LOG_INFO("sync server {} disconnected: {}", ccontext.sync_server, err);
 		ccontext.callback.emit<events::on_disconnect>(ccontext.sid, err);
-		connect_promise.set_exception(std::make_exception_ptr(err));
+		if(promise_pending) {
+			promise_pending = false;
+			connect_promise.set_exception(std::make_exception_ptr(err));
+		}
+		next_server = (last_server + 1) % sync_endpoints().size();
+		if(!stopped && !reconnect_timer) {
+			LOG_INFO("reconnecting to {} in {} ms", sync_endpoints()[next_server], reconnect_delay.count());
+			reconnect_timer = start_timer(reconnect_delay, true);
+			reconnect_delay = std::min(reconnect_delay * 2, max_reconnect_delay);
+		}
+	}
+
+	void on_timer(event_system::timer_handle handle) {
+		if(handle == reconnect_timer) {
+			reconnect_timer = {};
+			if(!stopped) {
+				try {
+					connect();
+				} catch(error const& err) {
+					LOG_WARN("reconnect attempt failed to start: {}", err);
+					on_disconnect(err);
+				}
+			}
+		}
+	}
+
+	void stop() {
+		stopped = true;
+		if(reconnect_timer) {
+			stop_timer(reconnect_timer);
+			reconnect_timer = {};
+		}
+		net.close();
 	}
 
 	void on_create_storage(sync::storage_id const& cid, error err) {
@@ -91,7 +133,8 @@ struct chat_connection::impl
 		dispatch( *ev
 				, event_dest<sync::events::on_connect>(&impl::on_connect)
 				, event_dest<sync::events::on_disconnect>(&impl::on_disconnect)
-				, event_dest<sync::events::on_create_storage>(&impl::on_create_storage) );
+				, event_dest<sync::events::on_create_storage>(&impl::on_create_storage)
+				, event_dest<event_system::timer_event>(&impl::on_timer) );
 	}
 
 	channel& create_chat(std::string name, users members) {
@@ -102,7 +145,8 @@ struct chat_connection::impl
 				throw make_error(crypto::errc::no_such_key, "cannot create chat, member key missing");
 			}
 		}
-		auto cid = net.create_storage(channel_storage_modes());
+		// a home server with replicas carries the chat on all of them (plan 4.2/4.5)
+		auto cid = net.create_storage(channel_storage_modes(!ccontext.fallback_sync_servers.empty()));
 		auto ret = channels.emplace(cid, std::make_unique<channel>(ccontext, cid));
 		ret.first->second->set_data(std::move(name), std::move(members));
 		ccontext.channels.add(cid, ccontext.sync_server);
@@ -117,40 +161,56 @@ struct chat_connection::impl
 	}
 
 	/**
-	 * Connect to the sync server, trying the replicas in order (plan 4.5). After a
-	 * failed session the next connect() starts from the endpoint after the one used, so
-	 * repeated reconnects rotate through the replicas.
+	 * Connect to the sync server (plan 4.5): the attempt goes to the replica next in the
+	 * rotation, connection failures arrive asynchronously through on_disconnect which
+	 * advances the rotation and schedules the next attempt.
 	 */
-	std::future<void> connect() {
+	std::shared_future<void> connect() {
+		stopped = false;
+		if(promise_pending) {
+			// an attempt is in flight (also the automatic reconnect): share its outcome
+			return connect_future;
+		}
 		connect_promise = {};
+		connect_future = connect_promise.get_future().share();
+		promise_pending = true;
 		std::chrono::seconds timeout{ccontext.config.get_default("network.timeout", 10).as_int64()};
 		auto const eps = sync_endpoints();
-		error err;
-		bool done = false;
-		for(std::size_t tried = 0; tried != eps.size() && !done; ++tried) {
-			auto const index = (next_server + tried) % eps.size();
-			err = net.connect(eps[index].host, eps[index].port, timeout);
-			if(!err) {
-				done = true;
-				next_server = (index + 1) % eps.size();
-			} else if(make_error_code(network::errc::already_connected) == err.code()) {
+		last_server = next_server % eps.size();
+		LOG_INFO("connecting to sync server {} (replica {} of {})", eps[last_server], last_server + 1, eps.size());
+		error err = net.connect(eps[last_server].host, eps[last_server].port, timeout);
+		if(err) {
+			promise_pending = false;
+			if(make_error_code(network::errc::already_connected) == err.code()) {
 				// connected already, just set the value
-				done = true;
 				connect_promise.set_value();
+			} else {
+				throw err;
 			}
 		}
-		if(!done) {
-			throw err;
-		}
-		return connect_promise.get_future();
+		return connect_future;
 	}
+
+	host_port current_endpoint() const {
+		return sync_endpoints()[last_server % sync_endpoints().size()];
+	}
+
+	static constexpr std::chrono::milliseconds initial_reconnect_delay{1000};
+	static constexpr std::chrono::milliseconds max_reconnect_delay{30000};
 
 	mutable std::mutex mutex;
 
 	chat_conn_context ccontext;
 	std::promise<void> connect_promise;
-	/// index of the sync endpoint the next connect() starts from (plan 4.5)
+	std::shared_future<void> connect_future;
+	bool promise_pending{};
+	/// index of the sync endpoint the next connect() goes to and the one the last went to (plan 4.5)
 	std::size_t next_server{};
+	std::size_t last_server{};
+	/// reconnect state: disconnect() stops it, a lost session restarts it with backoff
+	bool stopped{true};
+	event_system::timer_handle reconnect_timer{};
+	std::chrono::milliseconds reconnect_delay{initial_reconnect_delay};
 
 	std::flat_map<sync::storage_id, std::unique_ptr<channel>> channels;
 	sync::network_connection net;
@@ -165,12 +225,16 @@ chat_connection::~chat_connection()
 {
 }
 
-std::future<void> chat_connection::connect() {
+std::shared_future<void> chat_connection::connect() {
 	return impl_->connect();
 }
 
 void chat_connection::disconnect() {
-	impl_->net.close();
+	impl_->stop();
+}
+
+bool chat_connection::is_connected() const {
+	return impl_->net.is_connected();
 }
 
 channel& chat_connection::create_chat(std::string name, users members) {
@@ -212,6 +276,10 @@ network::context& chat_connection::context() {
 
 host_port chat_connection::end_point() const {
 	return impl_->ccontext.sync_server;
+}
+
+host_port chat_connection::current_endpoint() const {
+	return impl_->current_endpoint();
 }
 
 server_id chat_connection::id() const {

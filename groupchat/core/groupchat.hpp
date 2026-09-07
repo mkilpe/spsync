@@ -26,6 +26,9 @@ using sync::client::contact_list;
 /// Configuration for the group chat
 struct groupchat_config {
 	std::string path;
+	/// DER file of the root public key anchoring the servers' certificate chains; empty keeps
+	/// whatever root the process has (tests install their own)
+	std::string root_public_key_file;
 
 	std::string db() const { return path.empty() ? "gc_client.db" : path + "/gc_client.db"; };
 };
@@ -50,8 +53,18 @@ public:
 	/// Returns associated account information if account exists
 	std::optional<sync::client::account_info> account_info() const;
 
-	/// Try to create account (create key, register key to the server)
+	/// Try to create account (create key, register key to the server and its replicas)
 	void create_account(gc_servers const&, std::string const& name);
+
+	/// the replicas of the home sync server (plan 4.5)
+	std::vector<sync_replica> fallback_servers() const;
+
+	/**
+	 * Replace the replicas of the home sync server; applies to chat connections created
+	 * afterwards (the cli sets them at startup). Own key is registered at the new replicas
+	 * on the next connect()
+	 */
+	void set_fallback_servers(std::vector<sync_replica>);
 
 	/// Load and connect to existing channels
 	std::deque<channel_id> load_channels();

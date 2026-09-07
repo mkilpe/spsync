@@ -54,6 +54,9 @@ public:
 	virtual sync::progress& progress() const;
 	virtual record_storage& records() const;
 
+	/// number of requests the engine issued through this client (sequence/fetch/commit)
+	std::uint64_t request_count() const { return req_handle; }
+
 	/// the server this client is connected to; null when disconnected
 	test_sync_server* connected_server() const { return server_; }
 
@@ -193,6 +196,8 @@ public:
 		std::set<octet_vector> seen;
 		/// countdown + record waiting to cross
 		std::deque<std::pair<int, chain_block>> queue;
+		/// the source chain is scanned up to here (it only grows: append-only log)
+		sequence_number scanned;
 	};
 	struct replication_link {
 		std::size_t a{}, b{};

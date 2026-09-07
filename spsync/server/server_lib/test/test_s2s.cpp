@@ -10,6 +10,7 @@
 #include <securepath/test_frame/test_suite.hpp>
 #include <securepath/test_frame/test_utils.hpp>
 
+#include <algorithm>
 #include <filesystem>
 
 namespace securepath::sync {
@@ -84,17 +85,26 @@ TEST_CASE("s2s peers exchange heads", "[unit]") {
 	WAIT_CHECK(!b.heads_of_peer(key_a, sid).empty(), 5s);
 	WAIT_CHECK(!a.heads_of_peer(key_b, sid).empty(), 5s);
 
-	auto heads_on_b = b.heads_of_peer(key_a, sid);
-	REQUIRE(heads_on_b.size() == 1);
-	CHECK(heads_on_b[0].origin == key_a);
-	CHECK(heads_on_b[0].term == 0);
-	CHECK(heads_on_b[0].block.sequence == sequence_number{1});
-	CHECK(heads_on_b[0].block.hash == creator_a.last_chain_hash);
+	// the peers dial each other, so the announcement seen can be the one of the second
+	// connection which may already carry the origin pulled over the first: look at the
+	// announcer's own origin
+	auto own_head = [](std::vector<origin_head> const& heads, crypto::public_key_id const& origin) {
+		auto it = std::ranges::find(heads, origin, &origin_head::origin);
+		REQUIRE(it != heads.end());
+		return *it;
+	};
+	// an own head is the announcer's local chain head: 1 record, or 2 once the first
+	// connection already pulled the other's record
+	auto head_a = own_head(b.heads_of_peer(key_a, sid), key_a);
+	CHECK(head_a.term == 0);
+	CHECK(head_a.block.sequence >= sequence_number{1});
+	CHECK(head_a.block.sequence <= sequence_number{2});
+	if(head_a.block.sequence == sequence_number{1}) {
+		CHECK(head_a.block.hash == creator_a.last_chain_hash);
+	}
 
-	auto heads_on_a = a.heads_of_peer(key_b, sid);
-	REQUIRE(heads_on_a.size() == 1);
-	CHECK(heads_on_a[0].origin == key_b);
-	CHECK(heads_on_a[0].block.sequence == sequence_number{1});
+	auto head_b = own_head(a.heads_of_peer(key_b, sid), key_b);
+	CHECK(head_b.block.sequence >= sequence_number{1});
 
 	a.close();
 	b.close();
@@ -316,6 +326,113 @@ TEST_CASE("s2s anti-entropy heals partitions", "[unit]") {
 	b2.close();
 	std::filesystem::remove_all("test-s2s-ea");
 	std::filesystem::remove_all("test-s2s-eb");
+}
+
+
+// a storage created on one replica appears on the others (the heads and pushes carry its
+// modes, plan 4.2/4.4): B never opened it and gets both the storage and the record
+TEST_CASE("s2s replica creates the storage on first contact", "[unit]") {
+	std::filesystem::remove_all("test-s2s-ca");
+	std::filesystem::remove_all("test-s2s-cb");
+
+	test::test_context tctx;
+	tctx.add_client(2);
+	// no pre-shared keys: B learns A's key from the authenticated peer handshake and
+	// verifies A's signed assignments (and A's signed record) with it
+	network::enable_pk_handshake(tctx.client_context(0));
+	network::enable_pk_handshake(tctx.client_context(1));
+
+	auto const key_a = tctx.key_id(0);
+	auto const key_b = tctx.key_id(1);
+
+	storage_server a(tctx.client_context(0),
+		s2s_test_params("test-s2s-ca", 42780, 42790, {peer_config{"127.0.0.1", 42791, key_b}}));
+	storage_server b(tctx.client_context(1),
+		s2s_test_params("test-s2s-cb", 42781, 42791, {peer_config{"127.0.0.1", 42790, key_a}}));
+
+	protocol::storage_id const sid = securepath::test::random_octet_vector(8);
+	storage_modes const modes{sync_mode::allow_all, auth_mode::sign_records, replication_mode::weak};
+	auto sa = a.open_storage(sid, modes);
+	REQUIRE(sa);
+	a.start();
+	b.start();
+	WAIT_CHECK((!a.connected_peers().empty() && !b.connected_peers().empty()), 5s);
+
+	// an unreplicated storage is never created by a peer's announcement
+	protocol::storage_id const local_sid = securepath::test::random_octet_vector(8);
+	REQUIRE(a.open_storage(local_sid, storage_modes{sync_mode::allow_all, auth_mode::sign_records}));
+
+	test::test_block_creator creator_a;
+	creator_a.signer = *tctx.client_context(0).private_data().my_private_key();
+	REQUIRE(sa->commit_block(creator_a.test_user_change()).block);
+
+	WAIT_CHECK(b.has_storage(sid), 5s);
+	auto sb = b.open_storage(sid, modes);
+	REQUIRE(sb);
+	CHECK(sb->modes() == modes);
+	WAIT_CHECK(sb->current_sequence_number() == sequence_number{1}, 5s);
+	CHECK(!b.has_storage(local_sid));
+
+	a.close();
+	b.close();
+	std::filesystem::remove_all("test-s2s-ca");
+	std::filesystem::remove_all("test-s2s-cb");
+}
+
+// a restarted server reopens its replicated storages from disk (plan 5.1): nobody has to
+// connect to it before it announces heads, takes pushes and serves pulls again
+TEST_CASE("s2s restart reopens replicated storages", "[unit]") {
+	std::filesystem::remove_all("test-s2s-ra");
+	std::filesystem::remove_all("test-s2s-rb");
+
+	test::test_context tctx;
+	tctx.add_client(2);
+	tctx.share_client_keys();
+	network::enable_pk_handshake(tctx.client_context(0));
+	network::enable_pk_handshake(tctx.client_context(1));
+
+	auto const key_a = tctx.key_id(0);
+	auto const key_b = tctx.key_id(1);
+	auto const params_a = s2s_test_params("test-s2s-ra", 42782, 42792, {peer_config{"127.0.0.1", 42793, key_b}});
+	auto const params_b = s2s_test_params("test-s2s-rb", 42783, 42793, {peer_config{"127.0.0.1", 42792, key_a}});
+
+	protocol::storage_id const sid = securepath::test::random_octet_vector(8);
+	storage_modes const modes{sync_mode::allow_all, auth_mode::sign_records, replication_mode::weak};
+	test::test_block_creator creator_a;
+	creator_a.signer = *tctx.client_context(0).private_data().my_private_key();
+	{
+		// A holds the storage with one record and goes down
+		storage_server a(tctx.client_context(0), params_a);
+		auto sa = a.open_storage(sid, modes);
+		REQUIRE(sa);
+		REQUIRE(sa->commit_block(creator_a.test_user_change()).block);
+		a.close();
+	}
+
+	storage_server b(tctx.client_context(1), params_b);
+	b.start();
+	storage_server a(tctx.client_context(0), params_a);
+	a.start();
+	WAIT_CHECK((!a.connected_peers().empty() && !b.connected_peers().empty()), 5s);
+
+	// A announced the storage it reopened: B created its replica and pulled the record
+	WAIT_CHECK(b.has_storage(sid), 5s);
+	auto sb = b.open_storage(sid, modes);
+	REQUIRE(sb);
+	WAIT_CHECK(sb->current_sequence_number() == sequence_number{1}, 5s);
+
+	// and a push from B lands in A's reopened storage without any client opening it
+	test::test_block_creator creator_b = creator_a;
+	creator_b.signer = *tctx.client_context(1).private_data().my_private_key();
+	REQUIRE(sb->commit_block(creator_b.test_data_change()).block);
+	auto sa = a.open_storage(sid, modes);
+	REQUIRE(sa);
+	WAIT_CHECK(sa->current_sequence_number() == sequence_number{2}, 5s);
+
+	a.close();
+	b.close();
+	std::filesystem::remove_all("test-s2s-ra");
+	std::filesystem::remove_all("test-s2s-rb");
 }
 
 }

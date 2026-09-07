@@ -58,6 +58,10 @@ void network_connection::close() {
 	impl_->close();
 }
 
+bool network_connection::is_connected() const {
+	return impl_->state() == network::encrypted_connection::connected;
+}
+
 storage_id network_connection::create_storage(std::optional<storage_modes> modes) {
 	storage_id id = crypto::random_octet_vector(16);
 	auto [wm, wa, wr] = to_wire(modes);

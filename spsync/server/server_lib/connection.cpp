@@ -47,7 +47,8 @@ void connection::handle(protocol::create_storage const& p) {
 	LOG_TRACE("create_storage for user {}", id_);
 	securepath::error error;
 	try {
-		auto handle = context_.acquire_sync(p.sid, modes_from_wire(p.mode, p.amode, p.repl));
+		// a creation always carries modes: the requested ones or the server defaults
+		auto handle = context_.acquire_sync(p.sid, modes_from_wire(p.mode, p.amode, p.repl).value_or(storage_modes{}));
 		syncs_.emplace(p.sid, handle);
 		handle->add_listener(shared_from_this());
 	} catch(securepath::error const& err) {
@@ -80,6 +81,11 @@ void connection::handle(protocol::request_sequence_number const& p) {
 		if(handle) {
 			smodes = handle->modes();
 			auto expected = modes_from_wire(p.expected_mode, p.expected_amode, p.expected_repl);
+			if(expected && expected->replication == replication_mode::none) {
+				// a client states the sync and auth modes it operates in; whether the
+				// server replicates the storage is not something it has to know
+				expected->replication = smodes.replication;
+			}
 			if(expected && *expected != smodes) {
 				LOG_INFO("storage mode mismatch for user {} (sid={})", id_, to_hex(p.sid));
 				error = make_error(protocol::errc::storage_mode_mismatch);

@@ -225,6 +225,16 @@ TEST_CASE("message_storage sync test", "[unit]") {
 
 	REQUIRE(ms.get(message_search{}).size() == 10);
 
+	// a restart while the records are still pending reconciles them again (the cli
+	// crashed on the unique message id here)
+	sync_message_storage(ms, rs, keys);
+	REQUIRE(ms.get(message_search{}).size() == 10);
+	{
+		message_storage reopened(db);
+		sync_message_storage(reopened, rs, keys);
+		REQUIRE(reopened.get(message_search{}).size() == 10);
+	}
+
 	for(auto h = rs.find_first_pending_commit(); h; h = rs.find_first_pending_commit()) {
 		h->set_state(sync::record_state::in_sync);
 	}

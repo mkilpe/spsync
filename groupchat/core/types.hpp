@@ -14,6 +14,7 @@
 #include <memory>
 #include <string>
 #include <tuple>
+#include <vector>
 
 namespace securepath::groupchat {
 
@@ -65,6 +66,29 @@ struct channel_info {
 	std::string name;
 };
 
+/**
+ * One replica of the home sync server (plan 4.5): its storage endpoint and the key server
+ * that registers the keys the replica verifies records with (every spsync server bundles
+ * one; a replica that does not know a client's key rejects its records as unknown signer)
+ */
+struct sync_replica {
+	host_port sync_server;
+	host_port key_server;
+
+	bool operator==(sync_replica const&) const = default;
+
+	template<typename Ar>
+	void serialise(Ar& ar) {
+		serialisation::sequence<Ar> seq(ar);
+		seq & sync_server & key_server;
+	}
+};
+
+/// parse "host:syncport[:keyport]" (an IPv6 host in brackets); the key port defaults to the
+/// key server default port. Throws error(errc::invalid_argument) on malformed input
+sync_replica parse_sync_replica(std::string const& text);
+std::string format_replica(sync_replica const&);
+
 struct gc_servers {
 	std::string host;
 	std::uint16_t key_server_port;
@@ -72,12 +96,15 @@ struct gc_servers {
 	std::uint16_t packet_server_port;
 
 	/// further replicas of the sync server, tried in order after the primary (plan 4.5)
-	std::vector<host_port> fallback_sync_servers{};
+	std::vector<sync_replica> fallbacks{};
 
 	host_port key_server() const { return host_port{host, key_server_port}; }
 	host_port sync_server() const { return host_port{host, sync_server_port}; }
 	host_port packet_server() const { return host_port{host, packet_server_port}; }
 };
+
+/// the storage endpoints of the replicas in connection order
+std::vector<host_port> sync_endpoints(std::vector<sync_replica> const&);
 
 using sync::client::account_info;
 

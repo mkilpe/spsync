@@ -439,7 +439,7 @@ TEST_CASE("chain_sync commit_foreign is lenient", "[unit]") {
 	CHECK(check_result_error(sync.commit_foreign(foreign), protocol::errc::record_already_committed));
 }
 
-// (6h) a replicated storage accepts only delta mode user changes (plan 4.6/D9)
+// (6h) a replicated storage accepts only delta mode user changes after the first (plan 4.6/D9)
 TEST_CASE("chain_sync replicated storage requires delta user changes", "[unit]") {
 	remove_database_test_db();
 	chain_sync_config config{sync_mode::allow_all};
@@ -456,6 +456,8 @@ TEST_CASE("chain_sync replicated storage requires delta user changes", "[unit]")
 		return creator.next_block(rec);
 	};
 
+	// the initial membership of a new storage is a full change (nothing to drop yet)
+	CHECK(sync.commit_block(make_change(users_change_mode::full)));
 	CHECK(check_result_error(sync.commit_block(make_change(users_change_mode::full)), protocol::errc::invalid_record));
 	CHECK(sync.commit_block(make_change(users_change_mode::delta)));
 }

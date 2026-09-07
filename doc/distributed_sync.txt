@@ -964,6 +964,63 @@ Phase 4  Server-to-server, weak mode  (M3)
       passes ([stress] tag, bump `rounds` for long runs). Remaining verification
       is operational: an hours-long stress run and the two-server cli groupchat
       session (needs the 4.5 fallback endpoints wired into the cli config).
+      M3 gate 2026-09-05: both parts done. The stress loop (SPSYNC_STRESS_ROUNDS /
+      SPSYNC_STRESS_SEED environment overrides, seeds swept at 3000 rounds plus
+      30000-round runs on tmpfs; the harness debug.log must go to /dev/null for
+      long runs, it fills a disk) ran for hours: after the fix below 48 seeds x
+      3000 rounds and a 30000-round run (33 min) were green; the final binary
+      then ran two loops for four hours (2026-09-05 23:03 - 2026-09-06 03:30):
+      316 seeds x 3000 rounds and 9 seeds x 30000 rounds (27-32 min each), all
+      green, no failures. It found and fixed:
+        B9  interrupted refetch leaves a gap: a hop (or lost connection) mid
+            refetch, then a live push of a newer record made the client believe
+            it was up to date (highest sequence), the gap was never filled and a
+            demoted record inside it was recommitted forever ("already committed"
+            retry storm). record_storage::first_missing_sequence + engine
+            fetch_cursor fetch from the first gap; a rejected pending record is
+            marked in its current form (rejected_pending) and only resent after a
+            rebase changed it, new records, a completed fetch or a reconnect.
+            Harness pump_link now scans the source chain from a cursor.
+      The two-server cli session (scripts/multi_server_env.sh; alice and bob on
+      replica A with B as fallback, A killed and restarted mid conversation, then
+      B) found and fixed:
+        B10 nothing installed the root public key in a real process: every
+            certificate chain failed. encrypted_net_base_params gained
+            root_public_key_file (--root on spsync_server, packet_server,
+            key_serverd, gc_cli); securepath's sp_keygen (lib doc/keygen.md) creates
+            the pki (root + CA) and certified server keys (private_data.db) and
+            client keys (gc_client.db).
+            Clients need a certified key because the storage and packet servers
+            authenticate them; production enrolment of client keys is open.
+        B11 replicas only got storages somebody opened on them: peer_heads and
+            push_records carry the storage modes, acquire_replica creates a
+            replicated storage on first contact or reopens it from disk, and a
+            server opens every replicated storage at start (5.1 restart).
+        B12 a peer's signed assignments did not verify on the other replica (its
+            key was never distributed): the handshake exposes the authenticated
+            remote public key and a peer's key is trusted on hello.
+        B13 a plain load of an unknown storage id created it with default modes
+            (the cli's lost create request then produced a mismatching storage);
+            creation now needs modes, a load throws no_such_storage.
+        B14 the client's rebase decision was positional (special sequence vs the
+            record's last seen sequence) while the server rule is tag bound (4.3):
+            a message sent before the first sync, based on a data record beyond
+            the membership record, referenced no special record and was rejected
+            forever (a second retry storm). needs_rebase compares the special
+            tags; update_pending_commit rebuilds when the reference is stale.
+        B15 a client's expected modes carried replication none and the server
+            refused the sequence sync of a replicated storage; replication is not
+            asserted by clients any more.
+        B16 groupchat: a message still pending at a restart crashed the client on
+            the unique message id (message_storage reconciliation is idempotent
+            now); chat_connection reconnects by itself with backoff and rotates
+            through the replicas; the cli got --server/--keyport/--syncport/
+            --packetport/--fallback/--root, /invite, registers the own key at every
+            replica, creates chats with weak replication when replicas are
+            configured, never blocks its event loop waiting for a connection.
+      Still open after the gate: chats hosted on a foreign server (invitations to
+      another home) carry no replica list; the json chat order test fails since
+      the 1.6 sender time ordering (pre-existing, not touched).
 
 
 Phase 5  Server recovery and evidence  (M4)

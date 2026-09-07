@@ -36,8 +36,114 @@ public:
 			return request_handle{};
 		}
 		pushing_pending_commit = comm.commit_record(h);
+		pushing_tag = h->tag();
 		LINFO("trying to commit record to server [tag = {}, request handle = {}]", to_hex(h->tag()), pushing_pending_commit);
 		return pushing_pending_commit;
+	}
+
+	/**
+	 * Where a fetch continues from: the record before the first gap in the received
+	 * sequences, else the highest received one. A fetch interrupted by a lost connection
+	 * or a replica hop leaves a gap that weak modes accept but must still fill (plan 4.5);
+	 * after a history cut the retained records below the trusted anchor stay sparse.
+	 */
+	sequence_number fetch_cursor() const {
+		sequence_number from{1};
+		if(!config.trusted_anchor.empty()) {
+			if(auto anchor = records.find(config.trusted_anchor)) {
+				from = anchor->block_id().sequence;
+			}
+		}
+		auto const gap = records.first_missing_sequence(from);
+		return gap.is_valid() ? sequence_number{gap.value - 1} : records.highest_sequence_number();
+	}
+
+	/// fetch everything after the cursor when the server is ahead; false when up to date
+	bool fetch_missing(std::string_view why) {
+		auto const cursor = fetch_cursor();
+		bool const behind = cursor < server_seq;
+		if(behind) {
+			auto req_h = comm.fetch_records(cursor, sequence_number{});
+			LTRACE("{}, requested records [{},-] (request handle {})", why, cursor, req_h);
+		}
+		return behind;
+	}
+
+	/**
+	 * The server rejected the outstanding commit and there is nothing to fetch that could
+	 * change the picture: remember the record as rejected in its current form so
+	 * try_commit_pending does not resend it unchanged (the M3 runs found both the
+	 * already-committed and the out-of-sync retry storms). A rebase changes the record's
+	 * hash and lifts the mark; new records, a completed fetch and a reconnect clear all.
+	 */
+	void mark_rejected(bool duplicate) {
+		if(!pushing_tag.empty()) {
+			if(auto h = records.find_tag(pushing_tag)) {
+				rejected_pending[pushing_tag] = rejection{h->record().hash(), duplicate};
+			}
+		}
+	}
+
+	/**
+	 * Already committed: the server holds the tag, or the same op under another tag.
+	 * Fetching what we miss confirms or adopts it, a blind recommit would only be
+	 * rejected again.
+	 */
+	void on_duplicate_rejected() {
+		mark_rejected(true);
+		if(!fetch_missing("pending record already committed")) {
+			// nothing to fetch: whatever the server holds under this op is here already
+			resolve_rejected_duplicates();
+			try_commit_pending();
+		}
+	}
+
+	/// out of sync with nothing to fetch: a rebase (try_commit_pending) is the only way on
+	void on_out_of_sync_rejected() {
+		if(!fetch_missing("out of sync")) {
+			mark_rejected(false);
+			try_commit_pending();
+		}
+	}
+
+	/// drop rejected duplicates whose committed twin (same op) we hold; the rest stay marked
+	void resolve_rejected_duplicates() {
+		for(auto it = rejected_pending.begin(); it != rejected_pending.end();) {
+			auto h = records.find_tag(it->first);
+			bool resolved = !h || h->state() != record_state::pending_commit;
+			if(!resolved && it->second.duplicate) {
+				auto op = h->record().deserialise_record<octet_vector>([](auto const& rec){ return rec.op_id(); });
+				auto twin = op.empty() ? record_handle{} : records.find_op_id(op);
+				if(twin && twin != h && is_server_confirmed(twin->state())) {
+					LWARN("dropping pending record committed under another tag [tag = {}, committed tag = {}]",
+						to_hex(h->tag()), to_hex(twin->tag()));
+					h->set_state(record_state::invalid);
+					resolved = true;
+				} else {
+					LWARN("server holds pending record as committed but its copy is unknown here [tag = {}]", to_hex(h->tag()));
+				}
+			}
+			it = resolved ? rejected_pending.erase(it) : std::next(it);
+		}
+	}
+
+	/// something changed in the server side view: every rejected pending gets another try
+	void clear_rejections() {
+		rejected_pending.clear();
+	}
+
+	/// the fetch chain ended: every rejected pending had its chance to be confirmed or adopted
+	void on_fetch_complete() {
+		if(!rejected_pending.empty()) {
+			clear_rejections();
+			try_commit_pending();
+		}
+	}
+
+	/// rejected by the server in exactly this form: sending it again would say nothing new
+	bool is_rejected_unchanged(record_handle const& h) const {
+		auto it = rejected_pending.find(h->tag());
+		return it != rejected_pending.end() && it->second.hash == h->record().hash();
 	}
 
 	void notify_on_record(record_handle h) {
@@ -415,6 +521,9 @@ public:
 		if(id.is_valid() && is_structurally_valid(record)) {
 			auto handle = records.find_tag(record.tag());
 			if(!handle) {
+				// a new record may be what a rejected pending was missing (e.g. the special
+				// record it has to reference): let the rejected ones try again
+				clear_rejections();
 				if(auto own = find_pending_by_op(record)) {
 					adopt_committed(own, record, id);
 				} else {
@@ -426,6 +535,7 @@ public:
 				// the server's copy of a record we hold as pending: a lost commit response
 				// or a replica resync (plan 4.5) - confirm it under the server's cursor
 				update_record_commit_state(handle, record, id);
+				rejected_pending.erase(record.tag());
 			} else {
 				LTRACE("record block already known [block id = {}, tag = {}]", id, to_hex(record.tag()));
 			}
@@ -568,7 +678,7 @@ public:
 	chain_block update_pending_commit(chain_block const& record) {
 		return record.deserialise_record<chain_block>([&](auto const& rec) {
 				//check if we are already trying to commit pending record, so that we don't overwrite it while in progress
-				if(rec.last_seen_block() == records.last_block()) {
+				if(rec.last_seen_block() == records.last_block() && rec.last_seen_special_tag() == last_special_tag()) {
 					// already up-to-date it seems
 					return chain_block{};
 				}
@@ -614,7 +724,8 @@ public:
 				}
 				state.last_seen = rec.last_seen_block();
 				state.head = records.last_block();
-				state.last_special = records.last_special_sequence();
+				state.special_ref = rec.last_seen_special_tag();
+				state.newest_special = last_special_tag();
 				state.last_data_add = records.last_data_add_sequence();
 				return needs_rebase(state);
 			});
@@ -659,7 +770,8 @@ public:
 			// ie. pushing currently even if we just did and something came in meanwhile
 			LTRACE("trying to commit pending records");
 			auto handle = records.find_first_pending_commit();
-			for(; handle;) {
+			bool committed = false;
+			while(handle && !committed) {
 				auto conflicts = find_oid_conflicts(handle->record());
 				if(!conflicts.empty() && config.conflicts == conflict_policy::ask) {
 					cancel_conflicting(handle, conflicts);
@@ -673,9 +785,14 @@ public:
 						}
 						notify_conflicts(handle, conflicts);
 					}
-					//t: avoid recommitting unchanged records the server has already rejected
-					commit_record(handle);
-					handle = nullptr;
+					if(is_rejected_unchanged(handle)) {
+						// the rebase changed nothing since the server rejected it: leave it
+						// until new records, a completed fetch or a reconnect
+						handle = records.find_next_pending_commit(handle);
+					} else {
+						commit_record(handle);
+						committed = true;
+					}
 				}
 			}
 		}
@@ -698,6 +815,16 @@ public:
 	sequence_number server_seq;
 	// if we have ongoing committing going for pending record
 	request_handle pushing_pending_commit{};
+	/// tag of the record the outstanding commit request carries
+	record_tag pushing_tag;
+	/// a pending record the server rejected, in the form (hash) it was rejected in
+	struct rejection {
+		octet_vector hash;
+		bool duplicate{};
+	};
+	/// pending records the server rejected; try_commit_pending skips them while they are
+	/// unchanged, new records / a completed fetch / a reconnect clear the marks
+	std::map<record_tag, rejection> rejected_pending;
 	// set when the server is suspected of showing two histories; commits stop (plan 2.6)
 	bool fork_suspected{};
 };
@@ -747,6 +874,7 @@ void sync_engine::set_config(sync_engine_config config) {
 void sync_engine::on_connected() {
 	std::unique_lock lock{impl_->mutex};
 	impl_->pushing_pending_commit = 0;
+	impl_->clear_rejections();
 	auto handle = impl_->comm.fetch_sequence_number();
 	LTRACE("on_connected, requested sequence number (request handle {})", handle);
 }
@@ -764,12 +892,7 @@ void sync_engine::on_sequence_number_response(request_handle req_handle, result<
 		LINFO("on_sequence_number_response: {} (request handle {})", res.value().sequence, req_handle);
 		impl_->check_cursor_owner(res.value().server_id);
 		impl_->update_server_seq(res.value().sequence);
-		auto highest_seq = impl_->records.highest_sequence_number();
-		if(highest_seq < res.value().sequence) {
-			// try to fetch all records we don't have
-			auto req_h = impl_->comm.fetch_records(highest_seq, sequence_number{});
-			LTRACE("requested records [{},-] (request handle {})", highest_seq, req_h);
-		} else {
+		if(!impl_->fetch_missing("behind the server")) {
 			//already up-to-date with server but perhaps we have some local pending commits
 			impl_->try_commit_pending();
 		}
@@ -792,7 +915,11 @@ void sync_engine::on_record_response(request_handle req_handle, record_response 
 			if(last_seq < res.requested_max || (!res.requested_max.is_valid() && last_seq < res.server_max_sequence)) {
 				auto req_h = impl_->comm.fetch_records(last_seq, res.requested_max);
 				LTRACE("requested more records [{},{}] (request handle {})", last_seq, res.requested_max, req_h);
+			} else {
+				impl_->on_fetch_complete();
 			}
+		} else {
+			impl_->on_fetch_complete();
 		}
 	} else {
 		LINFO("fetching records failed: error={}", res.data.get_error());
@@ -841,18 +968,11 @@ void sync_engine::on_commit_response(request_handle req_handle, commit_response 
 		//  + 3. recreate the records with correct previous tag/last seen seq for non-conflicting records
 		//  + 4. try to commit again
 
+		impl_->update_server_seq(res.server_max_sequence);
 		if(check_result_error(res.data, protocol::errc::record_out_of_sync)) {
-			auto highest_seq = impl_->records.highest_sequence_number();
-			if(highest_seq < res.server_max_sequence) {
-				// try to fetch all records we don't have
-				auto req_h = impl_->comm.fetch_records(highest_seq, sequence_number{});
-				LTRACE("out of sync, requested records [{},-] (request handle {})", highest_seq, req_h);
-			} else {
-				//already up-to-date with server but perhaps we have some local pending commits
-				impl_->try_commit_pending();
-			}
+			impl_->on_out_of_sync_rejected();
 		} else if(check_result_error(res.data, protocol::errc::record_already_committed)) {
-			impl_->try_commit_pending();
+			impl_->on_duplicate_rejected();
 		}
 	}
 }

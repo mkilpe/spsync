@@ -4,12 +4,27 @@
 #include <securepath/test_frame/test_suite.hpp>
 #include <securepath/test_frame/test_utils.hpp>
 
+#include <cstdlib>
 #include <random>
 
 namespace securepath::sync {
 using namespace securepath::sync::util;
 
 namespace {
+
+/// integer from the environment, the default when unset or malformed (long stress runs
+/// set SPSYNC_STRESS_ROUNDS / SPSYNC_STRESS_SEED without a rebuild)
+int env_int(char const* name, int def) {
+	int ret = def;
+	if(auto const v = std::getenv(name)) {
+		try {
+			ret = std::stoi(v);
+		} catch(std::exception const&) {
+			ret = def;
+		}
+	}
+	return ret;
+}
 
 /// three servers in a chain topology (0-1, 1-2: transitivity through the middle) with
 /// clients_per_server clients on each (client i sits on server i % 3)
@@ -209,19 +224,72 @@ TEST_CASE("multi server full scenario", "[unit]") {
 	context.print_summary();
 }
 
+// (27) a hop interrupts the 4.5 resync refetch and the client comes back to the same
+// replica while a live push already delivered a newer record: the received sequences
+// have a gap (weak modes store gapped records) which must be refetched - the client is
+// not up to date just because it holds the highest sequence. A demoted record inside the
+// gap is confirmed by its copy instead of being recommitted forever (the M3 stress found
+// that loop: the drain never finished)
+TEST_CASE("multi server interrupted refetch", "[unit]") {
+	test::test_sync_context context(chain_sync_config{sync_mode::allow_all});
+	setup_three(context);
+
+	// enough records that a refetch takes several 30 record responses
+	for(int i = 0; i != 40; ++i) {
+		for(int c = 0; c != 3; ++c) {
+			context.client(c).engine.sync_object_change(create_object_id(), metadata{});
+		}
+	}
+	while(context.handle_events()) {}
+	REQUIRE(context.servers_converged());
+	auto const before = context.server_n(1).sync.current_sequence_number();
+	REQUIRE(before > sequence_number{100});
+
+	// client 0 hops to server 1: the resync demotes everything and refetches from the start
+	context.disconnect_client(0);
+	context.handle_events();
+	context.connect_client_to(0, 1);
+	context.handle_events();   // the sequence answer: resync, first batch requested
+	context.handle_events();   // first batch in, next requested
+	// a record committed on the replica meanwhile reaches client 0 as a live push, so
+	// the client holds the newest sequence while the refetch is still in the middle
+	context.client(1).engine.sync_object_change(create_object_id(), metadata{});
+	context.handle_events();
+	context.handle_events();
+	auto& records = context.client(0).io.records();
+	REQUIRE(records.highest_sequence_number() > before);
+	REQUIRE(records.first_missing_sequence().is_valid());
+
+	// the connection drops mid refetch (the outstanding response is lost with it) and
+	// comes back to the same replica
+	context.disconnect_client(0);
+	context.handle_events();
+	context.connect_client_to(0, 1);
+	while(context.handle_events()) {}
+
+	CHECK(!records.first_missing_sequence().is_valid());
+	CHECK(!records.find_first_pending_commit());
+	CHECK(records.highest_sequence_number() == context.server_n(1).sync.current_sequence_number());
+	CHECK(context.servers_converged());
+}
+
 // (26) the M3 stress: random commits, membership changes, partitions and clients
 // hopping between replicas mid-flight (the 4.5 resync); after the dust settles every
-// replica has converged (plan 4.7). Bounded here; longer runs by bumping rounds
+// replica has converged (plan 4.7). Bounded by default; the M3 hours-long shakedown runs
+// it in a loop with SPSYNC_STRESS_ROUNDS and SPSYNC_STRESS_SEED in the environment
 TEST_CASE("multi server stress", "[stress]") {
+	int const rounds = env_int("SPSYNC_STRESS_ROUNDS", 120);
+	int const seed = env_int("SPSYNC_STRESS_SEED", 12345);
+	std::cout << std::format("stress: {} rounds, seed {}\n", rounds, seed);
+
 	test::test_sync_context context(chain_sync_config{sync_mode::allow_all});
 	setup_three(context, 2);   // six clients, two on each server
 	context.add_link(0, 2, 1);
 
-	std::mt19937 rng(12345);
+	std::mt19937 rng(static_cast<std::mt19937::result_type>(seed));
 	auto pick = [&](int n) { return static_cast<int>(rng() % n); };
 	int const client_count = 6;
 
-	int const rounds = 120;
 	for(int round = 0; round != rounds; ++round) {
 		switch(pick(7)) {
 		case 0:

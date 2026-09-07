@@ -25,7 +25,9 @@ public:
 	/**
 	 * Open (or create) the record storage. The modes are persisted in the storage database on
 	 * first creation and are immutable afterwards; when create_modes is given and an existing
-	 * storage has different modes, construction throws storage_mode_mismatch.
+	 * storage has different modes, construction throws storage_mode_mismatch. Without
+	 * create_modes only an existing storage opens: an unknown id throws no_such_storage
+	 * (a plain load never leaves a default mode storage behind).
 	 */
 	storage(protocol::storage_id id, storage_config config, std::optional<storage_modes> create_modes = {},
 		crypto::public_key_access* keys = nullptr, crypto::private_data_access* private_data = nullptr);
@@ -77,7 +79,7 @@ public:
 	 */
 	error apply_foreign(block_envelope const&);
 
-	using peer_push_hook = std::function<void(protocol::storage_id const&, block_envelope const&)>;
+	using peer_push_hook = std::function<void(protocol::storage_id const&, storage_modes const&, block_envelope const&)>;
 
 	/// set by the storage server: fans a committed envelope out to the connected peers
 	void set_peer_push(peer_push_hook);

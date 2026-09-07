@@ -22,12 +22,6 @@ namespace {
 
 std::int64_t const seq_selector_value(1);
 
-/// acked and in_sync both carry a server assigned sequence; they share the unique
-/// sequence selector so no two such records can claim the same sequence
-bool is_server_confirmed(record_state state) {
-	return state == record_state::in_sync || state == record_state::acked;
-}
-
 void create_object_records(database::connection_ptr db, octet_vector const& tag, data_change_record const& rec) {
 	for(auto& obj : rec) {
 		auto q = db->prepare(
@@ -590,6 +584,34 @@ record_handle record_storage::find_next_pending_commit(record_handle h) const {
 	q.bind(":state", std::to_underlying(record_state::pending_commit));
 	q.bind(":key", h->internal_id());
 	return impl_->load_record(q.execute());
+}
+
+sequence_number record_storage::first_missing_sequence(sequence_number from) const {
+	auto const received = " state IN (" + std::to_string(std::to_underlying(record_state::in_sync)) + ","
+		+ std::to_string(std::to_underlying(record_state::acked)) + ","
+		+ std::to_string(std::to_underlying(record_state::pending_sync)) + ")";
+	auto highest = impl_->db->prepare("SELECT max(seq) FROM record WHERE" + received + ";");
+	sequence_number const top{highest.execute().value<std::uint64_t>(0).value_or(0)};
+	sequence_number ret;
+	if(from.is_valid() && from <= top) {
+		auto at_from = impl_->db->prepare("SELECT count(*) FROM record WHERE seq = :from AND" + received + ";");
+		at_from.bind(":from", from.value);
+		// a count is a plain integer (sequences are stored with the unsigned offset)
+		if(at_from.execute().value<std::int64_t>(0).value_or(0) == 0) {
+			ret = from;
+		} else {
+			// the first received record (at or above from) whose successor is missing
+			auto q = impl_->db->prepare("SELECT min(r.seq) + 1 FROM record r WHERE r.seq >= :from AND r.seq < :top AND" + received
+				+ " AND NOT EXISTS (SELECT 1 FROM record n WHERE n.seq = r.seq + 1 AND n." + received + ");");
+			q.bind(":from", from.value);
+			q.bind(":top", top.value);
+			auto res = q.execute();
+			if(res) {
+				ret = sequence_number{res.value<std::uint64_t>(0).value_or(0)};
+			}
+		}
+	}
+	return ret;
 }
 
 sequence_number record_storage::highest_sequence_number() const {

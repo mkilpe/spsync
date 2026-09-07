@@ -14,6 +14,9 @@
 #include <securepath/crypto/private_data_access.hpp>
 #include <securepath/network/encryption/encrypted_server.hpp>
 #include <securepath/serialisation/util.hpp>
+#include <securepath/util/conversions.hpp>
+
+#include <filesystem>
 
 namespace securepath::sync {
 
@@ -205,8 +208,8 @@ public:
 			LOG_TRACE("creating storage object (id={})", to_hex(id));
 			std::shared_ptr<storage> p = std::make_shared<storage>(id, default_storage_config_, create_modes, &context_.public_keys(), &context_.private_data());
 			if(p->modes().replication != replication_mode::none) {
-				p->set_peer_push([this](protocol::storage_id const& sid, block_envelope const& env) {
-						push_to_peers(sid, env);
+				p->set_peer_push([this](protocol::storage_id const& sid, storage_modes const& modes, block_envelope const& env) {
+						push_to_peers(sid, modes, env);
 					});
 			}
 			it = storages_.emplace(id, std::move(p)).first;
@@ -231,9 +234,63 @@ public:
 		return it != storages_.end() ? it->second : nullptr;
 	}
 
+	bool exists_on_disk(protocol::storage_id const& id) const {
+		return std::filesystem::exists(default_storage_config_.storage_root_path() + "/" + to_hex(id) + "/storage.db");
+	}
+
+	virtual std::shared_ptr<storage> acquire_replica(protocol::storage_id const& id,
+		std::optional<storage_modes> peer_modes) override
+	{
+		std::shared_ptr<storage> ret = find_open_sync(id);
+		try {
+			if(!ret && exists_on_disk(id)) {
+				ret = acquire_sync(id, std::optional<storage_modes>{});
+			} else if(!ret && peer_modes && peer_modes->replication != replication_mode::none
+				&& valid_storage_modes(*peer_modes)) {
+				LOG_INFO("creating the replica of storage {} with the modes a peer announced", to_hex(id));
+				ret = acquire_sync(id, *peer_modes);
+			}
+		} catch(securepath::error const& err) {
+			LOG_WARN("cannot open the replica of storage {}: {}", to_hex(id), err);
+		}
+		if(ret && (ret->modes().replication == replication_mode::none || (peer_modes && ret->modes() != *peer_modes))) {
+			LOG_WARN("storage {} is not replicated here with the peer's modes", to_hex(id));
+			ret = nullptr;
+		}
+		return ret;
+	}
+
+	/**
+	 * Open every replicated storage found under the storage root (a restart, plan 5.1):
+	 * only open storages announce heads, take pushes and serve pulls. Unreplicated ones
+	 * are closed again right away.
+	 */
+	void open_replicated_storages() {
+		std::error_code ec;
+		auto const root = default_storage_config_.storage_root_path();
+		for(auto const& entry : std::filesystem::directory_iterator(root, ec)) {
+			auto const name = entry.path().filename().string();
+			bool const looks_like_storage = entry.is_directory() && !name.empty()
+				&& name.find_first_not_of("0123456789ABCDEFabcdef") == std::string::npos
+				&& std::filesystem::exists(entry.path() / "storage.db");
+			if(looks_like_storage) {
+				try {
+					auto handle = acquire_sync(from_hex(name), std::optional<storage_modes>{});
+					if(handle->modes().replication == replication_mode::none) {
+						release_sync(std::move(handle));
+					} else {
+						LOG_INFO("replicated storage {} opened at start", name);
+					}
+				} catch(std::exception const& ex) {
+					LOG_WARN("cannot open storage {} at start: {}", name, ex.what());
+				}
+			}
+		}
+	}
+
 	/// fan a committed envelope out to every authenticated peer (plan 4.2)
-	void push_to_peers(protocol::storage_id const& sid, block_envelope const& env) {
-		protocol::push_records packet{sid, {env}};
+	void push_to_peers(protocol::storage_id const& sid, storage_modes const& modes, block_envelope const& env) {
+		protocol::push_records packet{sid, {env}, modes};
 		for(auto const& conn : peer_connections()) {
 			conn->push(packet);
 		}
@@ -255,6 +312,13 @@ public:
 	server_identity const& identity() const override {
 		// only written during start(), stable afterwards
 		return identity_;
+	}
+
+	void trust_peer_key(crypto::public_key const& key) override {
+		if(!context_.public_keys().find(key.id())) {
+			LOG_INFO("trusting the key of peer {}", key.id());
+			context_.public_keys().insert(key);
+		}
 	}
 
 	std::vector<protocol::storage_id> replicated_storages() const override {
@@ -416,7 +480,14 @@ storage_server::~storage_server()
 void storage_server::start() {
 	impl_->resolve_identity();
 	impl_->start(impl_->params_.create_endpoint(), impl_->params_.timeout);
+	if(!impl_->identity_.peers.empty()) {
+		impl_->open_replicated_storages();
+	}
 	impl_->start_s2s();
+}
+
+bool storage_server::has_storage(protocol::storage_id const& sid) const {
+	return impl_->find_open_sync(sid) != nullptr || impl_->exists_on_disk(sid);
 }
 
 void storage_server::close() {

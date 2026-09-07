@@ -67,6 +67,13 @@ storage::storage(protocol::storage_id id, storage_config config, std::optional<s
 	std::string db = path + "/storage.db";
 	LOG_INFO("Constructing storage using path: {}", db);
 
+	// a storage comes into being only through an explicit creation with its modes; a
+	// plain load of an unknown id must not leave a default mode storage behind
+	if(!create_modes && !std::filesystem::exists(db)) {
+		LOG_INFO("no such storage (rsid={})", to_hex(id_));
+		throw make_error(protocol::errc::no_such_storage, "no such storage");
+	}
+
 	//make sure the path exists, this does nothing if it already does
 	std::filesystem::create_directories(path);
 
@@ -154,7 +161,7 @@ storage::commit_outcome storage::commit_block(chain_block const& cb) {
 			sync_->log().store_assignment(outcome.block.value().tag(), *outcome.envelope);
 			// weak replication: the origin pushes its own commits to the peers (plan 4.2)
 			if(modes_.replication == replication_mode::weak && peer_push_) {
-				peer_push_(id_, *outcome.envelope);
+				peer_push_(id_, modes_, *outcome.envelope);
 			}
 		}
 		notify_listeners(outcome.block.value(), outcome.envelope);

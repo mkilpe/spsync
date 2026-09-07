@@ -254,9 +254,12 @@ chain_sync::rule_result chain_sync::check_rules(user_change_record const& rec) c
 	rule_result r;
 	r.type = rec_type::special;
 	// the D9 merge is defined over deltas only: a full mode change on a replicated
-	// storage could silently drop members added on another replica (plan 4.6)
+	// storage could silently drop members added on another replica (plan 4.6). The
+	// first record of a storage is exempt: there is nobody to drop yet and the
+	// creating client states the initial membership in full
 	if(config_.replication != replication_mode::none
-		&& rec.data().access().mode() != users_change_mode::delta) {
+		&& rec.data().access().mode() != users_change_mode::delta
+		&& log_.head().sequence != sequence_number{}) {
 		LOG_TRACE("full mode user change on a replicated storage [tag rejected] (rsid={})", config_.log_id);
 		r.err = make_error(protocol::errc::invalid_record, "replicated storage requires delta mode user changes");
 		return r;

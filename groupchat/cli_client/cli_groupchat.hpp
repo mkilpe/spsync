@@ -7,6 +7,9 @@
 
 #include <groupchat/core/groupchat.hpp>
 
+#include <functional>
+#include <vector>
+
 namespace securepath::groupchat {
 
 class cli_groupchat : public event_system::event_handler, public groupchat {
@@ -16,13 +19,23 @@ public:
 
 	std::optional<int> map_to_channel(chat_id const&) const;
 	std::optional<chat_id> map_to_cid(int) const;
-	int add_channel(chat_id const&);
+	/// the window channel of the chat, created with the given name when new
+	int add_channel(chat_id const&, std::string const& name);
 	void remove_channel(int);
 
 	/// called when packet server connected
 	void on_connect();
 	/// called when packet server disconnected
 	void on_disconnect(error);
+	/// called when a sync server connection is up / lost (the replica in use is reported)
+	void on_server_connect(server_id);
+	void on_server_disconnect(server_id, error);
+
+	/**
+	 * Run the action once the connection is up: right away when it is, otherwise from the
+	 * connect event (the console thread is the event loop, it must not block waiting)
+	 */
+	void run_when_connected(server_id, std::function<void()>);
 	/// called when chat created or creating failed
 	void on_init(server_chat_id, error);
 	/// called when user changed or failed
@@ -47,6 +60,7 @@ private:
 	gc_cli_config config_;
 	std::flat_map<chat_id, int> channel_map_;
 	std::flat_map<int, chat_id> cid_map_;
+	std::flat_map<server_id, std::vector<std::function<void()>>> when_connected_;
 };
 
 }

@@ -64,6 +64,9 @@ public:
 	error connect(std::string_view host, std::uint16_t port, std::chrono::seconds timeout = 10s);
 	void close();
 
+	/// true while the session with the server is up
+	bool is_connected() const;
+
 	/// Create storage on the server, one should wait for the on_create_storage event to see if the network call succeeded
 	storage_id create_storage(std::optional<storage_modes> modes = {});
 	void destroy_storage(storage_id const&);

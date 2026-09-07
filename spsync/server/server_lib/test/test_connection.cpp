@@ -50,8 +50,8 @@ public:
 		net.close();
 	}
 
-	storage_id create_remote_storage() {
-		return net.create_storage();
+	storage_id create_remote_storage(std::optional<storage_modes> modes = {}) {
+		return net.create_storage(modes);
 	}
 
 	void connect_to_storage(storage_id const& sid) {
@@ -344,6 +344,38 @@ TEST_CASE("storage mode mismatch", "[system]") {
 
 	std::this_thread::sleep_for(1s);
 	CHECK(client2.storage.last_block().sequence == sequence_number{});
+}
+
+// (6) a client states the sync and auth modes it operates in; whether the server
+// replicates the storage is not asserted (replication none = not stated)
+TEST_CASE("replicated storage modes not asserted", "[system]") {
+	event_system::single_thread_event_loop single_thread_event_loop;
+	test::test_context net_context;
+
+	net_context.add_client(2);
+	net_context.add_client_keys_for_server();
+	net_context.share_client_keys();
+
+	test::test_server server(net_context.server_context());
+	server.run();
+	std::this_thread::sleep_for(1s);
+
+	test_client client1(net_context.client_context(0), single_thread_event_loop, 0);
+	client1.engine_config.auth_mode = auth_mode::sign_records;
+	client1.connect();
+	client1.wait_for_connection();
+	auto sid = client1.create_remote_storage(storage_modes{sync_mode::require_all_seen, auth_mode::sign_records, replication_mode::weak});
+	client1.wait_for_storage_created();
+	client1.create_initial_record({net_context.key_id(1)});
+	WAIT_CHECK(client1.storage.last_block().sequence == sequence_number{1}, 2s);
+
+	// the second client expects the same sync/auth modes and says nothing about replication
+	test_client client2(net_context.client_context(1), single_thread_event_loop, 1);
+	client2.engine_config.auth_mode = auth_mode::sign_records;
+	client2.connect();
+	client2.wait_for_connection();
+	client2.connect_to_storage(sid);
+	WAIT_CHECK(client2.storage.last_block().sequence == sequence_number{1}, 2s);
 }
 
 }

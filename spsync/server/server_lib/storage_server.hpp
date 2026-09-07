@@ -72,6 +72,9 @@ public:
 	/// open (or create) a storage directly, e.g. for tooling and tests
 	std::shared_ptr<storage> open_storage(protocol::storage_id const&, std::optional<storage_modes> = {});
 
+	/// true when the storage is open or exists under the storage root (never creates one)
+	bool has_storage(protocol::storage_id const&) const;
+
 	/// the s2s listener endpoint when it is running (plan 4.1)
 	std::optional<asio::ip::tcp::endpoint> s2s_local_endpoint() const;
 

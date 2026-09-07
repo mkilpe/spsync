@@ -181,6 +181,24 @@ public:
 		return host_port{opt_host.value_or(default_host), static_cast<std::uint16_t>(opt_port.value_or(default_port))};
 	}
 
+	/// "fallbacks": [{"host": .., "syncport": .., "keyport": ..}, ...] of the home server (plan 4.5)
+	std::vector<sync_replica> extract_fallbacks(json::object const& server) {
+		std::vector<sync_replica> ret;
+		auto opt = extract_opt<json::array>(server, "fallbacks");
+		if(opt) {
+			for(auto const& v : *opt) {
+				auto const& o = v.as_object();
+				auto host = extract<std::string>(o, "host");
+				auto syncport = extract_opt<int>(o, "syncport");
+				auto keyport = extract_opt<int>(o, "keyport");
+				ret.push_back(sync_replica{
+					host_port{host, static_cast<std::uint16_t>(syncport.value_or(sync::default_storage_server_port))},
+					host_port{host, static_cast<std::uint16_t>(keyport.value_or(sync::default_key_server_port))}});
+			}
+		}
+		return ret;
+	}
+
 	gc_servers extract_gc_servers(json::object const& obj) {
 		auto opt_server = extract_opt<json::object>(obj, "server");
 		auto opt_host = opt_server ? extract_opt<std::string>(*opt_server, "host") : std::nullopt;
@@ -191,7 +209,8 @@ public:
 			opt_host.value_or("gc.securepath.fi"),
 			static_cast<std::uint16_t>(opt_keyport.value_or(sync::default_key_server_port)),
 			static_cast<std::uint16_t>(opt_syncport.value_or(sync::default_storage_server_port)),
-			static_cast<std::uint16_t>(opt_packetport.value_or(packet_transport::default_packet_server_port))
+			static_cast<std::uint16_t>(opt_packetport.value_or(packet_transport::default_packet_server_port)),
+			opt_server ? extract_fallbacks(*opt_server) : std::vector<sync_replica>{}
 		};
 	}
 
@@ -281,10 +300,16 @@ std::string json_manager::get_account() const {
 		auto acc = impl_->account_info();
 		if(acc) {
 			json::object user{{"name", acc->name}};
+			json::array fallbacks;
+			for(auto const& r : impl_->fallback_servers()) {
+				fallbacks.push_back(json::object{{"host", r.sync_server.host},
+					{"syncport", r.sync_server.port}, {"keyport", r.key_server.port}});
+			}
 			json::object ret{
 				{"user", user},
 				{"id", acc->me.id().public_key_id().in_hex()},
-				{"server", server_to_object(acc->server)}};
+				{"server", server_to_object(acc->server)},
+				{"fallbacks", fallbacks}};
 			return json::serialize(ret);
 		} else {
 			return std::string("{}");

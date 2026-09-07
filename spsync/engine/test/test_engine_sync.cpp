@@ -184,6 +184,37 @@ TEST_CASE("sync new records after disconnect/connect", "[unit]") {
 }
 
 
+// (10b) a client that joins an existing storage and commits before its first records
+// arrived (the cli sends a message right after joining): the record references no
+// special record yet, the server rejects it as out of sync and the engine rebases it
+// onto the membership record once that is in sync - without a retry storm
+TEST_CASE("engine sync commit before first sync", "[unit]") {
+	test::test_sync_context context(chain_sync_config{sync_mode::require_special_seen});
+	context.add_client(true, 1);
+	context.add_client(false, 1);
+	context.create_initial_record();
+	context.client(0).engine.sync_object_change(util::create_object_id(), metadata{});
+	while(context.handle_events()) {}
+	REQUIRE(context.server.sync.current_sequence_number() == sequence_number{2});
+
+	// the real network pushes the newest record ahead of the fetch: the data record
+	// arrives first and waits (its special reference is unknown), and the client's own
+	// record gets based on it without any special reference
+	context.connect_client(1);
+	auto pushed = context.server.sync.get_records(sequence_number{2}, sequence_number{2});
+	REQUIRE(pushed.size() == 1);
+	context.client(1).engine.on_record_received(pushed[0], {});
+	auto h = context.client(1).engine.sync_object_change(util::create_object_id(), metadata{});
+	auto const requests_before = context.client(1).io.request_count();
+	while(context.handle_events()) {}
+
+	CHECK(h->state() == record_state::in_sync);
+	CHECK(context.server.sync.current_sequence_number() == sequence_number{3});
+	CHECK(context.compare_record_storages(sequence_number{3}));
+	// a handful of requests: sequence, fetch, the rejected commit and the rebased one
+	CHECK(context.client(1).io.request_count() - requests_before < 10);
+}
+
 // (10) two clients in require_special_seen mode; a data change that has not seen the newest
 // special record is rejected by the server and rebased by the engine
 TEST_CASE("engine sync special seen mode rebase", "[unit]") {

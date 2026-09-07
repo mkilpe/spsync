@@ -1,0 +1,189 @@
+link   0 <-> 1 created
+link   1 <-> 2 created
+[server 0] commit     #1   user change  tag 24EDBA49
+[server 1] replicate  #1   user change  tag 24EDBA49  (from server 0)
+[server 2] replicate  #1   user change  tag 24EDBA49  (from server 1)
+[server 0] commit     #2   data change  tag E85AC6BB
+[server 0] commit     #3   data change  tag 6C80883F
+[server 0] replicate  #4   data change  tag FA471792  (from server 1)
+[server 0] replicate  #5   data change  tag 7B7FFC32  (from server 1)
+[server 1] commit     #2   data change  tag FA471792
+[server 1] commit     #3   data change  tag 7B7FFC32
+[server 1] replicate  #4   data change  tag E85AC6BB  (from server 0)
+[server 1] replicate  #5   data change  tag 6C80883F  (from server 0)
+[server 1] replicate  #6   data change  tag AD459C10  (from server 2)
+[server 1] replicate  #7   data change  tag 4203102B  (from server 2)
+[server 2] commit     #2   data change  tag AD459C10
+[server 2] commit     #3   data change  tag 4203102B
+[server 2] replicate  #4   data change  tag FA471792  (from server 1)
+[server 2] replicate  #5   data change  tag 7B7FFC32  (from server 1)
+[server 2] replicate  #6   data change  tag E85AC6BB  (from server 1)
+[server 2] replicate  #7   data change  tag 6C80883F  (from server 1)
+[server 0] replicate  #6   data change  tag AD459C10  (from server 1)
+[server 0] replicate  #7   data change  tag 4203102B  (from server 1)
+[server 0] commit     #8   user change  tag B25E45DF
+[server 1] replicate  #8   user change  tag B25E45DF  (from server 0)
+[server 2] replicate  #8   user change  tag B25E45DF  (from server 1)
+[server 0] replicate  #9   user change  tag 6D076F62  (from server 1)
+[server 1] commit     #9   user change  tag 6D076F62
+[server 2] replicate  #9   user change  tag 6D076F62  (from server 1)
+[server 0] commit     #10  data change  tag 8DD15E60
+[server 0] replicate  #11  data change  tag 3D1F183A  (from server 1)
+[server 1] commit     #10  data change  tag 3D1F183A
+[server 1] replicate  #11  data change  tag 8DD15E60  (from server 0)
+[server 1] replicate  #12  data change  tag 28FC8070  (from server 2)
+[server 2] commit     #10  data change  tag 28FC8070
+[server 2] replicate  #11  data change  tag 3D1F183A  (from server 1)
+[server 2] replicate  #12  data change  tag 8DD15E60  (from server 1)
+[server 0] replicate  #12  data change  tag 28FC8070  (from server 1)
+[server 0] commit     #13  user change  tag 9CC4CE81
+[server 0] commit     #14  data change  tag 79B1E9D4
+[server 1] replicate  #13  user change  tag 9CC4CE81  (from server 0)
+[server 1] replicate  #14  data change  tag 79B1E9D4  (from server 0)
+[server 1] replicate  #15  user change  tag 689C7BF9  (from server 2)
+[server 1] replicate  #16  data change  tag 255471B1  (from server 2)
+[server 2] commit     #13  user change  tag 689C7BF9
+[server 2] commit     #14  data change  tag 255471B1
+[server 2] replicate  #15  user change  tag 9CC4CE81  (from server 1)
+[server 2] replicate  #16  data change  tag 79B1E9D4  (from server 1)
+[server 0] replicate  #15  user change  tag 689C7BF9  (from server 1)
+[server 0] replicate  #16  data change  tag 255471B1  (from server 1)
+[server 0] commit     #17  segment      tag 1460D4C8
+[server 1] replicate  #17  segment      tag 1460D4C8  (from server 0)
+[server 2] replicate  #17  segment      tag 1460D4C8  (from server 1)
+[server 0] replicate  #18  data change  tag D104DC07  (from server 1)
+[server 1] commit     #18  data change  tag D104DC07
+[server 2] replicate  #18  data change  tag D104DC07  (from server 1)
+link   0 <-> 1 DOWN  (partition)
+link   1 <-> 2 DOWN  (partition)
+[server 0] commit     #19  user change  tag 2F89D071
+[server 0] commit     #20  data change  tag AD6DFCFB
+[server 1] commit     #19  data change  tag 1DC6A418
+[server 2] commit     #19  data change  tag 5B46E2EA
+[server 2] commit     #20  data change  tag 1DC6A418
+link   0 <-> 1 up
+link   1 <-> 2 up
+[server 0] replicate  #21  data change  tag 1DC6A418  (from server 1)
+[server 1] replicate  #20  user change  tag 2F89D071  (from server 0)
+[server 1] replicate  #21  data change  tag AD6DFCFB  (from server 0)
+[server 1] replicate  #22  data change  tag 5B46E2EA  (from server 2)
+[server 2] replicate  #21  user change  tag 2F89D071  (from server 1)
+[server 2] replicate  #22  data change  tag AD6DFCFB  (from server 1)
+[server 0] replicate  #22  data change  tag 5B46E2EA  (from server 1)
+link   1 <-> 2 DOWN  (partition)
+[server 0] commit     #23  user change  tag 120B0415
+[server 0] replicate  #24  user change  tag 886755EE  (from server 1)
+[server 1] commit     #23  user change  tag 886755EE
+[server 1] replicate  #24  user change  tag 120B0415  (from server 0)
+[server 2] commit     #23  data change  tag FA93FD0F
+link   0 <-> 1 DOWN  (partition)
+link   1 <-> 2 up
+[server 0] commit     #25  user change  tag FF68536E
+[server 0] commit     #26  data change  tag E8A6D302
+[server 1] commit     #25  data change  tag 086B1A14
+[server 1] replicate  #26  data change  tag FA93FD0F  (from server 2)
+[server 1] replicate  #27  data change  tag 37A21702  (from server 2)
+[server 1] replicate  #28  data change  tag 77ADF4FF  (from server 2)
+[server 1] replicate  #29  data change  tag F3C58BC7  (from server 2)
+[server 2] commit     #24  data change  tag 37A21702
+[server 2] commit     #25  data change  tag 77ADF4FF
+[server 2] commit     #26  data change  tag F3C58BC7
+[server 2] replicate  #27  user change  tag 886755EE  (from server 1)
+[server 2] replicate  #28  user change  tag 120B0415  (from server 1)
+[server 2] replicate  #29  data change  tag 086B1A14  (from server 1)
+link   0 <-> 1 up
+link   0 <-> 1 DOWN  (partition)
+[server 0] commit     #27  data change  tag ACC424AF
+[server 0] commit     #28  data change  tag 59DDDD9F
+[server 1] replicate  #30  data change  tag 8FBC5D95  (from server 2)
+[server 2] commit     #30  data change  tag 8FBC5D95
+link   1 <-> 2 DOWN  (partition)
+link   1 <-> 2 up
+link   0 <-> 1 up
+[server 0] commit     #29  data change  tag 17691F5F
+[server 0] replicate  #30  data change  tag 086B1A14  (from server 1)
+[server 0] replicate  #31  data change  tag FA93FD0F  (from server 1)
+[server 0] replicate  #32  data change  tag 37A21702  (from server 1)
+[server 0] replicate  #33  data change  tag 77ADF4FF  (from server 1)
+[server 0] replicate  #34  data change  tag F3C58BC7  (from server 1)
+[server 0] replicate  #35  data change  tag 8FBC5D95  (from server 1)
+[server 1] replicate  #31  user change  tag FF68536E  (from server 0)
+[server 1] replicate  #32  data change  tag E8A6D302  (from server 0)
+[server 1] replicate  #33  data change  tag ACC424AF  (from server 0)
+[server 1] replicate  #34  data change  tag 59DDDD9F  (from server 0)
+[server 1] replicate  #35  data change  tag 17691F5F  (from server 0)
+[server 1] replicate  #36  data change  tag 015E19DB  (from server 2)
+[server 1] replicate  #37  user change  tag 3D1974E7  (from server 2)
+[server 2] commit     #31  data change  tag 015E19DB
+[server 2] commit     #32  user change  tag 3D1974E7
+[server 2] replicate  #33  user change  tag FF68536E  (from server 1)
+[server 2] replicate  #34  data change  tag E8A6D302  (from server 1)
+[server 2] replicate  #35  data change  tag ACC424AF  (from server 1)
+[server 2] replicate  #36  data change  tag 59DDDD9F  (from server 1)
+[server 2] replicate  #37  data change  tag 17691F5F  (from server 1)
+[server 0] commit     #36  data change  tag B3EF69F1
+[server 0] commit     #37  user change  tag A04281E8
+[server 0] replicate  #38  data change  tag 015E19DB  (from server 1)
+[server 0] replicate  #39  user change  tag 3D1974E7  (from server 1)
+[server 0] replicate  #40  user change  tag 58EF1135  (from server 1)
+[server 1] commit     #38  user change  tag 58EF1135
+[server 1] replicate  #39  data change  tag B3EF69F1  (from server 0)
+[server 1] replicate  #40  user change  tag A04281E8  (from server 0)
+[server 1] replicate  #41  data change  tag 5C7DCB37  (from server 2)
+[server 1] replicate  #42  data change  tag 90734B07  (from server 2)
+[server 2] commit     #38  data change  tag 5C7DCB37
+[server 2] commit     #39  data change  tag 90734B07
+[server 2] replicate  #40  user change  tag 58EF1135  (from server 1)
+[server 2] replicate  #41  data change  tag B3EF69F1  (from server 1)
+[server 2] replicate  #42  user change  tag A04281E8  (from server 1)
+link   1 <-> 2 DOWN  (partition)
+link   1 <-> 2 up
+link   1 <-> 2 DOWN  (partition)
+link   1 <-> 2 up
+[server 0] commit     #41  data change  tag 7D82D895
+[server 0] replicate  #42  data change  tag 5C7DCB37  (from server 1)
+[server 0] replicate  #43  data change  tag 90734B07  (from server 1)
+[server 1] replicate  #43  data change  tag 7D82D895  (from server 0)
+[server 2] replicate  #43  data change  tag 7D82D895  (from server 1)
+[server 0] commit     #44  data change  tag B262E0C6
+[server 0] replicate  #45  data change  tag 84DE6280  (from server 1)
+[server 1] commit     #44  data change  tag 84DE6280
+[server 1] replicate  #45  data change  tag B262E0C6  (from server 0)
+[server 2] replicate  #44  data change  tag 84DE6280  (from server 1)
+[server 2] replicate  #45  data change  tag B262E0C6  (from server 1)
+=== final situation ===
+server 0: 45 records, 45 ops, 32 messages, members: [1CDC7A1E, 1E018678, 25F6573F, 67AAD0E4, D99A0565, E97EA431]
+  order: 24EDBA49(u) E85AC6BB(d) 6C80883F(d) FA471792(d) 7B7FFC32(d) AD459C10(d) 4203102B(d) B25E45DF(u)
+         6D076F62(u) 8DD15E60(d) 3D1F183A(d) 28FC8070(d) 9CC4CE81(u) 79B1E9D4(d) 689C7BF9(u) 255471B1(d)
+         1460D4C8(s) D104DC07(d) 2F89D071(u) AD6DFCFB(d) 1DC6A418(d) 5B46E2EA(d) 120B0415(u) 886755EE(u)
+         FF68536E(u) E8A6D302(d) ACC424AF(d) 59DDDD9F(d) 17691F5F(d) 086B1A14(d) FA93FD0F(d) 37A21702(d)
+         77ADF4FF(d) F3C58BC7(d) 8FBC5D95(d) B3EF69F1(d) A04281E8(u) 015E19DB(d) 3D1974E7(u) 58EF1135(u)
+         7D82D895(d) 5C7DCB37(d) 90734B07(d) B262E0C6(d) 84DE6280(d)
+server 1: 45 records, 45 ops, 32 messages, members: [1CDC7A1E, 1E018678, 25F6573F, 67AAD0E4, D99A0565, E97EA431]
+  order: 24EDBA49(u) FA471792(d) 7B7FFC32(d) E85AC6BB(d) 6C80883F(d) AD459C10(d) 4203102B(d) B25E45DF(u)
+         6D076F62(u) 3D1F183A(d) 8DD15E60(d) 28FC8070(d) 9CC4CE81(u) 79B1E9D4(d) 689C7BF9(u) 255471B1(d)
+         1460D4C8(s) D104DC07(d) 1DC6A418(d) 2F89D071(u) AD6DFCFB(d) 5B46E2EA(d) 886755EE(u) 120B0415(u)
+         086B1A14(d) FA93FD0F(d) 37A21702(d) 77ADF4FF(d) F3C58BC7(d) 8FBC5D95(d) FF68536E(u) E8A6D302(d)
+         ACC424AF(d) 59DDDD9F(d) 17691F5F(d) 015E19DB(d) 3D1974E7(u) 58EF1135(u) B3EF69F1(d) A04281E8(u)
+         5C7DCB37(d) 90734B07(d) 7D82D895(d) 84DE6280(d) B262E0C6(d)
+server 2: 45 records, 45 ops, 32 messages, members: [1CDC7A1E, 1E018678, 25F6573F, 67AAD0E4, D99A0565, E97EA431]
+  order: 24EDBA49(u) AD459C10(d) 4203102B(d) FA471792(d) 7B7FFC32(d) E85AC6BB(d) 6C80883F(d) B25E45DF(u)
+         6D076F62(u) 28FC8070(d) 3D1F183A(d) 8DD15E60(d) 689C7BF9(u) 255471B1(d) 9CC4CE81(u) 79B1E9D4(d)
+         1460D4C8(s) D104DC07(d) 5B46E2EA(d) 1DC6A418(d) 2F89D071(u) AD6DFCFB(d) FA93FD0F(d) 37A21702(d)
+         77ADF4FF(d) F3C58BC7(d) 886755EE(u) 120B0415(u) 086B1A14(d) 8FBC5D95(d) 015E19DB(d) 3D1974E7(u)
+         FF68536E(u) E8A6D302(d) ACC424AF(d) 59DDDD9F(d) 17691F5F(d) 5C7DCB37(d) 90734B07(d) 58EF1135(u)
+         B3EF69F1(d) A04281E8(u) 7D82D895(d) 84DE6280(d) B262E0C6(d)
+client 0 (on server 0): 45 records, 0 pending
+  order: same as its server
+client 1 (on server 2): 45 records, 0 pending
+  order: same as its server
+client 2 (on server 2): 45 records, 0 pending
+  order: same as its server
+client 3 (on server 0): 45 records, 0 pending
+  order: same as its server
+client 4 (on server 1): 45 records, 0 pending
+  order: same as its server
+client 5 (on server 2): 45 records, 0 pending
+  order: same as its server
+converged: YES
+===============================================================================

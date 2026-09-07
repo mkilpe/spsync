@@ -62,6 +62,12 @@ msg_change message_storage::insert(message_id const& id, msg_data const& md, msg
 		old_index = update_pending(id);
 		prep = "INSERT INTO sync_msg(id, data, stime, seq) VALUES(:id, :data, :stime, :seq)";
 	} else {
+		// a message that is still pending at a restart is reconciled again: keep the entry
+		auto existing = db_->prepare("SELECT key FROM sync_pending_msg WHERE id = :id;");
+		existing.bind(":id", id.value());
+		if(auto res = existing.execute()) {
+			return msg_change{sync_max_index_ + res.value<std::int64_t>(0).value(), 0, id, state};
+		}
 		prep = "INSERT INTO sync_pending_msg(id, data, stime, iid) VALUES(:id, :data, :stime, :iid)";
 		index_base = sync_max_index_;
 	}

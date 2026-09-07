@@ -24,7 +24,12 @@
 #include <infrastructure/key_client/key_client.hpp>
 #include <infrastructure/key_server/server_lib/defaults.hpp>
 
+#include <securepath/serialisation/vector.hpp>
+
+#include <atomic>
 #include <filesystem>
+#include <set>
+#include <thread>
 
 namespace securepath::groupchat {
 
@@ -37,8 +42,14 @@ static network::encrypted_net_base_params net_base_params(groupchat_config const
 		//make sure the path exists, this does nothing if it already does
 		std::filesystem::create_directories(conf.path);
 	}
-	return {conf.db(), conf.db(), conf.db(), conf.db()};
+	network::encrypted_net_base_params params{conf.db(), conf.db(), conf.db(), conf.db()};
+	params.root_public_key_file = conf.root_public_key_file;
+	return params;
 }
+
+/// connection timeout of the key registration attempts at the replicas (they run in the
+/// background on connect and must not hold a shutdown for long)
+static constexpr std::chrono::seconds replica_registration_timeout{5};
 
 gc_servers default_servers() {
 	return gc_servers{"gc.securepath.fi",
@@ -84,7 +95,69 @@ struct groupchat::impl
 		info.name = gc_info->find<std::string>("name").value_or(info.me.id().public_key_id().in_hex());
 		info.server = gc_info->find<host_port>("server").value_or(host_port{});
 		info.packet_server = gc_info->find<host_port>("packet_server").value_or(host_port{});
+		fallbacks = gc_info->find<std::vector<sync_replica>>("fallbacks").value_or(std::vector<sync_replica>{});
 		cconn.set_own_account(info);
+	}
+
+	void set_fallbacks(std::vector<sync_replica> replicas) {
+		LOG_INFO("groupchat: {} replica(s) of the home server", replicas.size());
+		fallbacks = std::move(replicas);
+		gc_info->insert("fallbacks", fallbacks);
+	}
+
+	/**
+	 * Make sure the replica's key server knows our key (plan 4.5): a replica verifies the
+	 * records we commit against its own key store. Returns true when the key is there.
+	 */
+	bool try_register_key_at(host_port const& key_server) {
+		bool ok = false;
+		try {
+			key_client::client client(context);
+			client.connect(key_server.host, key_server.port, replica_registration_timeout);
+			client.wait_for_connection();
+			auto my_key = my_private_key(context.private_data());
+			if(!client.find_key(my_key.id())) {
+				client.register_key(my_key.public_key());
+			}
+			ok = true;
+			LOG_INFO("own key registered at key server {}", key_server);
+		} catch(std::exception const& ex) {
+			LOG_WARN("could not register own key at key server {}: {}", key_server, ex.what());
+		}
+		return ok;
+	}
+
+	std::vector<host_port> unregistered_replica_key_servers() {
+		std::unique_lock l{registration_mutex};
+		std::vector<host_port> ret;
+		for(auto const& r : fallbacks) {
+			if(!registered_key_servers.contains(r.key_server)) {
+				ret.push_back(r.key_server);
+			}
+		}
+		return ret;
+	}
+
+	void register_key_at_replicas() {
+		for(auto const& ks : unregistered_replica_key_servers()) {
+			if(try_register_key_at(ks)) {
+				std::unique_lock l{registration_mutex};
+				registered_key_servers.insert(ks);
+			}
+		}
+	}
+
+	/// the registration attempts block for their timeouts, so connect() runs them aside
+	void start_background_registration() {
+		if(!unregistered_replica_key_servers().empty() && !registration_running.exchange(true)) {
+			if(registration_thread.joinable()) {
+				registration_thread.join();
+			}
+			registration_thread = std::jthread([this] {
+					register_key_at_replicas();
+					registration_running = false;
+				});
+		}
 	}
 
 	bool init_crypto() {
@@ -120,8 +193,11 @@ struct groupchat::impl
 		info.server = server.sync_server();
 		info.packet_server = server.packet_server();
 		cconn.set_own_account(info);
+		set_fallbacks(server.fallbacks);
 
 		set_config();
+		// the replicas learn the key now when they are reachable, connect() retries the rest
+		register_key_at_replicas();
 	}
 
 	void set_config() {
@@ -164,10 +240,12 @@ struct groupchat::impl
 
 	std::shared_ptr<chat_connection> create_connection(host_port const& hp) {
 		auto id = ++last_id;
-		//t: parameterise key server here too
-		host_port key_server{hp};
-		key_server.port = sync::default_key_server_port;
-		auto p = std::make_shared<chat_connection>(chat_conn_context{id, key_server, hp, *this, context, channels, config, conf.path});
+		// the home server comes with the account's key server and its replicas (plan 4.5),
+		// a foreign server (a chat we were invited to) is assumed to bundle a default key server
+		bool const home = hp == info.server;
+		host_port key_server = home ? info.me.key_server() : host_port{hp.host, sync::default_key_server_port};
+		auto p = std::make_shared<chat_connection>(chat_conn_context{id, key_server, hp, *this, context, channels,
+			config, conf.path, home ? sync_endpoints(fallbacks) : std::vector<host_port>{}});
 		hp_map[hp] = id;
 		connections[id] = p;
 		return p;
@@ -197,6 +275,8 @@ struct groupchat::impl
 	}
 
 	gc::account_info info;
+	/// replicas of the home sync server (plan 4.5), persisted in gc_info
+	std::vector<sync_replica> fallbacks;
 	std::optional<network::context> own_context;
 	network::context& context;
 	groupchat_config const conf;
@@ -213,6 +293,12 @@ struct groupchat::impl
 
 	sync::client::contact_handler cconn;
 	sync::util::config& config;
+
+	/// key servers of the replicas that hold our key already (this process' knowledge)
+	std::mutex registration_mutex;
+	std::set<host_port> registered_key_servers;
+	std::atomic<bool> registration_running{};
+	std::jthread registration_thread;
 };
 
 bool groupchat::check_account_exists(groupchat_config const& conf) const {
@@ -263,9 +349,19 @@ void groupchat::connect() {
 	if(impl_->connections.empty()) {
 		load_channels();
 	}
+	impl_->start_background_registration();
 	for(auto&& v : impl_->connections) {
 		v.second->connect();
 	}
+}
+
+std::vector<sync_replica> groupchat::fallback_servers() const {
+	return impl_ ? impl_->fallbacks : std::vector<sync_replica>{};
+}
+
+void groupchat::set_fallback_servers(std::vector<sync_replica> replicas) {
+	assert(impl_);
+	impl_->set_fallbacks(std::move(replicas));
 }
 
 void groupchat::disconnect() {

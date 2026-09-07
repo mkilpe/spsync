@@ -34,6 +34,7 @@ public:
 
 gc_cli::gc_cli(gc_cli_config config)
 : event_handler(static_cast<event_system::event_loop&>(*this))
+, config_(config)
 {
 	set_mode(console::mode::nodelay | console::mode::cbreak | console::mode::noecho | console::mode::colours);
 
@@ -54,8 +55,40 @@ gc_cli::gc_cli(gc_cli_config config)
 	win_->add_info(0, to_wstring(print("Welcome to gc_cli [version %]", gc_cli_version)));
 
 	if(gc_->account_info()) {
+		if(!config.fallbacks.empty()) {
+			gc_->set_fallback_servers(parse_fallbacks(config.fallbacks));
+		}
+		for(auto const& r : gc_->fallback_servers()) {
+			win_->add_info(0, to_wstring(print("replica of the home server: %", format_replica(r))));
+		}
 		gc_->connect();
 	}
+}
+
+std::vector<sync_replica> gc_cli::parse_fallbacks(std::vector<std::string> const& texts) {
+	std::vector<sync_replica> ret;
+	for(auto const& t : texts) {
+		ret.push_back(parse_sync_replica(t));
+	}
+	return ret;
+}
+
+gc_servers gc_cli::account_servers(gc_cli_config const& config) {
+	auto servers = default_servers();
+	if(!config.server.empty()) {
+		servers.host = config.server;
+	}
+	if(config.keyport) {
+		servers.key_server_port = static_cast<std::uint16_t>(config.keyport);
+	}
+	if(config.syncport) {
+		servers.sync_server_port = static_cast<std::uint16_t>(config.syncport);
+	}
+	if(config.packetport) {
+		servers.packet_server_port = static_cast<std::uint16_t>(config.packetport);
+	}
+	servers.fallbacks = parse_fallbacks(config.fallbacks);
+	return servers;
 }
 
 gc_cli::~gc_cli() {
@@ -90,6 +123,7 @@ void gc_cli::init_commands() {
 	add_command(L"requests", 0, [this](auto v){ show_requests(v); });
 
 	add_command(L"create-chat", 1, [this](auto v){ create_chat(v); });
+	add_command(L"invite", 1, [this](auto v){ invite(v); });
 	add_command(L"chats", 0, [this](auto v){ show_chats(v); });
 	add_command(L"join", 1, [this](auto v){ join_chat(v); });
 
@@ -105,7 +139,7 @@ void gc_cli::create_account(std::vector<std::wstring_view> const& args) {
 		LOG_WARN("account already exists");
 		throw make_error(errc::constraint_violation, "account already exists");
 	} else {
-		gc_->create_account(default_servers(), to_string(args[0]));
+		gc_->create_account(account_servers(config_), to_string(args[0]));
 		win_->add_info(0, L"account created successfully");
 	}
 }
@@ -139,7 +173,8 @@ void gc_cli::add_contact(std::vector<std::wstring_view> const& args) {
 	if(contact && contact->state() == sync::client::contact_state::complete) {
 		win_->add_info(0, L"contact already exists");
 	} else {
-		user receiver{key_id, default_servers().key_server()};
+		// contacts are looked up at the key server of our own account
+		user receiver{key_id, gc_->account_info()->me.key_server()};
 		gc_->request_handler().add_contact(receiver, name, message);
 		win_->add_info(0, L"added contact '" + to_wstring(name) + L"'");
 	}
@@ -173,13 +208,23 @@ void gc_cli::show_requests(std::vector<std::wstring_view> const& args) {
 	}
 }
 
+// the creation needs the live connection (the request is sent right away): connect and
+// create once connected
 void gc_cli::create_chat(std::vector<std::wstring_view> const& args) {
 	std::string name{to_string(args.front())};
 	auto conn = gc_->load();
-	auto cid = conn->create_chat(name, sync::users{}).id();
-	int ch = gc_->add_channel(cid);
-	win_->change_channel(name, ch);
-	win_->add_info(ch, print("created chat '%' with id=%", name, to_hex(cid)));
+	conn->connect();
+	gc_->run_when_connected(conn->id(), [this, conn, name] {
+		try {
+			auto cid = conn->create_chat(name, sync::users{}).id();
+			int ch = gc_->add_channel(cid, name);
+			win_->change_channel(name, ch);
+			win_->add_info(ch, print("created chat '%' with id=%", name, to_hex(cid)));
+		} catch(std::exception const& ex) {
+			win_->add_info(0, to_wstring(print("creating chat '%' failed: %", name, ex.what())));
+		}
+		redraw();
+	});
 }
 
 void gc_cli::show_chats(std::vector<std::wstring_view> const& args) {
@@ -213,10 +258,30 @@ void gc_cli::add_member(std::vector<std::wstring_view> const& args) {
 	}
 }
 
+// invite a user (public key id in hex, looked up at our key server) to the chat of the
+// current window; the invitation travels through the packet server
+void gc_cli::invite(std::vector<std::wstring_view> const& args) {
+	int ch = win_->current_channel();
+	auto cid = ch ? gc_->map_to_cid(ch) : std::optional<chat_id>{};
+	if(!cid) {
+		throw make_error(errc::invalid_state, "select a chat window first");
+	}
+	crypto::public_key_id key_id{to_string(args[0])};
+	auto message = args.size() > 1 ? to_string(args[1]) : "";
+	gc_->send_chat_invitation(user{key_id, gc_->account_info()->me.key_server()}, message, *cid);
+	win_->add_info(ch, print("invited % to the chat", key_id.in_hex()));
+}
+
 void gc_cli::join_chat(std::vector<std::wstring_view> const& args) {
 	auto rid = std::stoll(to_string(args[0]));
 	auto info = gc_->join_chat(rid);
-	int ch = gc_->add_channel(info.cid);
+	// join_chat loads the chat connection without connecting it (doc/todos.txt); the
+	// channel synchronises once the connection is up
+	auto hp = gc_->channel_ids().find_server(info.cid);
+	if(hp) {
+		gc_->load(*hp)->connect();
+	}
+	int ch = gc_->add_channel(info.cid, info.name);
 	win_->change_channel(info.name, ch);
 }
 
@@ -232,8 +297,9 @@ void gc_cli::manage_chat(std::vector<std::wstring_view> const& args) {
 			throw make_error(errc::no_such_data, "could not find chat");
 		}
 		auto conn = gc_->load(*hp);
+		conn->connect();
 		auto& channel = conn->get(cid);
-		int ch = gc_->add_channel(cid);
+		int ch = gc_->add_channel(cid, channel.name());
 		win_->change_channel(channel.name(), ch);
 	}
 }

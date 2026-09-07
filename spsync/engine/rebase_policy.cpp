@@ -13,8 +13,10 @@ bool needs_rebase(rebase_state const& s) {
 		return s.mode >= sync_mode::require_special_seen && s.last_seen != s.head;
 	}
 
+	// tag bound (plan 4.3): the reference must be the newest special record, no matter how
+	// the sequences relate (a record based on a data record beyond the special is behind too)
 	bool const special_behind = s.mode >= sync_mode::require_special_seen
-		&& s.last_special.is_valid() && s.last_special > s.last_seen.sequence;
+		&& !s.newest_special.empty() && s.special_ref != s.newest_special;
 
 	if(s.type == user_change_record_tag) {
 		return special_behind;

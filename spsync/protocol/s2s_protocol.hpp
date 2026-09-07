@@ -4,6 +4,7 @@
 
 #include <spsync/core/origin_head.hpp>
 #include <spsync/core/records/block_envelope.hpp>
+#include <spsync/core/sync_mode.hpp>
 
 #include <securepath/crypto/public_key_id.hpp>
 
@@ -37,19 +38,25 @@ struct peer_hello : protocol_base {
 	}
 };
 
-/// the anti-entropy heads of one storage (the 3.4 table plus the sender's own head)
+/**
+ * The anti-entropy heads of one storage (the 3.4 table plus the sender's own head). The
+ * storage modes ride along so a replica that does not hold the storage yet can create
+ * it with the same modes (a chat created on one replica appears on the others).
+ */
 struct peer_heads : storage_request_base {
-	peer_heads(storage_id sid = {}, std::vector<origin_head> h = {})
+	peer_heads(storage_id sid = {}, std::vector<origin_head> h = {}, std::optional<storage_modes> m = {})
 	: storage_request_base(0, std::move(sid))
 	, heads(std::move(h))
+	, modes(to_wire(m))
 	{}
 
 	std::vector<origin_head> heads;
+	wire_modes modes;
 
 	template<typename S>
 	void serialise(S& s) {
 		serialisation::sequence<S> seq(s);
-		seq & static_cast<storage_request_base&>(*this) & heads;
+		seq & static_cast<storage_request_base&>(*this) & heads & modes.mode & modes.amode & modes.repl;
 	}
 };
 
@@ -99,21 +106,29 @@ struct response_envelopes : reply_base {
 	}
 };
 
-/// commit push (plan 4.2): envelopes the sender just committed as the origin
+/// commit push (plan 4.2): envelopes the sender just committed as the origin; the
+/// storage modes let a replica create the storage on first contact (as in peer_heads)
 struct push_records : storage_request_base {
-	push_records(storage_id sid = {}, std::deque<block_envelope> env = {})
+	push_records(storage_id sid = {}, std::deque<block_envelope> env = {}, std::optional<storage_modes> m = {})
 	: storage_request_base(0, std::move(sid))
 	, envelopes(std::move(env))
+	, modes(to_wire(m))
 	{}
 
 	std::deque<block_envelope> envelopes;
+	wire_modes modes;
 
 	template<typename S>
 	void serialise(S& s) {
 		serialisation::sequence<S> seq(s);
-		seq & static_cast<storage_request_base&>(*this) & envelopes;
+		seq & static_cast<storage_request_base&>(*this) & envelopes & modes.mode & modes.amode & modes.repl;
 	}
 };
+
+/// the storage modes carried in a peer packet, if any
+inline std::optional<storage_modes> peer_modes(wire_modes const& m) {
+	return modes_from_wire(m.mode, m.amode, m.repl);
+}
 
 /// the sender does not replicate the storage (answer to heads/pull/push for it)
 struct not_replicating : storage_request_base {

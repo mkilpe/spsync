@@ -148,7 +148,7 @@ void peer_connection::send_our_heads() {
 	for(auto const& sid : sctx_.replicated_storages()) {
 		auto handle = sctx_.find_open_sync(sid);
 		if(handle) {
-			send_packet(protocol::peer_heads{sid, handle->heads()});
+			send_packet(protocol::peer_heads{sid, handle->heads(), handle->modes()});
 		}
 	}
 }
@@ -175,6 +175,10 @@ void peer_connection::operator()(protocol::peer_hello const& p) {
 			std::unique_lock lock{mutex_};
 			peer_id_ = p.server_id;
 		}
+		// the handshake verified the peer's key against the root: its signed assignments verify from now on
+		if(auto key = remote_public_key()) {
+			sctx_.trust_peer_key(*key);
+		}
 		send_our_heads();
 	}
 }
@@ -193,7 +197,7 @@ void peer_connection::operator()(protocol::peer_heads const& p) {
 /// pull every origin the peer is ahead on (plan 4.4); the peer does the same for the
 /// origins we are ahead on when it receives our heads
 void peer_connection::start_pulls(protocol::peer_heads const& p) {
-	auto handle = sctx_.find_open_sync(p.sid);
+	auto handle = sctx_.acquire_replica(p.sid, protocol::peer_modes(p.modes));
 	if(handle && handle->modes().replication == replication_mode::weak) {
 		auto const& own = sctx_.identity().server_id;
 		for(auto const& head : p.heads) {
@@ -224,7 +228,7 @@ void peer_connection::request_pull(protocol::storage_id const& sid, crypto::publ
 
 void peer_connection::operator()(protocol::pull_records const& p) {
 	if(check_ready("pull_records")) {
-		auto handle = sctx_.find_open_sync(p.sid);
+		auto handle = sctx_.acquire_replica(p.sid, {});
 		if(!handle) {
 			send_packet(protocol::not_replicating{0, p.sid});
 			send_packet(protocol::response_envelopes{p, make_error(protocol::errc::no_such_storage)});
@@ -267,7 +271,7 @@ void peer_connection::operator()(protocol::response_envelopes const& p) {
 
 void peer_connection::operator()(protocol::push_records const& p) {
 	if(check_ready("push_records")) {
-		auto handle = sctx_.find_open_sync(p.sid);
+		auto handle = sctx_.acquire_replica(p.sid, protocol::peer_modes(p.modes));
 		if(!handle || handle->modes().replication == replication_mode::none) {
 			send_packet(protocol::not_replicating{0, p.sid});
 		} else {

@@ -119,7 +119,8 @@ TEST_CASE("storage signs the sequence assignment", "[unit]") {
 
 	// without a signing key there is no envelope (fresh chain, fresh creator)
 	std::filesystem::remove_all(root);
-	storage s2(sid, cfg);
+	CHECK_THROWS(storage(sid, cfg));   // a load never creates
+	storage s2(sid, cfg, storage_modes{});
 	test::test_block_creator creator2;
 	auto outcome2 = s2.commit_block(creator2.test_user_change());
 	REQUIRE(outcome2.block);

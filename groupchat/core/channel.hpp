@@ -17,9 +17,12 @@ class groupchat;
  * require_special_seen mode (plan 1.6/Q1): messages are new object ids and never conflict
  * with each other, while membership/key changes are special records the server serialises -
  * a message that has not seen the newest membership change is rebased once by the engine.
+ * A chat created on a home server with replicas asks for weak replication (plan 4.2) so the
+ * replicas carry it and a client can hop between them (plan 4.5).
  */
-inline sync::storage_modes channel_storage_modes() {
-	return {sync::sync_mode::require_special_seen, sync::auth_mode::sign_records};
+inline sync::storage_modes channel_storage_modes(bool replicated = false) {
+	return {sync::sync_mode::require_special_seen, sync::auth_mode::sign_records,
+		replicated ? sync::replication_mode::weak : sync::replication_mode::none};
 }
 
 class channel : public sync::client_sync

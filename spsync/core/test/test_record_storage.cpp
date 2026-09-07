@@ -681,4 +681,66 @@ TEST_CASE("record_storage assignment round-trip", "[unit]") {
 	CHECK(storage.find_tag(h->tag())->assignment() == env);
 }
 
+
+// the fetch cursor of the engine: the first gap in the received sequences (plan 4.5)
+TEST_CASE("record_storage first missing sequence", "[unit]") {
+	remove_database_test_db();
+	auto db_conn = database::sqlite::create_sqlite_connection(db_name);
+
+	record_storage storage(db_conn);
+	test_block_creator creator;
+
+	CHECK(!storage.first_missing_sequence().is_valid());
+
+	storage.create(creator.test_user_change(), record_state::in_sync);
+	storage.create(creator.test_data_change(), record_state::in_sync);
+	CHECK(storage.highest_sequence_number() == sequence_number{2});
+	CHECK(!storage.first_missing_sequence().is_valid());
+
+	// 5 and 6 arrive ahead of 3 and 4 (a weak mode accepts them, an interrupted fetch leaves them)
+	auto r5 = creator.test_data_change();
+	r5.set_sequence_and_parent_hash(sequence_number{5}, octet_vector{});
+	storage.create(r5, record_state::pending_sync);
+	auto r6 = creator.test_data_change();
+	r6.set_sequence_and_parent_hash(sequence_number{6}, octet_vector{});
+	storage.create(r6, record_state::acked);
+	// highest_sequence_number() counts in_sync and pending_sync only; the gap search
+	// treats an acked record as received too (it carries the server's sequence)
+	CHECK(storage.highest_sequence_number() == sequence_number{5});
+	CHECK(storage.first_missing_sequence() == sequence_number{3});
+	CHECK(storage.first_missing_sequence(sequence_number{2}) == sequence_number{3});
+	CHECK(storage.first_missing_sequence(sequence_number{3}) == sequence_number{3});
+	CHECK(storage.first_missing_sequence(sequence_number{4}) == sequence_number{4});
+	CHECK(!storage.first_missing_sequence(sequence_number{5}).is_valid());
+	CHECK(!storage.first_missing_sequence(sequence_number{7}).is_valid());
+
+	// pending commits carry no server sequence and never count
+	storage.create(creator.test_data_change(), record_state::pending_commit);
+	CHECK(storage.first_missing_sequence() == sequence_number{3});
+
+	auto r3 = creator.test_data_change();
+	r3.set_sequence_and_parent_hash(sequence_number{3}, octet_vector{});
+	storage.create(r3, record_state::in_sync);
+	CHECK(storage.first_missing_sequence() == sequence_number{4});
+	auto r4 = creator.test_data_change();
+	r4.set_sequence_and_parent_hash(sequence_number{4}, octet_vector{});
+	storage.create(r4, record_state::in_sync);
+	CHECK(!storage.first_missing_sequence().is_valid());
+}
+
+// the very first sequence can be the gap
+TEST_CASE("record_storage first missing sequence at start", "[unit]") {
+	remove_database_test_db();
+	auto db_conn = database::sqlite::create_sqlite_connection(db_name);
+
+	record_storage storage(db_conn);
+	test_block_creator creator;
+	creator.test_user_change();
+	auto r2 = creator.test_data_change();
+	r2.set_sequence_and_parent_hash(sequence_number{2}, octet_vector{});
+	storage.create(r2, record_state::pending_sync);
+	CHECK(storage.first_missing_sequence() == sequence_number{1});
+	CHECK(!storage.first_missing_sequence(sequence_number{2}).is_valid());
+}
+
 }

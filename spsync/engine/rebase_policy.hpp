@@ -20,8 +20,11 @@ struct rebase_state {
 	chain_block_id last_seen;
 	/// the newest in sync block
 	chain_block_id head;
-	/// newest in sync user change/segment sequence
-	sequence_number last_special;
+	/// the special record (user change/segment) the pending record references (plan 4.3:
+	/// tag bound, the server requires the newest one)
+	record_tag special_ref;
+	/// the tag of the newest in sync special record; empty when there is none yet
+	record_tag newest_special;
 	/// newest in sync data add sequence
 	sequence_number last_data_add;
 };
@@ -30,7 +33,8 @@ struct rebase_state {
  * Returns whether the pending record would be rejected by the server in this state and so
  * has to be rebased. Per mode:
  *   require_all_seen             rebase on every head move
- *   require_special_seen         rebase when a newer special record exists (segments: head)
+ *   require_special_seen         rebase when the special reference is not the newest special
+ *                                record (segments: head)
  *   require_data_add_remove_seen as above, plus a newer data add for adding records
  *   allow_all                    never (object id conflicts are handled separately)
  */

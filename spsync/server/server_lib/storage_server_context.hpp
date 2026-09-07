@@ -30,12 +30,27 @@ public:
 	/// Release the storage object
 	virtual void release_sync(std::shared_ptr<storage> storage) = 0;
 
-	/// An already open storage, or null; never creates one (the s2s handlers use this,
-	/// a peer must not create storages on this server, plan 4.2)
+	/// An already open storage, or null; never creates one
 	virtual std::shared_ptr<storage> find_open_sync(protocol::storage_id const&) = 0;
+
+	/**
+	 * The replicated storage a peer refers to (plan 4.2/4.4): an open one, else one found
+	 * on disk (opened now, e.g. after a restart), else - when the peer states replicated
+	 * modes - a new one created with exactly those modes, so a storage created on one
+	 * replica appears on the others. Null when nothing applies (the answer is
+	 * not_replicating): peers never create unreplicated storages and never change modes.
+	 */
+	virtual std::shared_ptr<storage> acquire_replica(protocol::storage_id const&, std::optional<storage_modes> peer_modes) = 0;
 
 	/// The resolved server identity (plan 3.3); empty when the server has no signing key
 	virtual server_identity const& identity() const = 0;
+
+	/**
+	 * Remember an authenticated peer's public key (its certificate chain was verified in the
+	 * handshake and its id matched the peer configuration) so the assignments it signs
+	 * verify here (plan 4.2)
+	 */
+	virtual void trust_peer_key(crypto::public_key const&) = 0;
 
 	/// Ids of the open storages that replicate to peers (replication mode != none)
 	virtual std::vector<protocol::storage_id> replicated_storages() const = 0;

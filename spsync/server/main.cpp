@@ -18,19 +18,29 @@ struct spsync_server_commands : sync::spsync_server_params, command_parser {
 	bool help{};
 	bool verbose{};
 	int timeout{};
+	int anti_entropy{};
 
 	spsync_server_commands() {
 		add(help, "help", "h", "show help");
 		add(verbose, "verbose", "v", "verbose mode");
 		add(timeout, "timeout", "", "Connecting/Handshake timeout in seconds");
+		add(key_params.root_public_key_file, "root", "", "DER file of the root public key anchoring certificate chains");
+		add(key_params.port, "key_port", "", "key server listening port");
+		add(storage_params.storage_server_port, "storage_port", "", "storage server listening port");
+		add(storage_params.s2s_port, "s2s_port", "", "server-to-server listening port (used when peers are configured)");
+		add(storage_params.storage_root, "storage_root", "", "directory of the record storages");
 		add(storage_params.server_id, "server_id", "", "expected public key id (hex) of the storage server key");
 		add(storage_params.peers, "peers", "", "replication peers as host:port/keyid-hex");
+		add(anti_entropy, "anti_entropy", "", "seconds between replicated head announcements to the peers");
 	}
 
 	void handle_inputs() {
 		if(timeout) {
 			key_params.timeout = std::chrono::seconds(timeout);
 			storage_params.timeout = std::chrono::seconds(timeout);
+		}
+		if(anti_entropy) {
+			storage_params.anti_entropy_interval = std::chrono::seconds(anti_entropy);
 		}
 	}
 };
