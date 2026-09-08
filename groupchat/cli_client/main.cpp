@@ -47,6 +47,7 @@ int main(int argc, char* args[]) {
 			gc_cli program(p);
 			program.run();
 		}
+		ret = 0;
 	} catch(std::exception const& ex) {
 		LOG_WARN("Error: {}", ex.what());
 		std::cerr << "Error: " << ex.what() << std::endl;

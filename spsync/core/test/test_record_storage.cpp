@@ -383,14 +383,42 @@ TEST_CASE("record_storage set record", "[unit]") {
 	auto pending = storage.create(creator_copy.test_data_change(), record_state::pending_commit);
 	auto last_seen = storage.create(creator.test_data_change(), record_state::in_sync);
 
+	auto const rec_tag_before = pending->tag();
 	auto rec = pending->record().deserialise_to<data_change_record>();
 	rec.set_last_seen_block(last_seen->block_id());
 	chain_block block{rec, content_auth{securepath::test::random_octet_vector(16)}};
 	block.set_sequence_and_parent_hash(last_seen->block_id().sequence + 1, last_seen->block_id().hash);
 	CHECK_NOTHROW(pending->set_record(block));
+	{
+		// the object rows moved to the new tag; none are left under the old one
+		auto q = db_conn->prepare("SELECT count(*) FROM record_objects WHERE tag = :t;");
+		q.bind(":t", rec_tag_before);
+		CHECK(q.execute().value<std::int64_t>(0).value_or(-1) == 0);
+		auto n = db_conn->prepare("SELECT count(*) FROM record_objects WHERE tag = :t;");
+		n.bind(":t", block.tag());
+		CHECK(n.execute().value<std::int64_t>(0).value_or(-1) == 1);
+	}
 
 	// in_sync state record cannot be changed
 	CHECK_THROWS(last_seen->set_record(block));
+}
+
+// a demoted record loses the sequence assignment of the sequence it no longer holds
+TEST_CASE("record_storage demote clears the assignment", "[unit]") {
+	remove_database_test_db();
+	auto db_conn = database::sqlite::create_sqlite_connection(db_name);
+
+	record_storage storage(db_conn);
+	test_block_creator creator;
+	storage.create(creator.test_user_change(), record_state::in_sync);
+	auto acked = storage.create(creator.test_data_change(), record_state::acked);
+	acked->set_assignment(octet_vector(8, 1), octet_vector(32, 2), acked->block_id().sequence);
+	REQUIRE(!acked->assignment().empty());
+
+	auto removed = storage.truncate_from(acked->block_id().sequence, true);
+	CHECK(removed.empty());
+	CHECK(acked->state() == record_state::pending_commit);
+	CHECK(acked->assignment().empty());
 }
 
 

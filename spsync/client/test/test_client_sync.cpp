@@ -13,12 +13,20 @@
 
 namespace securepath::sync::client::test {
 namespace {
-class test_client : public client_sync, public event_system::event_handler {
+/// the connection outlives the client_sync (which detaches from it on destruction)
+struct test_net {
+	test_net(network::context& context, event_system::event_handler& handler)
+	: net(context, handler)
+	{}
+	network_connection net;
+};
+
+class test_client : public event_system::event_handler, public test_net, public client_sync {
 public:
 	test_client(event_system::event_loop& loop, network::context& context, std::string const& dbname)
-	: client_sync(context, loop, sync::test::create_test_database(dbname))
-	, event_handler(loop)
-	, net(context, *this)
+	: event_handler(loop)
+	, test_net(context, *this)
+	, client_sync(context, loop, sync::test::create_test_database(dbname))
 	{}
 
 	~test_client() {
@@ -103,7 +111,6 @@ public:
 	}
 
 public:
-	network_connection net;
 	mutable std::mutex mutex;
 	std::deque<single_data_change> d_changes;
 	std::deque<user_change> u_changes;

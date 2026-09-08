@@ -121,14 +121,7 @@ void cli_groupchat::on_join(server_chat_id id, sync::users change, error) {
 }
 
 std::string cli_groupchat::time_to_string(time_point time) const {
-	std::tm t{};
-	if(!log::gmtime(time_point::clock::to_time_t(time), t)) {
-		LOG_WARN("encode: cannot convert time");
-		return "??.??.??";
-	}
-	char buffer[9] = {};
-	std::snprintf(buffer, 8, "%02d.%02d%.02d", t.tm_hour, t.tm_min, t.tm_sec);
-	return std::string(buffer);
+	return std::format("{:%H:%M:%S}", std::chrono::floor<std::chrono::seconds>(time));
 }
 
 void cli_groupchat::on_message(server_chat_id id, msg_data md, msg_change) {

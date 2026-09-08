@@ -49,12 +49,20 @@ struct client_sync::impl : engine_output {
 
 	~impl() {
 		stop_handler();
+		// the connection keeps a raw pointer to the engine: take it back before the
+		// engine dies (the connection must outlive the client_sync)
+		if(net) {
+			net->detach(sid);
+		}
+		engine.reset();
 	}
 
-	void init(storage_id const& sid, network_connection& conn) {
-		storage_connection sconn{conn.create_storage_connection(sid, storage, progress, storage_modes{config.mode, config.auth_mode, config.replication})};
+	void init(storage_id const& storage_sid, network_connection& conn) {
+		storage_connection sconn{conn.create_storage_connection(storage_sid, storage, progress, storage_modes{config.mode, config.auth_mode, config.replication})};
 		engine = std::make_unique<sync_engine>(event_loop(), sconn.input(), crypto, config);
 		engine->set_output(this);
+		net = &conn;
+		sid = storage_sid;
 
 		//after this the events will be received
 		sconn.attach(*engine);
@@ -167,15 +175,15 @@ struct client_sync::impl : engine_output {
 		}
 	}
 
-	std::optional<std::uint64_t> find_member(util::user_id const& uid, member_status& status) const {
+	std::optional<std::int64_t> find_member(util::user_id const& uid, member_status& status) const {
 		auto q = db->prepare("SELECT key, status FROM members WHERE key_id = :id");
 		q.bind(":id", uid.public_key_id().data());
 
 		auto res = q.execute();
 
-		std::optional<std::uint64_t> ret;
+		std::optional<std::int64_t> ret;
 		if(res) {
-			ret = res.value<std::uint64_t>(0);
+			ret = res.value<std::int64_t>(0);
 			status = static_cast<member_status>(res.value<std::int64_t>(1).value_or(0));
 		}
 		return ret;
@@ -243,6 +251,9 @@ struct client_sync::impl : engine_output {
 
 public:
 	client_sync* parent;
+	/// the connection the engine is attached to (set by init)
+	network_connection* net{};
+	storage_id sid;
 	database::connection_ptr db;
 
 	dummy_progress progress;
@@ -289,7 +300,8 @@ record_handle client_sync::send_user_change(users us, metadata mdata) {
 		return impl_->create_initial_record(std::move(us), std::move(mdata));
 	} else {
 		impl_->update_members(us);
-		return impl_->engine->sync_user_change(std::move(us), std::move(mdata));
+		// the changed members need the current key, like every other membership change
+		return impl_->engine->sync_user_change(encrypt_last_key_for_users(us, impl_->crypto), std::move(mdata));
 	}
 }
 
@@ -298,12 +310,12 @@ std::deque<std::unique_ptr<member>> client_sync::members() const {
 	auto q = impl_->db->prepare("SELECT key, status, key_id FROM members;");
 	auto res = q.execute();
 	for(; res; res.next()) {
-		std::optional<std::uint64_t> key = res.value<std::uint64_t>(0);
+		std::optional<std::int64_t> key = res.value<std::int64_t>(0);
 		if(key) {
 			auto status = static_cast<member_status>(res.value<std::int64_t>(1).value_or(0));
 			util::user_id uid{crypto::public_key_id{*res.value<octet_vector>(2)}};
 			auto p = std::make_unique<member>(uid, status);
-			p->add_backend(std::make_shared<key_value_database>(impl_->db, "members_metadata", *key));
+			p->add_backend(std::make_shared<key_value_database>(impl_->db, "members_metadata", static_cast<std::uint64_t>(*key)));
 			ret.push_back(std::move(p));
 		}
 	}
@@ -313,10 +325,10 @@ std::deque<std::unique_ptr<member>> client_sync::members() const {
 std::unique_ptr<member> client_sync::find_member(util::user_id const& uid) const {
 	std::unique_ptr<member> ret;
 	member_status status;
-	std::optional<std::uint64_t> member_id = impl_->find_member(uid, status);
+	std::optional<std::int64_t> member_id = impl_->find_member(uid, status);
 	if(member_id) {
 		ret = std::make_unique<member>(uid, status);
-		ret->add_backend(std::make_shared<key_value_database>(impl_->db, "members_metadata", *member_id));
+		ret->add_backend(std::make_shared<key_value_database>(impl_->db, "members_metadata", static_cast<std::uint64_t>(*member_id)));
 	}
 	return ret;
 }

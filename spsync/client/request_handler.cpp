@@ -76,16 +76,15 @@ struct request_handler::impl : public event_system::event_handler {
 
 			if(requests.is_sender_banned(packet.signature.issuer())) {
 				LOG_WARN("request from banned sender [kid={}]", packet.signature.issuer());
-				return;
+			} else {
+				user sender{packet.signature.issuer(), p.sender_server};
+				request_data rdata{sender, p.tag, p.data};
+
+				auto rh = requests.add(rdata, packet);
+
+				db_request req{{{rdata}, rh, request_state::waiting_for_verification}, packet};
+				do_verify_data(std::move(req), false);
 			}
-
-			user sender{packet.signature.issuer(), p.sender_server};
-			request_data rdata{sender, p.tag, p.data};
-
-			auto rh = requests.add(rdata, packet);
-
-			db_request req{{{rdata}, rh, request_state::waiting_for_verification}, packet};
-			do_verify_data(std::move(req), false);
 		} catch(std::exception const& ex) {
 			LOG_WARN("exception while handling packet [ex={}]", ex.what());
 		}
@@ -192,7 +191,7 @@ error request_handler::connect(host_port const& server, std::chrono::seconds tim
 		LOG_WARN("own id not set for request_handler");
 		throw make_error(errc::constraint_violation, "own id not set");
 	}
-	return impl_->client.connect(server.host, packet_transport::default_packet_server_port, timeout);
+	return impl_->client.connect(server.host, server.port, timeout);
 }
 
 void request_handler::close() {

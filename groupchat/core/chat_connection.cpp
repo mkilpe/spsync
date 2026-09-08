@@ -10,6 +10,7 @@
 #include <securepath/network/encryption/error.hpp>
 
 #include <algorithm>
+#include <filesystem>
 #include <mutex>
 
 namespace securepath::groupchat {
@@ -54,7 +55,7 @@ struct chat_connection::impl
 		ccontext.channels.add(sinfo.sid, ccontext.sync_server);
 
 		ret.first->second->init(sinfo.sid, net);
-		return *it->second;
+		return *ret.first->second;
 	}
 
 	void on_connect() {
@@ -109,23 +110,34 @@ struct chat_connection::impl
 	}
 
 	void on_create_storage(sync::storage_id const& cid, error err) {
-		if(!err) {
+		std::unique_lock l{mutex};
+		assert(!cid.empty());
+		auto it = channels.find(cid);
+		if(it == channels.end()) {
+			LOG_WARN("no channel found for chat: {}", to_hex(cid));
+			err = make_error(securepath::errc::invalid_state, "chat room not set");
+		} else if(!err) {
 			try {
-				std::unique_lock l{mutex};
-				assert(!cid.empty());
-				auto it = channels.find(cid);
-				if(it != channels.end()) {
-					it->second->init(cid, net);
-					it->second->create_initial_record();
-				} else {
-					LOG_WARN("no channel found for chat: {}", to_hex(cid));
-					err = make_error(securepath::errc::invalid_state, "chat room not set");
-				}
+				it->second->init(cid, net);
+				it->second->create_initial_record();
+				// the chat exists on the server now: remember it
+				ccontext.channels.add(cid, ccontext.sync_server);
 			} catch(error const& e) {
 				LOG_WARN("exception while initialising storage: {}", e);
 				err = e;
+			} catch(std::exception const& e) {
+				LOG_WARN("exception while initialising storage: {}", e.what());
+				err = make_error(securepath::errc::exception_occurred, e.what());
 			}
 		}
+		if(err && it != channels.end()) {
+			// a chat that never came to be on the server leaves nothing behind
+			auto const path = it->second->db_path();
+			channels.erase(it);
+			std::error_code ec;
+			std::filesystem::remove(path, ec);
+		}
+		l.unlock();
 		ccontext.callback.emit<events::on_init>(server_chat_id{ccontext.sid, cid}, err);
 	}
 
@@ -149,7 +161,7 @@ struct chat_connection::impl
 		auto cid = net.create_storage(channel_storage_modes(!ccontext.fallback_sync_servers.empty()));
 		auto ret = channels.emplace(cid, std::make_unique<channel>(ccontext, cid));
 		ret.first->second->set_data(std::move(name), std::move(members));
-		ccontext.channels.add(cid, ccontext.sync_server);
+		// recorded in the channel list once the server confirmed the creation (on_create_storage)
 		return *ret.first->second;
 	}
 

@@ -95,6 +95,11 @@ public:
 		LOG_INFO("client version: {}", p.version);
 		auto key_id = remote_key_id();
 		assert(key_id);
+		if(connection_good_) {
+			LOG_WARN("second client hello on a connected session ({})", *key_id);
+			terminate(make_error(protocol::errc::invalid_state));
+			return;
+		}
 		auto err = connection::on_connect(p, *key_id);
 		if(err) {
 			//on_connect failed, lets close, maybe client is too old version
@@ -231,7 +236,8 @@ public:
 
 	virtual void release_sync(std::shared_ptr<storage> storage) override {
 		std::unique_lock lock{mutex_};
-		if(storage.use_count() == 1) {
+		// the map entry and this parameter are the only owners left
+		if(storage.use_count() == 2) {
 			LOG_TRACE("destroying storage object (id={})", to_hex(storage->id()));
 			storages_.erase(storage->id());
 			storage.reset();
@@ -425,6 +431,11 @@ public:
 		conn->set_disconnect_handler([this, &link](securepath::error const&) {
 			schedule_reconnect(link);
 		});
+		conn->set_connected_handler([this, &link] {
+			// a link that came up starts over with the short backoff when it drops
+			std::unique_lock lock{mutex_};
+			link.backoff = std::chrono::seconds{1};
+		});
 		{
 			std::unique_lock lock{mutex_};
 			if(closing_) {
@@ -542,6 +553,10 @@ bool storage_server::has_storage(protocol::storage_id const& sid) const {
 
 bool storage_server::is_syncing(protocol::storage_id const& sid) const {
 	return impl_->is_syncing(sid);
+}
+
+bool storage_server::is_open(protocol::storage_id const& sid) const {
+	return impl_->find_open_sync(sid) != nullptr;
 }
 
 void storage_server::close() {

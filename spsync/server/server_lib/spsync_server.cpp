@@ -33,9 +33,11 @@ spsync_server::~spsync_server() {
 }
 
 bool spsync_server::init() {
-	key_server::server::init();
-	check_key();
-	return true;
+	bool const ok = key_server::server::init();
+	if(ok) {
+		check_key();
+	}
+	return ok;
 }
 
 int spsync_server::run_and_wait() {

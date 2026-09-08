@@ -400,12 +400,14 @@ TEST_CASE("s2s restart reopens replicated storages", "[unit]") {
 	storage_modes const modes{sync_mode::allow_all, auth_mode::sign_records, replication_mode::weak};
 	test::test_block_creator creator_a;
 	creator_a.signer = *tctx.client_context(0).private_data().my_private_key();
+	protocol::storage_id const local_sid = securepath::test::random_octet_vector(8);
 	{
-		// A holds the storage with one record and goes down
+		// A holds the storage with one record (and an unreplicated one) and goes down
 		storage_server a(tctx.client_context(0), params_a);
 		auto sa = a.open_storage(sid, modes);
 		REQUIRE(sa);
 		REQUIRE(sa->commit_block(creator_a.test_user_change()).block);
+		REQUIRE(a.open_storage(local_sid, storage_modes{sync_mode::allow_all, auth_mode::sign_records}));
 		a.close();
 	}
 
@@ -414,6 +416,10 @@ TEST_CASE("s2s restart reopens replicated storages", "[unit]") {
 	storage_server a(tctx.client_context(0), params_a);
 	a.start();
 	WAIT_CHECK((!a.connected_peers().empty() && !b.connected_peers().empty()), 5s);
+
+	// only the replicated storage was reopened at start
+	CHECK(a.is_open(sid));
+	CHECK(!a.is_open(local_sid));
 
 	// A announced the storage it reopened: B created its replica and pulled the record
 	WAIT_CHECK(b.has_storage(sid), 5s);
@@ -518,6 +524,72 @@ TEST_CASE("s2s bootstrap a new replica", "[unit]") {
 	for(auto d : {"test-s2s-ba", "test-s2s-bb", "test-s2s-bc"}) {
 		std::filesystem::remove_all(d);
 	}
+}
+
+
+// an own-origin pull is served by the origin's assignments: with more than a batch of
+// foreign records committed in between, serving the local range never made progress on
+// the origin's sequences and the pull stalled for good
+TEST_CASE("s2s own origin pull across many foreign records", "[unit]") {
+	std::filesystem::remove_all("test-s2s-oa");
+	std::filesystem::remove_all("test-s2s-ob");
+
+	test::test_context tctx;
+	tctx.add_client(2);
+	tctx.share_client_keys();
+	network::enable_pk_handshake(tctx.client_context(0));
+	network::enable_pk_handshake(tctx.client_context(1));
+	auto const key_a = tctx.key_id(0);
+	auto const key_b = tctx.key_id(1);
+	auto params_a = s2s_test_params("test-s2s-oa", 42800, 42810, {peer_config{"127.0.0.1", 42811, key_b}});
+	auto params_b = s2s_test_params("test-s2s-ob", 42801, 42811, {peer_config{"127.0.0.1", 42810, key_a}});
+	params_a.anti_entropy_interval = std::chrono::seconds{1};
+	params_b.anti_entropy_interval = std::chrono::seconds{1};
+
+	protocol::storage_id const sid = securepath::test::random_octet_vector(8);
+	storage_modes const modes{sync_mode::allow_all, auth_mode::sign_records, replication_mode::weak};
+	storage_server a(tctx.client_context(0), params_a);
+	auto b = std::make_unique<storage_server>(tctx.client_context(1), params_b);
+	auto sa = a.open_storage(sid, modes);
+	auto sb = b->open_storage(sid, modes);
+	REQUIRE(sa);
+	REQUIRE(sb);
+	a.start();
+	b->start();
+	WAIT_CHECK((!a.connected_peers().empty() && !b->connected_peers().empty()), 5s);
+
+	// A's first own record, then B commits more than a batch of records that A applies
+	test::test_block_creator creator_a;
+	creator_a.signer = *tctx.client_context(0).private_data().my_private_key();
+	REQUIRE(sa->commit_block(creator_a.test_user_change()).block);
+	WAIT_CHECK(sb->current_sequence_number() == sequence_number{1}, 5s);
+	test::test_block_creator creator_b = creator_a;
+	creator_b.signer = *tctx.client_context(1).private_data().my_private_key();
+	for(int i = 0; i != 40; ++i) {
+		REQUIRE(sb->commit_block(creator_b.test_data_change()).block);
+	}
+	WAIT_CHECK(sa->current_sequence_number() == sequence_number{41}, 10s);
+
+	// B goes down, A commits its second own record (local sequence 42), B comes back
+	// and must pull it although 40 foreign records sit between A's two records
+	b->close();
+	sb.reset();
+	b.reset();
+	REQUIRE(sa->commit_block(creator_a.test_data_change()).block);
+	auto const second_tag = creator_a.last_tag;
+	b = std::make_unique<storage_server>(tctx.client_context(1), params_b);
+	sb = b->open_storage(sid, modes);
+	REQUIRE(sb);
+	b->start();
+	WAIT_CHECK(sb->current_sequence_number() == sequence_number{42}, 10s);
+	auto const last = sb->get_records(sequence_number{42}, sequence_number{42});
+	REQUIRE(last.size() == 1);
+	CHECK(last.front().tag() == second_tag);
+
+	a.close();
+	b->close();
+	std::filesystem::remove_all("test-s2s-oa");
+	std::filesystem::remove_all("test-s2s-ob");
 }
 
 }

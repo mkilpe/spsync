@@ -84,10 +84,6 @@ void persist_modes(database::connection& db, storage_modes const& m, std::string
 storage_modes load_or_create_modes(database::connection& db, std::optional<storage_modes> const& requested,
 	storage_limits const& defaults, std::string const& log_id)
 {
-	if(requested && !valid_storage_modes(*requested)) {
-		LOG_WARN("invalid storage modes: a replicated storage requires signed records, limits must be in range (rsid={})", log_id);
-		throw make_error(protocol::errc::invalid_storage_modes, "invalid storage modes");
-	}
 	create_or_upgrade_config_table(db);
 	if(auto persisted = load_persisted_modes(db)) {
 		if(requested && !modes_match(*requested, *persisted)) {
@@ -96,7 +92,12 @@ storage_modes load_or_create_modes(database::connection& db, std::optional<stora
 		}
 		return *persisted;
 	}
-	storage_modes m = requested.value_or(storage_modes{});
+	if(!requested) {
+		// a database without modes: a creation that did not get to persist them
+		LOG_INFO("storage database without persisted modes, not a storage (rsid={})", log_id);
+		throw make_error(protocol::errc::no_such_storage, "no such storage");
+	}
+	storage_modes m = *requested;
 	if(m.limits.max_record_size == 0) {
 		m.limits.max_record_size = defaults.max_record_size;
 	}
@@ -124,8 +125,13 @@ storage::storage(protocol::storage_id id, storage_config config, std::optional<s
 	std::string db = path + "/storage.db";
 	LOG_INFO("Constructing storage using path: {}", db);
 
-	// a storage comes into being only through an explicit creation with its modes; a
-	// plain load of an unknown id must not leave a default mode storage behind
+	// a storage comes into being only through an explicit creation with valid modes; a
+	// plain load of an unknown id must not leave a default mode storage behind, and a
+	// refused creation must not leave a database behind either (checked before opening)
+	if(create_modes && !valid_storage_modes(*create_modes)) {
+		LOG_WARN("invalid storage modes: a replicated storage requires signed records, limits must be in range (rsid={})", to_hex(id_));
+		throw make_error(protocol::errc::invalid_storage_modes, "invalid storage modes");
+	}
 	if(!create_modes && !std::filesystem::exists(db)) {
 		LOG_INFO("no such storage (rsid={})", to_hex(id_));
 		throw make_error(protocol::errc::no_such_storage, "no such storage");

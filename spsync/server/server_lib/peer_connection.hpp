@@ -44,6 +44,9 @@ public:
 	/// called on the connection strand when the connection went down (reconnect hook)
 	void set_disconnect_handler(std::function<void(securepath::error const&)>);
 
+	/// called once the peer hello exchange succeeded (the link is really up)
+	void set_connected_handler(std::function<void()>);
+
 	/// send a commit push to the peer when the connection is ready (plan 4.2)
 	void push(protocol::push_records const&);
 
@@ -92,10 +95,12 @@ private:
 	std::optional<crypto::public_key_id> peer_id_;
 	std::map<protocol::storage_id, std::vector<origin_head>> peer_heads_;
 	std::function<void(securepath::error const&)> on_disconnect_;
+	std::function<void()> on_connected_;
 	/// (storage, origin) pulls in flight, so periodic heads do not double-pull
 	std::set<std::pair<protocol::storage_id, octet_vector>> pulling_;
-	/// record signer keys asked from the peer (plan 5.2), so one unknown signer is asked once
-	std::set<crypto::public_key_id> key_requests_;
+	/// record signer keys asked from the peer (plan 5.2) by request id, so one unknown
+	/// signer is asked once at a time and a negative answer frees it for a later try
+	std::map<protocol::call_id, crypto::public_key_id> key_requests_;
 	protocol::call_id next_cid_{1};
 };
 

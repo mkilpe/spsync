@@ -81,6 +81,9 @@ public:
 	/// true while the replica of the storage is still catching up with its peers (plan 5.2)
 	bool is_syncing(protocol::storage_id const&) const;
 
+	/// true when the storage object is open on this server (tests and tooling)
+	bool is_open(protocol::storage_id const&) const;
+
 	/// the s2s listener endpoint when it is running (plan 4.1)
 	std::optional<asio::ip::tcp::endpoint> s2s_local_endpoint() const;
 

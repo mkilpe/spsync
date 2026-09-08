@@ -49,6 +49,11 @@ std::vector<origin_head> peer_connection::heads_of_peer(protocol::storage_id con
 	return ret;
 }
 
+void peer_connection::set_connected_handler(std::function<void()> f) {
+	std::unique_lock lock{mutex_};
+	on_connected_ = std::move(f);
+}
+
 void peer_connection::set_disconnect_handler(std::function<void(securepath::error const&)> f) {
 	std::unique_lock lock{mutex_};
 	on_disconnect_ = std::move(f);
@@ -173,9 +178,14 @@ void peer_connection::operator()(protocol::peer_hello const& p) {
 		terminate(make_error(protocol::errc::invalid_state));
 	} else {
 		LOG_INFO("peer connected: {}", p.server_id);
+		std::function<void()> connected;
 		{
 			std::unique_lock lock{mutex_};
 			peer_id_ = p.server_id;
+			connected = on_connected_;
+		}
+		if(connected) {
+			connected();
 		}
 		// the handshake verified the peer's key against the root: its signed assignments verify from now on
 		if(auto key = remote_public_key()) {
@@ -257,8 +267,11 @@ void peer_connection::request_signer_key(crypto::public_key_id const& id) {
 	protocol::call_id cid{};
 	{
 		std::unique_lock lock{mutex_};
-		ask = key_requests_.insert(id).second;
-		cid = next_cid_++;
+		ask = std::ranges::find(key_requests_, id, &decltype(key_requests_)::value_type::second) == key_requests_.end();
+		if(ask) {
+			cid = next_cid_++;
+			key_requests_[cid] = id;
+		}
 	}
 	if(ask) {
 		LOG_INFO("asking peer for the key of record signer {}", id);
@@ -277,20 +290,25 @@ void peer_connection::operator()(protocol::request_key const& p) {
 void peer_connection::operator()(protocol::response_key const& p) {
 	LOG_TRACE("response_key [held={}]", p.key.has_value());
 	if(check_ready("response_key")) {
-		if(p.key) {
-			bool asked{};
-			{
-				std::unique_lock lock{mutex_};
-				asked = key_requests_.erase(p.key->id()) != 0;
+		// the request is done either way; a negative answer leaves the signer askable again
+		std::optional<crypto::public_key_id> asked;
+		{
+			std::unique_lock lock{mutex_};
+			auto it = key_requests_.find(p.cid);
+			if(it != key_requests_.end()) {
+				asked = it->second;
+				key_requests_.erase(it);
 			}
-			if(asked) {
-				sctx_.learn_signer_key(*p.key);
-				resume_pulls();
-			} else {
-				LOG_WARN("peer sent a key that was not asked for [id={}]", p.key->id());
-			}
+		}
+		if(!asked) {
+			LOG_WARN("response_key for an unknown request [cid={}]", p.cid);
+		} else if(p.key && p.key->id() == *asked) {
+			sctx_.learn_signer_key(*p.key);
+			resume_pulls();
+		} else if(p.key) {
+			LOG_WARN("peer sent another key than asked for [asked={}, got={}]", *asked, p.key->id());
 		} else {
-			LOG_INFO("peer does not hold the requested signer key either");
+			LOG_INFO("peer does not hold the key of signer {} either", *asked);
 		}
 	}
 }
@@ -316,12 +334,10 @@ void peer_connection::operator()(protocol::pull_records const& p) {
 		if(!handle) {
 			send_packet(protocol::not_replicating{0, p.sid});
 			send_packet(protocol::response_envelopes{p, make_error(protocol::errc::no_such_storage)});
-		} else if(p.origin == sctx_.identity().server_id) {
-			// the own log is served directly: local sequences are the origin sequences, the
-			// foreign records in between ride along (the puller dedups them by tag)
-			send_packet(protocol::response_envelopes{p, handle->known_origin_seq(p.origin)
-				, handle->get_envelopes(p.from, p.to)});
 		} else {
+			// every origin, the own one included, is served by its assignments: the puller
+			// measures progress on the origin's sequences, so foreign records committed in
+			// between must not ride along (they made the pull stall past a batch of them)
 			send_packet(protocol::response_envelopes{p, handle->known_origin_seq(p.origin)
 				, handle->get_envelopes_by_origin(p.origin, p.from, p.to)});
 		}

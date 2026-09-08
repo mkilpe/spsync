@@ -14,9 +14,13 @@ namespace securepath::groupchat {
 
 std::string const gc_name_tag = "gc.chat.name";
 
-static database::connection_ptr open_db(chat_conn_context& context, chat_id const& cid) {
+std::string channel::db_path(chat_conn_context const& context, chat_id const& cid) {
 	std::string path = context.path.empty() ? "" : context.path + "/";
-	return database::sqlite::create_sqlite_connection(path + to_hex(cid) + ".db");
+	return path + to_hex(cid) + ".db";
+}
+
+static database::connection_ptr open_db(chat_conn_context& context, chat_id const& cid) {
+	return database::sqlite::create_sqlite_connection(channel::db_path(context, cid));
 }
 
 channel::channel(chat_conn_context& context, chat_id const& cid)
@@ -34,6 +38,7 @@ channel::channel(chat_conn_context& context, chat_id const& cid, database::conne
 , chat_id_(cid)
 , messages_(db)
 , db_(db)
+, db_path_(db_path(context, cid))
 , my_key_id_(my_private_key(context.context.private_data()).id())
 {
 	// make sure we are in sync with record storage and messages storage in case the application

@@ -86,6 +86,7 @@ void cli_window::change_channel(std::string text, int channel) {
 	status_text_ = std::move(text);
 	c->second.unseen = false;
 
+	text_area_->clear();
 	for(auto&& m : c->second.history) {
 		add_line_to_screen(m);
 	}

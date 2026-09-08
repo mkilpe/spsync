@@ -74,26 +74,29 @@ serialisation::deserialiser& serialise(serialisation::deserialiser& s, access_ty
 }
 
 std::string to_string(access_type const& access) {
+	// the known bits by name, anything else (a hostile or newer record) as a number
+	struct named { access_type bit; char const* name; };
+	named const atomics[] = {
+		{access_type::data_read_access, "read"},
+		{access_type::data_write_access, "write"},
+		{access_type::user_management_access, "management"}};
 	std::ostringstream out;
-	char const* const atomics[] = {"read", "write", "management"};
-	int acc = static_cast<int>(access);
-	bool first = true;
-
-	if(access == access_type::no_access) {
-		out << "no access";
-	} else {
-		do {
-			int log = std::log2(acc);
-			if(first) {
-				first = false;
-			} else {
-				out << ", ";
-			}
-			out << atomics[log];
-			acc -= std::exp2(log);
-		} while(acc);
+	auto rest = static_cast<unsigned>(access);
+	char const* sep = "";
+	for(auto const& a : atomics) {
+		if(rest & static_cast<unsigned>(a.bit)) {
+			out << sep << a.name;
+			sep = ", ";
+			rest &= ~static_cast<unsigned>(a.bit);
+		}
 	}
-
+	if(rest != 0) {
+		out << sep << "unknown(0x" << std::hex << rest << ")";
+		sep = ", ";
+	}
+	if(*sep == '\0') {
+		out << "no access";
+	}
 	return out.str();
 }
 

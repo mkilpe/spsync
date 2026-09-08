@@ -11,7 +11,8 @@
 
 namespace securepath::sync {
 
-using record_internal_id = std::uint64_t;
+/// the row id of the record in the local storage (a plain signed sqlite integer)
+using record_internal_id = std::int64_t;
 
 enum class record_state : std::int64_t {
 	unknown = 0,

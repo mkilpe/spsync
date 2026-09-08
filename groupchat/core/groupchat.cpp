@@ -97,6 +97,8 @@ struct groupchat::impl
 		info.packet_server = gc_info->find<host_port>("packet_server").value_or(host_port{});
 		fallbacks = gc_info->find<std::vector<sync_replica>>("fallbacks").value_or(std::vector<sync_replica>{});
 		cconn.set_own_account(info);
+		// the persisted configuration belongs to the account, not only to its creation
+		set_config();
 	}
 
 	void set_fallbacks(std::vector<sync_replica> replicas) {

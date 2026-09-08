@@ -49,7 +49,7 @@ sequence_number operator-(sequence_number const& seq, std::uint64_t v) {
 }
 
 sequence_number operator-(std::uint64_t v, sequence_number const& seq) {
-	return sequence_number{seq.value - v};
+	return sequence_number{v - seq.value};
 }
 
 std::string to_string(sequence_number const& seq) {

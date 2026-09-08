@@ -40,7 +40,7 @@ struct chat_entry {
 bool chats_sort(chat_entry const& e1, chat_entry const& e2) {
 	if(e1.messages.empty()) { return false; }
 	if(e2.messages.empty()) { return true;  }
-	return e1.messages[0].sender_time >= e2.messages[0].sender_time;
+	return e1.messages[0].sender_time > e2.messages[0].sender_time;
 }
 
 struct json_manager::impl

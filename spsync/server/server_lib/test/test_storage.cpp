@@ -109,6 +109,29 @@ TEST_CASE("replicated storage requires signed records", "[unit]") {
 	std::filesystem::remove_all(root);
 }
 
+// a refused creation leaves no database behind, and a database without persisted modes
+// is not a storage: neither turns into a default mode storage on a later load
+TEST_CASE("storage refused creation leaves nothing behind", "[unit]") {
+	std::string const root = "test-storage-root-refused";
+	std::filesystem::remove_all(root);
+	protocol::storage_id sid = securepath::test::random_octet_vector(8);
+	storage_config cfg{root};
+
+	CHECK_THROWS(storage(sid, cfg, storage_modes{sync_mode::require_all_seen, auth_mode::only_tag, replication_mode::weak}));
+	CHECK(!std::filesystem::exists(root + "/" + to_hex(sid)));
+	CHECK_THROWS(storage(sid, cfg));
+
+	// an empty database (a creation that died before persisting its modes)
+	std::filesystem::create_directories(root + "/" + to_hex(sid));
+	database::sqlite::create_sqlite_connection(root + "/" + to_hex(sid) + "/storage.db");
+	CHECK_THROWS(storage(sid, cfg));
+	// a creation completes it
+	CHECK_NOTHROW(storage(sid, cfg, storage_modes{sync_mode::allow_all, auth_mode::sign_records}));
+	CHECK_NOTHROW(storage(sid, cfg));
+
+	std::filesystem::remove_all(root);
+}
+
 
 TEST_CASE("storage signs the sequence assignment", "[unit]") {
 	std::string const root = "test-storage-root-env";

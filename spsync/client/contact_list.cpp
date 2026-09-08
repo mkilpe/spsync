@@ -23,11 +23,11 @@ std::deque<std::unique_ptr<contact>> contact_list::enumerate() const {
 
 	auto res = q.execute();
 	for(; res; res.next()) {
-		auto key = res.value<std::uint64_t>(0);
+		auto key = res.value<std::int64_t>(0);
 		if(key) {
 			user_id uid{crypto::public_key_id{*res.value<octet_vector>(1)}};
 			auto p = std::make_unique<contact>(uid);
-			p->add_backend(std::make_shared<key_value_database>(db_, "contacts_metadata", *key));
+			p->add_backend(std::make_shared<key_value_database>(db_, "contacts_metadata", static_cast<std::uint64_t>(*key)));
 			ret.push_back(std::move(p));
 		}
 	}
@@ -41,10 +41,10 @@ std::unique_ptr<contact> contact_list::find(user_id const& uid) const {
 
 	auto res = q.execute();
 	if(res) {
-		auto key = res.value<std::uint64_t>(0);
+		auto key = res.value<std::int64_t>(0);
 		if(key) {
 			ret = std::make_unique<contact>(uid);
-			ret->add_backend(std::make_shared<key_value_database>(db_, "contacts_metadata", *key));
+			ret->add_backend(std::make_shared<key_value_database>(db_, "contacts_metadata", static_cast<std::uint64_t>(*key)));
 		}
 	}
 	return ret;

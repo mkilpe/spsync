@@ -75,6 +75,8 @@ void async_key_query::on_disconnect(error err) {
 			callback_.emit<query_event>(err, std::nullopt, std::move(queries_.front().userdata));
 			queries_.pop_front();
 		}
+		// the connection is gone: the next query must reconnect, not reuse it
+		in_progress_.reset();
 		follow = next_locked();
 	}
 	start_next(std::move(follow));

@@ -70,9 +70,22 @@ public:
 			return request_handle{};
 		}
 		pushing_pending_commit = comm.commit_record(h);
-		pushing_tag = h->tag();
+		// several commits can be in flight (every sync_* call commits right away): the
+		// response is matched to its record by request handle, not by "the last one"
+		in_flight_commits[pushing_pending_commit] = h->tag();
 		LINFO("trying to commit record to server [tag = {}, request handle = {}]", to_hex(h->tag()), pushing_pending_commit);
 		return pushing_pending_commit;
+	}
+
+	/// the tag the commit request carried; empty when unknown (e.g. after a reconnect)
+	record_tag take_in_flight(request_handle handle) {
+		record_tag tag;
+		auto it = in_flight_commits.find(handle);
+		if(it != in_flight_commits.end()) {
+			tag = it->second;
+			in_flight_commits.erase(it);
+		}
+		return tag;
 	}
 
 	/**
@@ -110,10 +123,10 @@ public:
 	 * already-committed and the out-of-sync retry storms). A rebase changes the record's
 	 * hash and lifts the mark; new records, a completed fetch and a reconnect clear all.
 	 */
-	void mark_rejected(bool duplicate) {
-		if(!pushing_tag.empty()) {
-			if(auto h = records.find_tag(pushing_tag)) {
-				rejected_pending[pushing_tag] = rejection{h->record().hash(), duplicate};
+	void mark_rejected(record_tag const& tag, bool duplicate) {
+		if(!tag.empty()) {
+			if(auto h = records.find_tag(tag)) {
+				rejected_pending[tag] = rejection{h->record().hash(), duplicate};
 			}
 		}
 	}
@@ -123,8 +136,8 @@ public:
 	 * Fetching what we miss confirms or adopts it, a blind recommit would only be
 	 * rejected again.
 	 */
-	void on_duplicate_rejected() {
-		mark_rejected(true);
+	void on_duplicate_rejected(record_tag const& tag) {
+		mark_rejected(tag, true);
 		if(!fetch_missing("pending record already committed")) {
 			// nothing to fetch: whatever the server holds under this op is here already
 			resolve_rejected_duplicates();
@@ -133,9 +146,9 @@ public:
 	}
 
 	/// out of sync with nothing to fetch: a rebase (try_commit_pending) is the only way on
-	void on_out_of_sync_rejected() {
+	void on_out_of_sync_rejected(record_tag const& tag) {
 		if(!fetch_missing("out of sync")) {
-			mark_rejected(false);
+			mark_rejected(tag, false);
 			try_commit_pending();
 		}
 	}
@@ -349,8 +362,8 @@ public:
 					} else {
 						LWARN("Record sequence does not match with its parent [block id = {}, tag = {}"
 							", seq = {}, parent seq = {}, parent hash = {}]"
-							, id, to_hex(record.tag()), to_hex(record.parent_hash()), record.sequence()
-							, parent->block_id().sequence);
+							, id, to_hex(record.tag()), record.sequence(), parent->block_id().sequence
+							, to_hex(record.parent_hash()));
 					}
 				} else {
 					LTRACE("Record block with unknown parent [block id = {}, tag = {}, parent hash = {}]"
@@ -717,7 +730,8 @@ public:
 					return chain_block{};
 				}
 
-				auto enc_key = crypto.enc_keys().find(rec.encryption_key());
+				// colliding key sequences (D9): the key that authenticates the record
+				auto enc_key = find_record_key(rec, record);
 				if(!enc_key) {
 					LWARN("could not find encryption key for pending commit (key={})", rec.encryption_key());
 					throw error(errc::no_encryption_key_found, "could not find encryption key for pending commit");
@@ -798,6 +812,30 @@ public:
 		notify_conflicts(handle, conflicts);
 	}
 
+	/**
+	 * Rebuild the pending record on the current head when the rules or an object
+	 * conflict require it. A record that cannot be rebuilt (its key is unknown, it does
+	 * not authenticate) is set invalid and reported false: the event loop swallows
+	 * exceptions, so throwing here would silently stall every later commit.
+	 */
+	bool rebase_if_needed(record_handle const& handle, std::deque<record_handle> const& conflicts) {
+		bool usable = true;
+		if(!conflicts.empty() || pending_needs_rebase(handle->record())) {
+			try {
+				auto record = update_pending_commit(handle->record());
+				if(record.is_valid()) {
+					handle->set_record(record);
+				}
+				notify_conflicts(handle, conflicts);
+			} catch(error const& err) {
+				LWARN("dropping pending record that cannot be rebuilt [tag = {}, err = {}]", to_hex(handle->tag()), err);
+				handle->set_state(record_state::invalid);
+				usable = false;
+			}
+		}
+		return usable;
+	}
+
 	void try_commit_pending() {
 		if(!pushing_pending_commit && !fork_suspected) {
 			//t: can we optimise when we are trying to push commits again
@@ -811,14 +849,10 @@ public:
 					cancel_conflicting(handle, conflicts);
 					// the cancelled record is invalid now, move on to the next pending one
 					handle = records.find_first_pending_commit();
+				} else if(!rebase_if_needed(handle, conflicts)) {
+					// unusable (no key, not authentic): dropped, on to the next pending one
+					handle = records.find_first_pending_commit();
 				} else {
-					if(!conflicts.empty() || pending_needs_rebase(handle->record())) {
-						auto record = update_pending_commit(handle->record());
-						if(record.is_valid()) {
-							handle->set_record(record);
-						}
-						notify_conflicts(handle, conflicts);
-					}
 					if(is_rejected_unchanged(handle)) {
 						// the rebase changed nothing since the server rejected it: leave it
 						// until new records, a completed fetch or a reconnect
@@ -851,8 +885,8 @@ public:
 	request_handle pushing_pending_commit{};
 	/// the storage's validity limits (RDS 8), persisted in the record storage; 0 = unknown
 	storage_limits limits;
-	/// tag of the record the outstanding commit request carries
-	record_tag pushing_tag;
+	/// the tags of the commit requests without an answer yet, by request handle
+	std::map<request_handle, record_tag> in_flight_commits;
 	/// a pending record the server rejected, in the form (hash) it was rejected in
 	struct rejection {
 		octet_vector hash;
@@ -918,6 +952,8 @@ void sync_engine::on_connected() {
 void sync_engine::on_disconnected(std::optional<error> err) {
 	std::unique_lock lock{impl_->mutex};
 	impl_->pushing_pending_commit = 0;
+	// the answers to these never come
+	impl_->in_flight_commits.clear();
 	LTRACE("on_disconnected [error = {}]", err.value_or(error()));
 	// nothing for sync_engine
 }
@@ -976,6 +1012,7 @@ void sync_engine::on_commit_response(request_handle req_handle, commit_response 
 		LTRACE("clearing pending commit request handle [{}]", req_handle);
 		impl_->pushing_pending_commit = 0;
 	}
+	auto const committed_tag = impl_->take_in_flight(req_handle);
 
 	if(res.data) {
 		auto block = res.data.value();
@@ -1007,9 +1044,9 @@ void sync_engine::on_commit_response(request_handle req_handle, commit_response 
 
 		impl_->update_server_seq(res.server_max_sequence);
 		if(check_result_error(res.data, protocol::errc::record_out_of_sync)) {
-			impl_->on_out_of_sync_rejected();
+			impl_->on_out_of_sync_rejected(committed_tag);
 		} else if(check_result_error(res.data, protocol::errc::record_already_committed)) {
-			impl_->on_duplicate_rejected();
+			impl_->on_duplicate_rejected(committed_tag);
 		}
 	}
 }

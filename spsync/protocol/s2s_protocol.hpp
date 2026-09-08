@@ -142,34 +142,32 @@ inline std::optional<storage_modes> peer_modes(wire_modes const& m) {
  */
 struct request_key : protocol_base {
 	request_key(call_id cid = 0, crypto::public_key_id k = {})
-	: cid(cid)
+	: protocol_base(cid)
 	, key(std::move(k))
 	{}
 
-	call_id cid{};
 	crypto::public_key_id key;
 
 	template<typename S>
 	void serialise(S& s) {
 		serialisation::sequence<S> seq(s);
-		seq & static_cast<protocol_base&>(*this) & cid & key;
+		seq & static_cast<protocol_base&>(*this) & key;
 	}
 };
 
 /// answer to request_key; the key is absent when the peer does not hold it either
 struct response_key : protocol_base {
 	response_key(call_id cid = 0, std::optional<crypto::public_key> k = {})
-	: cid(cid)
+	: protocol_base(cid)
 	, key(std::move(k))
 	{}
 
-	call_id cid{};
 	std::optional<crypto::public_key> key;
 
 	template<typename S>
 	void serialise(S& s) {
 		serialisation::sequence<S> seq(s);
-		seq & static_cast<protocol_base&>(*this) & cid & key;
+		seq & static_cast<protocol_base&>(*this) & key;
 	}
 };
 

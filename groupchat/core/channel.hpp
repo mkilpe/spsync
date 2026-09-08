@@ -33,6 +33,10 @@ public:
 
 	std::string name() const;
 
+	/// the sqlite file of the chat's local storage
+	std::string db_path() const { return db_path_; }
+	static std::string db_path(chat_conn_context const&, chat_id const&);
+
 	/// data that is set when creating the chat
 	void set_data(std::string name, users members);
 
@@ -58,6 +62,7 @@ private:
 	users initial_members_;
 	message_storage messages_;
 	database::connection_ptr db_;
+	std::string db_path_;
 	crypto::public_key_id const my_key_id_;
 };
 

@@ -37,7 +37,7 @@ void create_object_records(database::connection_ptr db, octet_vector const& tag,
 
 class database_record : public record_interface {
 public:
-	database_record(database::connection_ptr db, std::uint64_t record_key, record_tag tag
+	database_record(database::connection_ptr db, std::int64_t record_key, record_tag tag
 		, octet_vector parent_hash, chain_block_id id, record_state state)
 	: db_(db)
 	, record_key_(record_key)
@@ -125,8 +125,9 @@ public:
 		{
 			database::transaction tact(*db_);
 
-			update_record(rec);
+			// the object rows are keyed by the tag: drop them before the tag changes
 			remove_object_records();
+			update_record(rec);
 
 			rec.deserialise_record([&rec, this](auto const& r)
 				{
@@ -215,7 +216,7 @@ private:
 	database::connection_ptr db_;
 
 	// -- cached data --
-	std::uint64_t const record_key_;
+	std::int64_t const record_key_;
 	record_tag tag_;
 	octet_vector parent_hash_;
 	chain_block_id block_id_;
@@ -285,7 +286,7 @@ struct record_storage::impl {
 	}
 
 	// construct record handle from query (SELECT key, tag, seq, hash, parent_hash, state, ... )
-	record_handle construct_record(std::uint64_t key, database::query const& q) {
+	record_handle construct_record(std::int64_t key, database::query const& q) {
 		auto tag = q.value<octet_vector>(1);
 		auto seq = q.value<std::uint64_t>(2);
 		auto hash = q.value<octet_vector>(3);
@@ -310,7 +311,8 @@ struct record_storage::impl {
 	record_handle load_record(database::query const& q) {
 		record_handle result;
 		if(q) {
-			auto key = q.value<std::uint64_t>(0);
+			// the rowid is a plain integer: not an offset unsigned like the sequences
+			auto key = q.value<std::int64_t>(0);
 			if(!key) {
 				LOG_WARN("invalid record storage entry, no key set");
 				throw make_error(securepath::errc::invalid_data, "failed to interpret record key column");
@@ -334,7 +336,7 @@ struct record_storage::impl {
 	struct truncate_row {
 		chain_block block;
 		record_state state{record_state::unknown};
-		std::uint64_t key{};
+		std::int64_t key{};
 	};
 
 	// collect the server sequenced rows (in_sync/acked/pending_sync) with seq compared
@@ -351,7 +353,7 @@ struct record_storage::impl {
 		std::vector<truncate_row> rows;
 		auto res = q.execute();
 		for(; res; res.next()) {
-			auto key = res.value<std::uint64_t>(0);
+			auto key = res.value<std::int64_t>(0);
 			auto state = res.value<std::int64_t>(1);
 			if(!key || !state) {
 				LOG_WARN("invalid record storage entry while truncating");
@@ -363,7 +365,7 @@ struct record_storage::impl {
 		return rows;
 	}
 
-	record_handle load_by_key(std::uint64_t key) {
+	record_handle load_by_key(std::int64_t key) {
 		auto q = db->prepare(
 			"SELECT key, tag, seq, hash, parent_hash, state FROM record WHERE key = :k;");
 		q.bind(":k", key);
@@ -448,7 +450,7 @@ struct record_storage::impl {
 	}
 
 	// drop the cache entry of a deleted row; a still live handle is flipped to invalid
-	void invalidate_handle(std::uint64_t key) {
+	void invalidate_handle(std::int64_t key) {
 		record_handle handle;
 		{
 			std::unique_lock lock{mutex};
@@ -672,6 +674,8 @@ std::vector<chain_block> record_storage::truncate_from(sequence_number first_rem
 		if(demote_acked && row.state == record_state::acked) {
 			if(auto handle = impl_->load_by_key(row.key)) {
 				handle->set_state(record_state::pending_commit);
+				// the sequence assignment belonged to the sequence it no longer holds
+				handle->set_assignment({});
 			}
 		} else {
 			impl_->remove_row(row);

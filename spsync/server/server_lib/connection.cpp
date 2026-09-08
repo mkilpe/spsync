@@ -35,6 +35,10 @@ storage* connection::find_storage(protocol::storage_id const& sid) {
 
 securepath::error connection::on_connect(protocol::client_hello const& p, crypto::public_key_id id) {
 	LOG_TRACE("on_connect for user {}", id);
+	if(p.version != protocol::current_version) {
+		LOG_WARN("client {} speaks protocol version {}, this server {}", id, p.version, protocol::current_version);
+		return make_error(protocol::errc::invalid_state, "unsupported protocol version");
+	}
 	id_ = std::move(id);
 	//t: see access
 	send_packet(protocol::server_hello{p});
