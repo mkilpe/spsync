@@ -30,6 +30,13 @@ struct chain_sync_config {
 	std::string log_id;
 	/// maximum records returned for one call
 	std::size_t max_returned_records{30};
+	/// byte budget of one batch (record content plus a per record allowance); a batch
+	/// travels in one transport frame (16 MiB cap) so a range of large records must not
+	/// wedge (record_data.txt RD10)
+	std::size_t max_response_bytes{8 * 1024 * 1024};
+	/// the storage's record content limit (RDS 8); 0 = unlimited. Part of validity: every
+	/// replica judges it identically, so it is a creation parameter of the storage
+	std::size_t max_record_size{};
 	/// how the storage replicates; replicated storages accept only delta mode user
 	/// changes (plan 4.6/D9)
 	replication_mode replication{replication_mode::none};
@@ -111,6 +118,8 @@ private:
 
 	/// duplicate + signature check and classification only, for foreign blocks
 	rule_result evaluate_foreign(chain_block const& block) const;
+	/// the record content exceeds the storage's max_record_size (RDS 8)
+	bool too_big(chain_block const&) const;
 
 	error verify_signature(chain_block const& block, std::optional<crypto::public_key_id>& signer) const;
 	chain_block set_and_save_block(chain_block block, rec_type type);

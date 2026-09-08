@@ -32,6 +32,8 @@ struct spsync_server_commands : sync::spsync_server_params, command_parser {
 		add(storage_params.server_id, "server_id", "", "expected public key id (hex) of the storage server key");
 		add(storage_params.peers, "peers", "", "replication peers as host:port/keyid-hex");
 		add(anti_entropy, "anti_entropy", "", "seconds between replicated head announcements to the peers");
+		add(storage_params.default_limits.max_record_size, "max_record_size", "", "default record content limit (bytes) of new storages");
+		add(storage_params.default_limits.chunk_size, "chunk_size", "", "default data chunk size (bytes) of new storages");
 	}
 
 	void handle_inputs() {

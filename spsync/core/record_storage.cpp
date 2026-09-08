@@ -278,7 +278,9 @@ struct record_storage::impl {
 		if(!db->has_table("sync_state")) {
 			db->prepare("CREATE TABLE sync_state("
 				"key INTEGER PRIMARY KEY CHECK(key = 1),"
-				"cursor_owner BLOB);").execute();
+				"cursor_owner BLOB,"
+				"max_record_size INTEGER,"
+				"chunk_size INTEGER);").execute();
 		}
 	}
 
@@ -827,6 +829,25 @@ void record_storage::set_cursor_owner(octet_vector const& owner) {
 		"INSERT INTO sync_state(key, cursor_owner) VALUES(1, :o)"
 		" ON CONFLICT(key) DO UPDATE SET cursor_owner = excluded.cursor_owner;");
 	q.bind(":o", owner);
+	q.execute();
+}
+
+storage_limits record_storage::limits() const {
+	auto q = impl_->db->prepare("SELECT max_record_size, chunk_size FROM sync_state WHERE key = 1;");
+	storage_limits ret;
+	if(auto res = q.execute()) {
+		ret.max_record_size = static_cast<std::uint32_t>(res.value<std::int64_t>(0).value_or(0));
+		ret.chunk_size = static_cast<std::uint32_t>(res.value<std::int64_t>(1).value_or(0));
+	}
+	return ret;
+}
+
+void record_storage::set_limits(storage_limits const& l) {
+	auto q = impl_->db->prepare(
+		"INSERT INTO sync_state(key, max_record_size, chunk_size) VALUES(1, :m, :c)"
+		" ON CONFLICT(key) DO UPDATE SET max_record_size = excluded.max_record_size, chunk_size = excluded.chunk_size;");
+	q.bind(":m", static_cast<std::int64_t>(l.max_record_size));
+	q.bind(":c", static_cast<std::int64_t>(l.chunk_size));
 	q.execute();
 }
 

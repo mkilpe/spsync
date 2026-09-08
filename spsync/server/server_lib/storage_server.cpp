@@ -174,6 +174,16 @@ struct peer_link {
 	std::chrono::seconds backoff{1};
 };
 
+namespace {
+
+storage_config make_storage_config(storage_server_params const& p) {
+	storage_config c{p.storage_root};
+	c.set_default_limits(p.default_limits);
+	return c;
+}
+
+}
+
 class storage_server::impl
 	: public network::encrypted_server
 	, public storage_server_context
@@ -184,7 +194,7 @@ public:
 	, params_(std::move(params))
 	, context_(context)
 	, handshake_data_(network::handshake_tag::public_key)
-	, default_storage_config_(params_.storage_root)
+	, default_storage_config_(make_storage_config(params_))
 	{
 		LOG_TRACE("constructing storage_server::impl {}", static_cast<void const*>(this));
 	}
@@ -213,7 +223,7 @@ public:
 					});
 			}
 			it = storages_.emplace(id, std::move(p)).first;
-		} else if(create_modes && it->second->modes() != *create_modes) {
+		} else if(create_modes && !modes_match(*create_modes, it->second->modes())) {
 			throw make_error(protocol::errc::storage_mode_mismatch, "storage exists with different modes");
 		}
 		return it->second;
@@ -255,7 +265,7 @@ public:
 		} catch(securepath::error const& err) {
 			LOG_WARN("cannot open the replica of storage {}: {}", to_hex(id), err);
 		}
-		if(ret && (ret->modes().replication == replication_mode::none || (peer_modes && ret->modes() != *peer_modes))) {
+		if(ret && (ret->modes().replication == replication_mode::none || (peer_modes && !modes_match(*peer_modes, ret->modes())))) {
 			LOG_WARN("storage {} is not replicated here with the peer's modes", to_hex(id));
 			ret = nullptr;
 		}

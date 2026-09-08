@@ -28,19 +28,19 @@ sequence_number chain_sync::current_sequence_number() const {
 
 std::deque<chain_block> chain_sync::get_records(sequence_number start, sequence_number end) const {
 	std::deque<chain_block> ret;
-	for(auto const& env : log_.get(start, end, config_.max_returned_records)) {
+	for(auto const& env : log_.get(start, end, config_.max_returned_records, config_.max_response_bytes)) {
 		ret.push_back(env.block());
 	}
 	return ret;
 }
 
 std::deque<block_envelope> chain_sync::get_envelopes(sequence_number start, sequence_number end) const {
-	return log_.get(start, end, config_.max_returned_records);
+	return log_.get(start, end, config_.max_returned_records, config_.max_response_bytes);
 }
 
 std::deque<block_envelope> chain_sync::get_envelopes_by_origin(crypto::public_key_id const& origin,
 	sequence_number from, sequence_number to) const {
-	return log_.get_by_origin(origin, from, to, config_.max_returned_records);
+	return log_.get_by_origin(origin, from, to, config_.max_returned_records, config_.max_response_bytes);
 }
 
 std::vector<chain_block> chain_sync::truncate_from(sequence_number first_removed) {
@@ -87,8 +87,21 @@ error chain_sync::verify_signature(chain_block const& block, std::optional<crypt
 	return {};
 }
 
+bool chain_sync::too_big(chain_block const& block) const {
+	bool const big = config_.max_record_size != 0 && block.record_bytes().size() > config_.max_record_size;
+	if(big) {
+		LOG_INFO("record too big [size={}, limit={}, tag={}] (rsid={})", block.record_bytes().size(),
+			config_.max_record_size, to_hex(block.tag()), config_.log_id);
+	}
+	return big;
+}
+
 chain_sync::rule_result chain_sync::evaluate(chain_block const& block) const {
 	rule_result r;
+	if(too_big(block)) {
+		r.err = make_error(protocol::errc::record_too_big);
+		return r;
+	}
 	auto handle = log_.find_by_tag(block.tag());
 	if(!handle) {
 		if(config_.auth_mode == auth_mode::sign_records) {
@@ -113,6 +126,11 @@ chain_sync::rule_result chain_sync::evaluate(chain_block const& block) const {
 
 chain_sync::rule_result chain_sync::evaluate_foreign(chain_block const& block) const {
 	rule_result r;
+	if(too_big(block)) {
+		// the origin judges by the same limit; a peer pushing this is misbehaving
+		r.err = make_error(protocol::errc::record_too_big);
+		return r;
+	}
 	auto handle = log_.find_by_tag(block.tag());
 	if(!handle) {
 		if(config_.auth_mode == auth_mode::sign_records) {

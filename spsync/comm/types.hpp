@@ -1,5 +1,6 @@
 #pragma once
 
+#include <spsync/core/sync_mode.hpp>
 #include <spsync/core/record_interface.hpp>
 #include <spsync/core/records/block_envelope.hpp>
 #include <spsync/util/result.hpp>
@@ -25,6 +26,8 @@ struct sequence_info {
 	sequence_number sequence;
 	/// signing key id of the server; invalid when the server states no identity
 	crypto::public_key_id server_id;
+	/// the storage's validity limits (0 = unknown, e.g. an old server)
+	storage_limits limits;
 };
 
 struct record_response {

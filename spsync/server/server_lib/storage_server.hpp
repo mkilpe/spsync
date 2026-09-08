@@ -35,6 +35,9 @@ struct storage_server_params {
 	/// root path for the storages of this server
 	std::string storage_root{"record-storages"};
 
+	/// the validity limits new storages get when the creator states none (RDS 8)
+	storage_limits default_limits{default_max_record_size, default_chunk_size};
+
 	/**
 	 * Expected public key id (hex) of this server's signing key (plan 3.3); empty derives
 	 * the identity from the key. Startup fails when set and not matching the actual key.

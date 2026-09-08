@@ -369,7 +369,7 @@ TEST_CASE("s2s replica creates the storage on first contact", "[unit]") {
 	WAIT_CHECK(b.has_storage(sid), 5s);
 	auto sb = b.open_storage(sid, modes);
 	REQUIRE(sb);
-	CHECK(sb->modes() == modes);
+	CHECK(sb->modes() == sa->modes());   // incl. the limits A filled from its defaults
 	WAIT_CHECK(sb->current_sequence_number() == sequence_number{1}, 5s);
 	CHECK(!b.has_storage(local_sid));
 

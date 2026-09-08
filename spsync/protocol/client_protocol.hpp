@@ -38,22 +38,29 @@ struct client_hello : protocol_base {
 
 /// Create storage with specific storage id
 struct create_storage : storage_request_base {
-	create_storage(call_id cid = 0, storage_id sid = {}, std::uint32_t mode = 0, std::uint32_t amode = 0, std::uint32_t repl = 0)
+	create_storage(call_id cid = 0, storage_id sid = {}, wire_modes m = {})
 	: storage_request_base(cid, std::move(sid))
-	, mode(mode)
-	, amode(amode)
-	, repl(repl)
+	, mode(m.mode)
+	, amode(m.amode)
+	, repl(m.repl)
+	, max_record_size(m.max_record_size)
+	, chunk_size(m.chunk_size)
 	{}
 
 	/// requested storage modes, wire encoded (0 = server default); immutable after creation
 	std::uint32_t mode{0};
 	std::uint32_t amode{0};
 	std::uint32_t repl{0};
+	/// requested validity limits (0 = server default), see storage_limits
+	std::uint32_t max_record_size{0};
+	std::uint32_t chunk_size{0};
+
+	wire_modes modes() const { return wire_modes{mode, amode, repl, max_record_size, chunk_size}; }
 
 	template<typename S>
 	void serialise(S& s) {
 		serialisation::sequence<S> seq(s);
-		seq & static_cast<storage_request_base&>(*this) & mode & amode & repl;
+		seq & static_cast<storage_request_base&>(*this) & mode & amode & repl & max_record_size & chunk_size;
 	}
 };
 

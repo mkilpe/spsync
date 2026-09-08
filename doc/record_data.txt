@@ -339,7 +339,7 @@ Implementation steps
       object among many; the two deployment shapes of RD12 (record servers +
       separate data server, all-in-one replicas).
 
-- RDS 8  Chain validity limits                                             [0.5d]
++ RDS 8  Chain validity limits -- done 2026-09-07                          [0.5d]
       max_record_size and chunk_size as per-storage creation parameters (RD10
       validity side, RD3): wire + persistence next to storage_modes, chain_sync
       validation, record_too_big error, limits reported to clients, engine
@@ -348,6 +348,40 @@ Implementation steps
       distributed phase 4 and now overdue - do it first. Tests: oversized record
       rejected identically on reopen, mismatching creation limits refused, a
       range of large records still fetchable.
+      Implemented: storage_limits {max_record_size, chunk_size} inside
+      storage_modes (sync_mode.hpp; defaults 256 KiB / 1 MiB, ranges 4 KiB..8 MiB
+      and 256 KiB..8 MiB, valid_storage_limits). 0 = not stated: the server
+      defaults at creation (storage_config::default_limits, spsync_server
+      --max_record_size / --chunk_size), "whatever the storage has" when a client
+      states its expectation (modes_match, which also covers the unasserted
+      replication mode). Wire: create_storage and response_sequence_number carry
+      both limits, peer_heads/push_records carry them with the modes so a replica
+      creates its copy with identical limits. Persisted in storage_config (old
+      databases get the columns added and the compiled defaults, the same on
+      every replica). chain_sync: too_big() on the commit and the foreign path ->
+      protocol::errc::record_too_big; the limit is over the authenticated record
+      content (chain_block::record_bytes), signature and framing (~ a few KiB)
+      come on top. Batching: chain_log::get / get_by_origin take a byte budget
+      (chain_sync_config::max_response_bytes, 8 MiB) with an 8 KiB per record
+      allowance, always at least one record - clients and peers walk ranges as
+      before, they just get shorter batches for large records. Client: comm
+      delivers the limits in sequence_info (the sequence request is the per
+      connection attach exchange: expected modes out, actual modes + limits back;
+      the server id rides there too because that answer is where the engine
+      decides about a replica switch). The engine learns them once and persists
+      them in the record storage's sync_state next to the cursor owner, so an
+      oversized object/user/segment change is refused with
+      sync::errc::record_too_big before creating the record - offline and right
+      after a restart as well; a later answer with other limits is logged as a
+      misconfigured replica, the stored ones win. When the RD12 data endpoints
+      join the exchange the packet pair should be renamed to an attach/storage
+      info exchange; not worth the churn now.
+      Tests: storage "limits are persisted and immutable", chain_sync "record
+      size limit and size aware batching" (rejection on both paths and after a
+      reopen, 41 x ~3 KB records under a 64 KiB budget fetched in full), engine
+      "refuses oversized records" (incl. offline after the limits were learned),
+      record_storage "limits persist", s2s replica creation compares the filled
+      limits.
 
 - RDS 9  Retention / segment interaction                                       [1d]
       With segments.txt SEG 5 (done 2026-09-01): prune data at segment cut,
@@ -359,9 +393,9 @@ Implementation steps
       manifest, the all-in-one setup where every replica has both roles
       (distributed phase 4 done 2026-09-04, so this is unblocked).
 
-Ordering: RDS 8 first (half a day, fixes a hazard that exists today). RDS 1-7 are
-then single-server work with the data role split in from the start; they unblock
-file sync (use case 1) and groupchat attachments. RDS 9 and 10 follow.
+Ordering: RDS 8 first (done). RDS 1-7 are single-server work with the data role
+split in from the start; they unblock file sync (use case 1) and groupchat
+attachments. RDS 9 and 10 follow.
 
 
 Resolved questions (2026-09-07)

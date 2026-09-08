@@ -45,6 +45,45 @@ TEST_CASE("storage modes are persisted and immutable", "[unit]") {
 }
 
 
+// (RDS 8) validity limits are creation parameters: filled from the server defaults when
+// not stated, persisted, immutable; stated limits must be in range
+TEST_CASE("storage limits are persisted and immutable", "[unit]") {
+	std::string const root = "test-storage-root-limits";
+	std::filesystem::remove_all(root);
+	protocol::storage_id sid = securepath::test::random_octet_vector(8);
+	storage_config cfg{root};
+	cfg.set_default_limits(storage_limits{16 * 1024, 512 * 1024});
+
+	{
+		storage s(sid, cfg, storage_modes{sync_mode::allow_all, auth_mode::sign_records});
+		CHECK(s.modes().limits == storage_limits{16 * 1024, 512 * 1024});
+	}
+	{
+		storage s(sid, cfg);
+		CHECK(s.modes().limits == storage_limits{16 * 1024, 512 * 1024});
+	}
+	// stating the persisted limits (or none) is fine, different ones are a mismatch
+	CHECK_NOTHROW(storage(sid, cfg, storage_modes{sync_mode::allow_all, auth_mode::sign_records,
+		replication_mode::none, storage_limits{16 * 1024, 512 * 1024}}));
+	CHECK_THROWS(storage(sid, cfg, storage_modes{sync_mode::allow_all, auth_mode::sign_records,
+		replication_mode::none, storage_limits{32 * 1024, 0}}));
+
+	// stated limits are kept; out of range ones are refused
+	protocol::storage_id sid2 = securepath::test::random_octet_vector(8);
+	{
+		storage s(sid2, cfg, storage_modes{sync_mode::allow_all, auth_mode::sign_records,
+			replication_mode::none, storage_limits{64 * 1024, 1024 * 1024}});
+		CHECK(s.modes().limits == storage_limits{64 * 1024, 1024 * 1024});
+	}
+	protocol::storage_id sid3 = securepath::test::random_octet_vector(8);
+	CHECK_THROWS(storage(sid3, cfg, storage_modes{sync_mode::allow_all, auth_mode::sign_records,
+		replication_mode::none, storage_limits{1024, 0}}));
+	CHECK_THROWS(storage(sid3, cfg, storage_modes{sync_mode::allow_all, auth_mode::sign_records,
+		replication_mode::none, storage_limits{0, 1024}}));
+
+	std::filesystem::remove_all(root);
+}
+
 TEST_CASE("replicated storage requires signed records", "[unit]") {
 	std::string const root = "test-storage-root-repl";
 	std::filesystem::remove_all(root);

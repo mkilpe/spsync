@@ -1,5 +1,7 @@
 #pragma once
 
+#include <spsync/core/sync_mode.hpp>
+
 #include <securepath/crypto/public_key_id.hpp>
 
 #include <string>
@@ -26,10 +28,16 @@ public:
 	 */
 	std::vector<crypto::public_key_id> const& peers() const { return peers_; }
 
+	/// the limits a storage created without stated limits gets (record_data.txt RD10);
+	/// the server operator's defaults for new storages
+	storage_limits const& default_limits() const { return default_limits_; }
+	void set_default_limits(storage_limits const& l) { default_limits_ = l; }
+
 private:
 	// Path where the storages are located on the disk, can be relative or absolute
 	std::string storage_root_path_ = "record-storages";
 	std::vector<crypto::public_key_id> peers_;
+	storage_limits default_limits_{default_max_record_size, default_chunk_size};
 };
 
 }

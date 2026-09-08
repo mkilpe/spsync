@@ -18,7 +18,25 @@ chain_block_id chain_log::head() const {
 	return head_;
 }
 
-std::deque<block_envelope> chain_log::get(sequence_number start, sequence_number end, std::size_t max) const {
+namespace {
+
+/// the per record allowance on top of the content: signature, hashes, envelope, framing
+std::size_t constexpr record_wire_allowance{8 * 1024};
+
+/// size aware batching (RDS 8): keep appending while the byte budget allows, at least one
+void append_within_budget(std::deque<block_envelope>& out, block_envelope env, std::size_t& used, std::size_t max_bytes) {
+	auto const cost = env.block().record_bytes().size() + record_wire_allowance;
+	if(out.empty() || used + cost <= max_bytes) {
+		used += cost;
+		out.push_back(std::move(env));
+	}
+}
+
+}
+
+std::deque<block_envelope> chain_log::get(sequence_number start, sequence_number end, std::size_t max,
+	std::size_t max_bytes) const
+{
 	if(!start.is_valid()) {
 		start = sequence_number{1};
 	}
@@ -26,13 +44,14 @@ std::deque<block_envelope> chain_log::get(sequence_number start, sequence_number
 		end = head_.sequence;
 	}
 	std::deque<block_envelope> ret;
+	std::size_t used = 0;
 	// find_range skips the sequences a history cut removed (SEG 5)
 	for(auto const& h : records_.find_range(start, end, record_state::in_sync, max)) {
 		auto env = h->assignment();
 		if(env.empty()) {
-			ret.push_back(block_envelope{h->record(), {}});
+			append_within_budget(ret, block_envelope{h->record(), {}}, used, max_bytes);
 		} else {
-			ret.push_back(serialisation::asn_der_deserialise<block_envelope>(env));
+			append_within_budget(ret, serialisation::asn_der_deserialise<block_envelope>(env), used, max_bytes);
 		}
 	}
 	return ret;
@@ -66,10 +85,11 @@ chain_block_id chain_log::origin_head(crypto::public_key_id const& origin) const
 }
 
 std::deque<block_envelope> chain_log::get_by_origin(crypto::public_key_id const& origin,
-	sequence_number from, sequence_number to, std::size_t max) const {
+	sequence_number from, sequence_number to, std::size_t max, std::size_t max_bytes) const {
 	std::deque<block_envelope> ret;
+	std::size_t used = 0;
 	for(auto const& env : records_.find_origin_assignments(origin.data(), from, to, max)) {
-		ret.push_back(serialisation::asn_der_deserialise<block_envelope>(env));
+		append_within_budget(ret, serialisation::asn_der_deserialise<block_envelope>(env), used, max_bytes);
 	}
 	return ret;
 }

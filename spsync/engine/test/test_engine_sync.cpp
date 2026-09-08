@@ -184,6 +184,43 @@ TEST_CASE("sync new records after disconnect/connect", "[unit]") {
 }
 
 
+// (10c, RDS 8) the engine refuses a change that exceeds the storage's record limit before
+// committing, once the server reported the limits with the sequence answer
+TEST_CASE("engine sync refuses oversized records", "[unit]") {
+	test::test_sync_context context(chain_sync_config{sync_mode::allow_all});
+	context.server.limits = storage_limits{4096, default_chunk_size};
+	context.add_client(true, 1);
+	context.create_initial_record();
+	while(context.handle_events()) {}
+
+	metadata big;
+	big.insert("blob", octet_vector(8000, 1));
+	bool refused = false;
+	try {
+		context.client(0).engine.sync_object_change(util::create_object_id(), big);
+	} catch(error const& err) {
+		refused = err.code() == make_error_code(errc::record_too_big);
+	}
+	CHECK(refused);
+
+	// a small change goes through as before
+	context.client(0).engine.sync_object_change(util::create_object_id(), metadata{});
+	while(context.handle_events()) {}
+	CHECK(context.server.sync.current_sequence_number() == sequence_number{2});
+
+	// the limits were learned once and persisted: an offline change is refused as well
+	CHECK(context.client(0).io.records().limits() == storage_limits{4096, default_chunk_size});
+	context.disconnect_client(0);
+	context.handle_events();
+	refused = false;
+	try {
+		context.client(0).engine.sync_object_change(util::create_object_id(), big);
+	} catch(error const& err) {
+		refused = err.code() == make_error_code(errc::record_too_big);
+	}
+	CHECK(refused);
+}
+
 // (10b) a client that joins an existing storage and commits before its first records
 // arrived (the cli sends a message right after joining): the record references no
 // special record yet, the server rejects it as out of sync and the engine rebases it

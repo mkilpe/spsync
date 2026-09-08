@@ -20,6 +20,8 @@ enum class errc {
 	invalid_storage_modes,
 	/// the replica is still catching up with its peers (bootstrap, plan 5.2): try another one
 	storage_syncing,
+	/// the record content exceeds the storage's max_record_size (record_data.txt RD10)
+	record_too_big,
 	end_of_list
 };
 

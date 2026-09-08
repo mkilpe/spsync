@@ -45,7 +45,8 @@ void comm::handle(protocol::response_sequence_number const& p) {
 		// the server identity is the transport key: the pk handshake authenticated it,
 		// so it needs no packet field (plan 4.5)
 		arg = result<sequence_info>{sequence_info{p.sequence
-			, nc_impl_->remote_key_id().value_or(crypto::public_key_id{})}};
+			, nc_impl_->remote_key_id().value_or(crypto::public_key_id{})
+			, storage_limits{p.max_record_size, p.chunk_size}}};
 	}
 	output_->emit<comm_events::on_sequence_number_response>(p.cid, std::move(arg));
 	if(p.error && protocol::to_error(p.error).code() == make_error_code(protocol::errc::storage_syncing)) {

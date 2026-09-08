@@ -12,6 +12,8 @@ enum class errc {
 	invalid_record_state,
 	not_authentic,
 	invalid_configuration,
+	/// the record would exceed the storage's max_record_size (checked before committing)
+	record_too_big,
 	end_of_list
 };
 

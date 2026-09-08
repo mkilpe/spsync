@@ -462,6 +462,51 @@ TEST_CASE("chain_sync replicated storage requires delta user changes", "[unit]")
 	CHECK(sync.commit_block(make_change(users_change_mode::delta)));
 }
 
+// (6i, RDS 8) the record content limit is judged the same way after a reopen and on the
+// foreign path, and a range of large records is fetched in size aware batches instead of
+// wedging on the transport frame cap
+TEST_CASE("chain_sync record size limit and size aware batching", "[unit]") {
+	remove_database_test_db();
+	chain_sync_config config{sync_mode::allow_all};
+	config.max_record_size = 4096;
+	config.max_response_bytes = 64 * 1024;
+
+	test_block_creator creator;
+	{
+		chain_sync sync(database::sqlite::create_sqlite_connection(db_name), config);
+		REQUIRE(sync.commit_block(creator.test_user_change()));
+		auto big = creator.test_multi_data_change(400);
+		REQUIRE(big.record_bytes().size() > 4096);
+		CHECK(check_result_error(sync.commit_block(big), protocol::errc::record_too_big));
+		CHECK(check_result_error(sync.commit_foreign(big), protocol::errc::record_too_big));
+		for(int i = 0; i != 40; ++i) {
+			REQUIRE(sync.commit_block(creator.test_multi_data_change(100)));
+		}
+		REQUIRE(sync.current_sequence_number() == sequence_number{41});
+	}
+	{
+		chain_sync sync(database::sqlite::create_sqlite_connection(db_name), config);
+		CHECK(check_result_error(sync.commit_block(creator.test_multi_data_change(400)), protocol::errc::record_too_big));
+
+		// ~3 KB of content plus the per record allowance: a 64 KiB batch holds a few, never 30
+		auto batch = sync.get_records(sequence_number{1}, sequence_number{41});
+		REQUIRE(!batch.empty());
+		CHECK(batch.size() < 30);
+		CHECK(sync.get_envelopes(sequence_number{1}, sequence_number{41}).size() == batch.size());
+
+		// walking the ranges the way clients and peers do fetches everything
+		std::size_t total = 0;
+		sequence_number next{1};
+		while(next <= sequence_number{41}) {
+			auto b = sync.get_records(next, sequence_number{41});
+			REQUIRE(!b.empty());
+			total += b.size();
+			next = b.back().sequence() + 1;
+		}
+		CHECK(total == 41);
+	}
+}
+
 // (7) validate/apply split behaves like commit_block
 TEST_CASE("chain_sync validate and apply", "[unit]") {
 	remove_database_test_db();

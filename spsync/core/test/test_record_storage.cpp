@@ -743,4 +743,23 @@ TEST_CASE("record_storage first missing sequence at start", "[unit]") {
 	CHECK(!storage.first_missing_sequence(sequence_number{2}).is_valid());
 }
 
+
+// (RDS 8) the storage's validity limits survive a reopen next to the cursor owner
+TEST_CASE("record_storage limits persist", "[unit]") {
+	remove_database_test_db();
+	{
+		record_storage storage(database::sqlite::create_sqlite_connection(db_name));
+		CHECK(storage.limits() == storage_limits{});
+		storage.set_cursor_owner(octet_vector(32, 7));
+		storage.set_limits(storage_limits{16 * 1024, 512 * 1024});
+		CHECK(storage.limits() == storage_limits{16 * 1024, 512 * 1024});
+	}
+	record_storage storage(database::sqlite::create_sqlite_connection(db_name));
+	CHECK(storage.limits() == storage_limits{16 * 1024, 512 * 1024});
+	// neither setter clobbers the other's column
+	CHECK(storage.cursor_owner() == octet_vector(32, 7));
+	storage.set_cursor_owner(octet_vector(32, 8));
+	CHECK(storage.limits() == storage_limits{16 * 1024, 512 * 1024});
+}
+
 }

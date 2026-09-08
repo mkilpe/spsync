@@ -66,7 +66,7 @@ request_handle test_sync_server_client::fetch_sequence_number() {
 	events_.push_back([=, this] {
 		// the client may have disconnected (or hopped servers) before this ran
 		if(server_) {
-			output_->on_sequence_number_response(ret, sequence_info{server_->sync.current_sequence_number(), server_->id});
+			output_->on_sequence_number_response(ret, sequence_info{server_->sync.current_sequence_number(), server_->id, server_->limits});
 		}
 	});
 	return ret;

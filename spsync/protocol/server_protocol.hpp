@@ -52,12 +52,14 @@ struct storage_management_reply : reply_base {
 struct response_sequence_number : reply_base {
 	using reply_base::reply_base;
 
-	response_sequence_number(storage_request_base const& p, sequence_number seq, std::uint32_t mode = 0, std::uint32_t amode = 0, std::uint32_t repl = 0)
+	response_sequence_number(storage_request_base const& p, sequence_number seq, wire_modes m = {})
 	: reply_base(p)
 	, sequence(seq)
-	, mode(mode)
-	, amode(amode)
-	, repl(repl)
+	, mode(m.mode)
+	, amode(m.amode)
+	, repl(m.repl)
+	, max_record_size(m.max_record_size)
+	, chunk_size(m.chunk_size)
 	{
 	}
 
@@ -67,11 +69,15 @@ struct response_sequence_number : reply_base {
 	std::uint32_t mode{0};
 	std::uint32_t amode{0};
 	std::uint32_t repl{0};
+	/// the validity limits of the storage (record_data.txt RD10): the client refuses
+	/// oversized changes before committing
+	std::uint32_t max_record_size{0};
+	std::uint32_t chunk_size{0};
 
 	template<typename S>
 	void serialise(S& s) {
 		serialisation::sequence<S> seq(s);
-		seq & static_cast<reply_base&>(*this) & sequence & mode & amode & repl;
+		seq & static_cast<reply_base&>(*this) & sequence & mode & amode & repl & max_record_size & chunk_size;
 	}
 };
 

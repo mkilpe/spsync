@@ -18,6 +18,7 @@ namespace {
 		, "unknown signer"
 		, "invalid storage modes"
 		, "storage syncing"
+		, "record too big"
 		};
 
 	using category_type = def_error_category<errc>;

@@ -17,40 +17,97 @@
 namespace securepath::sync {
 namespace {
 
-storage_modes load_or_create_modes(database::connection& db, std::optional<storage_modes> const& requested, std::string const& log_id) {
-	if(requested && !valid_storage_modes(*requested)) {
-		LOG_WARN("replicated storage requires signed records (rsid={})", log_id);
-		throw make_error(protocol::errc::invalid_storage_modes, "replicated storage requires sign_records");
+/// true when the table has the column (older storage databases lack the limit columns)
+bool has_column(database::connection& db, std::string const& table, std::string const& column) {
+	auto q = db.prepare("PRAGMA table_info(" + table + ");");
+	for(auto res = q.execute(); res; res.next()) {
+		if(res.value<std::string>(1).value_or("") == column) {
+			return true;
+		}
 	}
+	return false;
+}
+
+void create_or_upgrade_config_table(database::connection& db) {
 	if(!db.has_table("storage_config")) {
 		db.prepare("CREATE TABLE storage_config("
 			"key INTEGER PRIMARY KEY CHECK(key = 1),"
 			"sync_mode INTEGER,"
 			"auth_mode INTEGER,"
 			"replication INTEGER,"
+			"max_record_size INTEGER,"
+			"chunk_size INTEGER,"
 			"created_at INTEGER);").execute();
+	} else if(!has_column(db, "storage_config", "max_record_size")) {
+		// a storage from before RDS 8: it gets the compiled defaults, the same on every replica
+		db.prepare("ALTER TABLE storage_config ADD COLUMN max_record_size INTEGER;").execute();
+		db.prepare("ALTER TABLE storage_config ADD COLUMN chunk_size INTEGER;").execute();
 	}
-	auto q = db.prepare("SELECT sync_mode, auth_mode, replication FROM storage_config WHERE key = 1;");
+}
+
+std::optional<storage_modes> load_persisted_modes(database::connection& db) {
+	std::optional<storage_modes> ret;
+	auto q = db.prepare("SELECT sync_mode, auth_mode, replication, max_record_size, chunk_size FROM storage_config WHERE key = 1;");
 	auto res = q.execute();
 	if(res) {
-		storage_modes persisted{
+		ret = storage_modes{
 			sync_mode(res.value<std::int64_t>(0).value_or(0)),
 			auth_mode(res.value<std::int64_t>(1).value_or(0)),
-			replication_mode(res.value<std::int64_t>(2).value_or(0))};
-		if(requested && *requested != persisted) {
-			LOG_WARN("storage exists with different modes (rsid={})", log_id);
-			throw make_error(protocol::errc::storage_mode_mismatch, "storage exists with different modes");
-		}
-		return persisted;
+			replication_mode(res.value<std::int64_t>(2).value_or(0)),
+			storage_limits{
+				static_cast<std::uint32_t>(res.value<std::int64_t>(3).value_or(default_max_record_size)),
+				static_cast<std::uint32_t>(res.value<std::int64_t>(4).value_or(default_chunk_size))}};
 	}
-	storage_modes m = requested.value_or(storage_modes{});
-	auto ins = db.prepare("INSERT INTO storage_config(key, sync_mode, auth_mode, replication, created_at) VALUES(1, :m, :a, :r, :c);");
+	return ret;
+}
+
+void persist_modes(database::connection& db, storage_modes const& m, std::string const& log_id) {
+	auto ins = db.prepare("INSERT INTO storage_config(key, sync_mode, auth_mode, replication, max_record_size, chunk_size, created_at)"
+		" VALUES(1, :m, :a, :r, :mr, :cs, :c);");
 	ins.bind(":m", std::to_underlying(m.mode));
 	ins.bind(":a", std::to_underlying(m.auth));
 	ins.bind(":r", std::to_underlying(m.replication));
+	ins.bind(":mr", static_cast<std::int64_t>(m.limits.max_record_size));
+	ins.bind(":cs", static_cast<std::int64_t>(m.limits.chunk_size));
 	ins.bind(":c", static_cast<std::int64_t>(std::time(nullptr)));
 	ins.execute();
-	LOG_INFO("storage modes persisted [mode={}, auth={}] (rsid={})", int(m.mode), int(m.auth), log_id);
+	LOG_INFO("storage modes persisted [mode={}, auth={}, replication={}, max_record_size={}, chunk_size={}] (rsid={})",
+		int(m.mode), int(m.auth), int(m.replication), m.limits.max_record_size, m.limits.chunk_size, log_id);
+}
+
+/**
+ * The persisted modes, or the requested ones persisted on first creation with unstated
+ * limits filled from the server defaults (RDS 8). A stated mode that does not match the
+ * persisted one is a storage_mode_mismatch; limits outside their ranges are
+ * invalid_storage_modes.
+ */
+storage_modes load_or_create_modes(database::connection& db, std::optional<storage_modes> const& requested,
+	storage_limits const& defaults, std::string const& log_id)
+{
+	if(requested && !valid_storage_modes(*requested)) {
+		LOG_WARN("invalid storage modes: a replicated storage requires signed records, limits must be in range (rsid={})", log_id);
+		throw make_error(protocol::errc::invalid_storage_modes, "invalid storage modes");
+	}
+	create_or_upgrade_config_table(db);
+	if(auto persisted = load_persisted_modes(db)) {
+		if(requested && !modes_match(*requested, *persisted)) {
+			LOG_WARN("storage exists with different modes (rsid={})", log_id);
+			throw make_error(protocol::errc::storage_mode_mismatch, "storage exists with different modes");
+		}
+		return *persisted;
+	}
+	storage_modes m = requested.value_or(storage_modes{});
+	if(m.limits.max_record_size == 0) {
+		m.limits.max_record_size = defaults.max_record_size;
+	}
+	if(m.limits.chunk_size == 0) {
+		m.limits.chunk_size = defaults.chunk_size;
+	}
+	if(!valid_storage_limits(m.limits)) {
+		LOG_WARN("invalid default storage limits (rsid={})", log_id);
+		throw make_error(protocol::errc::invalid_storage_modes, "invalid storage limits");
+	}
+	persist_modes(db, m, log_id);
 	return m;
 }
 
@@ -78,9 +135,10 @@ storage::storage(protocol::storage_id id, storage_config config, std::optional<s
 	std::filesystem::create_directories(path);
 
 	auto db_conn = database::sqlite::create_sqlite_connection(db);
-	modes_ = load_or_create_modes(*db_conn, create_modes, to_hex(id_));
+	modes_ = load_or_create_modes(*db_conn, create_modes, config_.default_limits(), to_hex(id_));
 	chain_sync_config sync_config{modes_.mode, modes_.auth, to_hex(id_)};
 	sync_config.replication = modes_.replication;
+	sync_config.max_record_size = modes_.limits.max_record_size;
 
 	sync_ = std::make_unique<chain_sync>(db_conn, sync_config, keys);
 	heads_ = std::make_unique<storage_heads>(db_conn);

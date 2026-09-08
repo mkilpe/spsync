@@ -13,6 +13,7 @@ namespace {
 		, "invalid record state"
 		, "not authentic"
 		, "invalid configuration"
+		, "record too big"
 		};
 
 	static_assert(sizeof(errors)/sizeof(*errors)

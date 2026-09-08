@@ -1,6 +1,7 @@
 #pragma once
 
 #include "record_interface.hpp"
+#include "sync_mode.hpp"
 #include <securepath/database/connection.hpp>
 
 #include <deque>
@@ -113,6 +114,14 @@ public:
 	 */
 	octet_vector cursor_owner() const;
 	void set_cursor_owner(octet_vector const&);
+
+	/**
+	 * The storage's validity limits as learned from the server on the first attach
+	 * (RDS 8); immutable per storage, kept here so oversized changes are refused offline
+	 * and right after a restart. Zero until learned.
+	 */
+	storage_limits limits() const;
+	void set_limits(storage_limits const&);
 
 
 	// -- truncation --

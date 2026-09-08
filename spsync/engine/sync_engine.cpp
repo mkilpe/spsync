@@ -28,7 +28,41 @@ public:
 	, crypto(cc)
 	, records(comm.records())
 	, config(std::move(config))
-	{}
+	{
+		// the limits learned on an earlier attach (RDS 8); zero until then
+		limits = records.limits();
+	}
+
+	/// the server reported the storage's limits with the attach answer: learn them once,
+	/// they are immutable - a different report afterwards is a misconfigured replica
+	void learn_limits(storage_limits const& reported) {
+		if(reported.max_record_size != 0) {
+			if(limits.max_record_size == 0) {
+				LINFO("storage limits learned [max_record_size={}, chunk_size={}]", reported.max_record_size, reported.chunk_size);
+				limits = reported;
+				records.set_limits(reported);
+			} else if(limits != reported) {
+				LWARN("server reports other limits than the storage has [reported max_record_size={}, chunk_size={}; stored {}, {}]",
+					reported.max_record_size, reported.chunk_size, limits.max_record_size, limits.chunk_size);
+			}
+		}
+	}
+
+	/**
+	 * The storage's validity limits as the server reported them (RDS 8): an oversized
+	 * change is refused here instead of being rejected by every replica after the fact.
+	 * Unknown (0) until the first sequence answer, then no check.
+	 */
+	template<typename Record>
+	void check_record_size(auth_record<Record> const& rec) const {
+		if(limits.max_record_size != 0) {
+			chain_block block{rec};
+			if(block.record_bytes().size() > limits.max_record_size) {
+				LWARN("record too big [size={}, limit={}]", block.record_bytes().size(), limits.max_record_size);
+				throw error(errc::record_too_big, "record exceeds the storage's max_record_size");
+			}
+		}
+	}
 
 	request_handle commit_record(record_handle h) {
 		if(fork_suspected) {
@@ -815,6 +849,8 @@ public:
 	sequence_number server_seq;
 	// if we have ongoing committing going for pending record
 	request_handle pushing_pending_commit{};
+	/// the storage's validity limits (RDS 8), persisted in the record storage; 0 = unknown
+	storage_limits limits;
 	/// tag of the record the outstanding commit request carries
 	record_tag pushing_tag;
 	/// a pending record the server rejected, in the form (hash) it was rejected in
@@ -892,6 +928,7 @@ void sync_engine::on_sequence_number_response(request_handle req_handle, result<
 		LINFO("on_sequence_number_response: {} (request handle {})", res.value().sequence, req_handle);
 		impl_->check_cursor_owner(res.value().server_id);
 		impl_->update_server_seq(res.value().sequence);
+		impl_->learn_limits(res.value().limits);
 		if(!impl_->fetch_missing("behind the server")) {
 			//already up-to-date with server but perhaps we have some local pending commits
 			impl_->try_commit_pending();
@@ -1012,7 +1049,9 @@ record_handle sync_engine::sync_object_change(object_id oid, metadata mdata, rec
 		, {}, impl_->last_special_tag());
 	creator.add_change(std::move(oid), last_oid_tag, std::move(mdata));
 
-	record_handle h = impl_->records.create(creator.result());
+	auto record = creator.result();
+	impl_->check_record_size(record);
+	record_handle h = impl_->records.create(record);
 	//f: handle record data
 
 	impl_->commit_record(h);
@@ -1034,7 +1073,9 @@ record_handle sync_engine::sync_user_change(plain_user_change_data change_data, 
 		, {}, impl_->last_special_tag());
 	creator.set_change(std::move(change_data), std::move(mdata));
 
-	record_handle h = impl_->records.create(creator.result());
+	auto record = creator.result();
+	impl_->check_record_size(record);
+	record_handle h = impl_->records.create(record);
 	impl_->commit_record(h);
 
 	return h;
@@ -1063,7 +1104,9 @@ record_handle sync_engine::sync_segment_end(metadata mdata) {
 		, {}, impl_->last_special_tag());
 	creator.set_change(impl_->make_segment_data(last_block), std::move(mdata));
 
-	record_handle h = impl_->records.create(creator.result());
+	auto record = creator.result();
+	impl_->check_record_size(record);
+	record_handle h = impl_->records.create(record);
 	impl_->commit_record(h);
 
 	return h;

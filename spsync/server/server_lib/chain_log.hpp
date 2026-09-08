@@ -6,6 +6,7 @@
 #include <securepath/database/connection.hpp>
 
 #include <deque>
+#include <limits>
 #include <vector>
 
 namespace securepath::sync {
@@ -38,7 +39,8 @@ public:
 	 * Get envelopes for the records [start, end], at most max entries. An invalid start
 	 * defaults to the first record and an invalid end to the head.
 	 */
-	std::deque<block_envelope> get(sequence_number start, sequence_number end, std::size_t max) const;
+	std::deque<block_envelope> get(sequence_number start, sequence_number end, std::size_t max,
+		std::size_t max_bytes = std::numeric_limits<std::size_t>::max()) const;
 
 	/**
 	 * Append the envelope's block as the new head. The block must extend the head
@@ -59,7 +61,8 @@ public:
 	 * [from, to], in origin sequence order, at most max entries (plan 4.4 anti-entropy).
 	 */
 	std::deque<block_envelope> get_by_origin(crypto::public_key_id const& origin,
-		sequence_number from, sequence_number to, std::size_t max) const;
+		sequence_number from, sequence_number to, std::size_t max,
+		std::size_t max_bytes = std::numeric_limits<std::size_t>::max()) const;
 
 	/// remove every record with sequence >= first_removed and recompute the head;
 	/// returns the removed blocks (see record_storage::truncate_from)

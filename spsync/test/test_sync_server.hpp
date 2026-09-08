@@ -104,6 +104,8 @@ public:
 	chain_sync sync;
 	/// identity reported to the clients (plan 4.5); every test server has its own
 	crypto::public_key_id id;
+	/// the validity limits reported with the sequence answer (RDS 8); 0 = not reported
+	storage_limits limits;
 };
 
 /**
