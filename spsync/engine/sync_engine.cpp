@@ -750,11 +750,18 @@ public:
 		return creator.result();
 	}
 
-	chain_block update_pending_commit(chain_block const& record) {
+	/**
+	 * Rebuild the pending record on the current head. A record already based on the head
+	 * is left alone, except when an object changed underneath it (has_conflicts): its
+	 * previous object tag is stale then and the server would refuse it, so it is rebuilt
+	 * regardless of the head.
+	 */
+	chain_block update_pending_commit(chain_block const& record, bool has_conflicts) {
 		return record.deserialise_record<chain_block>([&](auto const& rec) {
-				//check if we are already trying to commit pending record, so that we don't overwrite it while in progress
-				if(rec.last_seen_block() == records.last_block() && rec.last_seen_special_tag() == last_special_tag()) {
-					// already up-to-date it seems
+				bool on_head = rec.last_seen_block() == records.last_block()
+					&& rec.last_seen_special_tag() == last_special_tag();
+				if(on_head && !has_conflicts) {
+					// already up-to-date, nothing to rebuild
 					return chain_block{};
 				}
 
@@ -850,10 +857,11 @@ public:
 		bool usable = true;
 		if(!conflicts.empty() || pending_needs_rebase(handle->record())) {
 			try {
-				auto record = update_pending_commit(handle->record());
+				auto record = update_pending_commit(handle->record(), !conflicts.empty());
 				if(record.is_valid()) {
 					handle->set_record(record);
 				}
+				// with conflicts the record was rebuilt above (or threw): the report is true
 				notify_conflicts(handle, conflicts);
 			} catch(error const& err) {
 				LWARN("dropping pending record that cannot be rebuilt [tag = {}, err = {}]", to_hex(handle->tag()), err);
