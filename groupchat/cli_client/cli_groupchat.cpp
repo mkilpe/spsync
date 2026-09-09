@@ -68,25 +68,6 @@ void cli_groupchat::on_server_connect(server_id sid) {
 	auto conn = find(sid);
 	auto s = print("connected to sync server % (%)", sid, conn ? std::format("{}", conn->current_endpoint()) : "?");
 	win_.add_info(0, to_wstring(s));
-
-	std::vector<std::function<void()>> actions;
-	auto it = when_connected_.find(sid);
-	if(it != when_connected_.end()) {
-		actions.swap(it->second);
-		when_connected_.erase(it);
-	}
-	for(auto const& action : actions) {
-		action();
-	}
-}
-
-void cli_groupchat::run_when_connected(server_id sid, std::function<void()> action) {
-	auto conn = find(sid);
-	if(conn && conn->is_connected()) {
-		action();
-	} else {
-		when_connected_[sid].push_back(std::move(action));
-	}
 }
 
 void cli_groupchat::on_server_disconnect(server_id sid, error err) {

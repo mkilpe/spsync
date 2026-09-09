@@ -1,5 +1,7 @@
 #pragma once
 
+#include <securepath/util/task.hpp>
+
 #include <functional>
 #include <memory>
 #include <string>
@@ -88,6 +90,15 @@ public:
 
 	void close();
 private:
+	/**
+	 * Every public function runs its body on the event loop thread (posted and waited for,
+	 * or inline when already there, e.g. from the event callback), so the groupchat core
+	 * is driven from one thread like the cli does. Bodies that wait for the network are
+	 * coroutines (task<std::string>) and suspend instead of blocking the loop.
+	 */
+	std::string call(std::function<std::string()>) const;
+	std::string call_task(std::function<securepath::task<std::string>()>) const;
+
 	std::unique_ptr<event_system::event_loop> loop_;
 
 	class impl;

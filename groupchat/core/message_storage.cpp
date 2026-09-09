@@ -74,8 +74,10 @@ msg_change message_storage::insert(message_id const& id, msg_data const& md, msg
 	auto q = db_->prepare(prep);
 	q.bind(":id", id.value());
 	q.bind(":data", serialisation::asn_der_serialise(md));
+	// microseconds: messages sent in quick succession must not tie on the sender time,
+	// the time order is the order the sender meant (the chain order can differ after a rebase)
 	q.bind(":stime", static_cast<std::int64_t>(
-		std::chrono::duration_cast<std::chrono::milliseconds>(md.sender_time.time_since_epoch()).count()));
+		std::chrono::duration_cast<std::chrono::microseconds>(md.sender_time.time_since_epoch()).count()));
 	if(state == msg_state::in_sync) {
 		q.bind(":seq", md.seq.value);
 	} else {

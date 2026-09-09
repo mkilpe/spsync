@@ -5,10 +5,12 @@
 
 #include <spsync/core/users.hpp>
 #include <securepath/util/error.hpp>
+#include <securepath/util/task.hpp>
 
 #include <cstdint>
 #include <memory>
 #include <string>
+#include <functional>
 #include <future>
 
 namespace securepath::groupchat {
@@ -35,6 +37,17 @@ public:
 
 	/// true while the session with the sync server is up
 	bool is_connected() const;
+
+	/**
+	 * Run the action once the session is up: right away when it is, otherwise from the
+	 * connect that succeeds next (the automatic reconnect keeps trying); disconnect()
+	 * fails the waiting actions with the error. Called on the event loop thread.
+	 */
+	void when_connected(std::move_only_function<void(error const&)>);
+
+	/// the awaitable form of when_connected: completes on the loop thread when the
+	/// session is up, throws the error when the connection was stopped
+	securepath::task<void> connected();
 
 	/// Create chat on given server, will call on_create when fail or succeed
 	channel& create_chat(std::string name, users = {});

@@ -214,8 +214,11 @@ void gc_cli::create_chat(std::vector<std::wstring_view> const& args) {
 	std::string name{to_string(args.front())};
 	auto conn = gc_->load();
 	conn->connect();
-	gc_->run_when_connected(conn->id(), [this, conn, name] {
+	conn->when_connected([this, conn, name](error const& err) {
 		try {
+			if(err) {
+				throw err;
+			}
 			auto cid = conn->create_chat(name, sync::users{}).id();
 			int ch = gc_->add_channel(cid, name);
 			win_->change_channel(name, ch);

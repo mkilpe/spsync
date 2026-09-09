@@ -1,5 +1,8 @@
 
 #include "json_test_helpers.hpp"
+#include <filesystem>
+#include <future>
+#include <mutex>
 #include <spsync/util/print.hpp>
 #include "json_test_manager.hpp"
 #include "json_commands.hpp"
@@ -639,4 +642,33 @@ TEST_CASE("json_manager config test", "[system]") {
 	CHECK_JSON(manager.get_config(R"(["network.timeout"])"), R"({"network.timeout": 60})");
 	CHECK_JSON(manager.create_account(json_create_account("test")), json_create_account_result("test"));
 }
+
+// every json call runs on the manager's event loop; from the event callback (already on
+// the loop) it runs inline instead of waiting for itself
+TEST_CASE("json_manager api from the event callback", "[system]") {
+	sync::test::test_context net_context;
+	net_context.add_client(1);
+	sync::test::test_server server(net_context.server_context());
+	server.run();
+	std::this_thread::sleep_for(1s);
+	std::filesystem::remove_all("client_9");
+
+	std::promise<std::string> from_callback;
+	std::once_flag once;
+	json_manager* self{};
+	json_manager manager(net_context.client_context(0), [&](auto, std::string) {
+		std::call_once(once, [&] { from_callback.set_value(self->get_account()); });
+	}, "client_9");
+	self = &manager;
+
+	// without an account there is nothing to connect: an error, not an assert
+	CHECK(manager.connect().find("\"error\"") != std::string::npos);
+	CHECK_JSON(manager.create_account(json_create_account("test")), json_create_account_result("test"));
+	// the packet server connect reports through the callback, on the loop thread
+	CHECK_EQUAL_JSON(manager.connect(), "{}");
+	auto f = from_callback.get_future();
+	REQUIRE(f.wait_for(5s) == std::future_status::ready);
+	CHECK_EQUAL_JSON(f.get(), json_get_account_result("test"));
+}
+
 }

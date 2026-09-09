@@ -25,7 +25,8 @@ json::object invitation_to_object(sync::client::request const& req
 	, std::string_view message);
 
 
-inline std::string call(auto Func) {
+/// runs the body and turns an exception into the error JSON
+inline std::string json_call(auto Func) {
 	try {
 		return Func();
 	} catch(securepath::error const& err) {

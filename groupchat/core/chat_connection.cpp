@@ -7,9 +7,11 @@
 #include <spsync/comm/net_connection.hpp>
 
 #include <securepath/event_system/event_handler.hpp>
+#include <securepath/util/future.hpp>
 #include <securepath/network/encryption/error.hpp>
 
 #include <algorithm>
+#include <vector>
 #include <filesystem>
 #include <mutex>
 
@@ -65,6 +67,24 @@ struct chat_connection::impl
 			promise_pending = false;
 			connect_promise.set_value();
 		}
+		run_waiters(error{});
+	}
+
+	/// the actions waiting for the session (when_connected): all of them get this outcome
+	void run_waiters(error const& outcome) {
+		std::vector<std::move_only_function<void(error const&)>> actions;
+		actions.swap(waiters);
+		for(auto& action : actions) {
+			action(outcome);
+		}
+	}
+
+	void when_connected(std::move_only_function<void(error const&)> action) {
+		if(net.is_connected()) {
+			action(error{});
+		} else {
+			waiters.push_back(std::move(action));
+		}
 	}
 
 	/**
@@ -83,6 +103,10 @@ struct chat_connection::impl
 			LOG_INFO("reconnecting to {} in {} ms", sync_endpoints()[next_server], reconnect_delay.count());
 			reconnect_timer = start_timer(reconnect_delay, true);
 			reconnect_delay = std::min(reconnect_delay * 2, max_reconnect_delay);
+		}
+		if(stopped) {
+			// nobody will reconnect: the waiting actions get the error
+			run_waiters(err);
 		}
 	}
 
@@ -107,6 +131,7 @@ struct chat_connection::impl
 			reconnect_timer = {};
 		}
 		net.close();
+		run_waiters(make_error(securepath::errc::invalid_state, "connection stopped"));
 	}
 
 	void on_create_storage(sync::storage_id const& cid, error err) {
@@ -223,6 +248,8 @@ struct chat_connection::impl
 	bool stopped{true};
 	event_system::timer_handle reconnect_timer{};
 	std::chrono::milliseconds reconnect_delay{initial_reconnect_delay};
+	/// actions waiting for the next successful connect (when_connected)
+	std::vector<std::move_only_function<void(error const&)>> waiters;
 
 	std::flat_map<sync::storage_id, std::unique_ptr<channel>> channels;
 	sync::network_connection net;
@@ -247,6 +274,24 @@ void chat_connection::disconnect() {
 
 bool chat_connection::is_connected() const {
 	return impl_->net.is_connected();
+}
+
+void chat_connection::when_connected(std::move_only_function<void(error const&)> action) {
+	impl_->when_connected(std::move(action));
+}
+
+securepath::task<void> chat_connection::connected() {
+	securepath::promise<void> outcome;
+	auto ready = outcome.get_future();
+	// the promise state is shared: the waiter completes it on the loop thread
+	impl_->when_connected([outcome](error const& err) mutable {
+		if(err) {
+			outcome.set_exception(std::make_exception_ptr(err));
+		} else {
+			outcome.set_value();
+		}
+	});
+	co_await std::move(ready);
 }
 
 channel& chat_connection::create_chat(std::string name, users members) {

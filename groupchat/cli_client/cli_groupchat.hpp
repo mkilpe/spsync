@@ -30,12 +30,6 @@ public:
 	/// called when a sync server connection is up / lost (the replica in use is reported)
 	void on_server_connect(server_id);
 	void on_server_disconnect(server_id, error);
-
-	/**
-	 * Run the action once the connection is up: right away when it is, otherwise from the
-	 * connect event (the console thread is the event loop, it must not block waiting)
-	 */
-	void run_when_connected(server_id, std::function<void()>);
 	/// called when chat created or creating failed
 	void on_init(server_chat_id, error);
 	/// called when user changed or failed
@@ -60,7 +54,6 @@ private:
 	gc_cli_config config_;
 	std::flat_map<chat_id, int> channel_map_;
 	std::flat_map<int, chat_id> cid_map_;
-	std::flat_map<server_id, std::vector<std::function<void()>>> when_connected_;
 };
 
 }

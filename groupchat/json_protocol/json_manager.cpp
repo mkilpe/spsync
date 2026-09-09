@@ -18,6 +18,9 @@
 #include <infrastructure/packet_transport/protocol/ports.hpp>
 
 #include <securepath/event_system/event_loop.hpp>
+#include <securepath/util/sync_wait.hpp>
+
+#include <groupchat/core/loop_executor.hpp>
 #include <securepath/log/backend/backend.hpp>
 #include <securepath/log/backend/file_output.hpp>
 #include <securepath/version.hpp>
@@ -160,8 +163,16 @@ public:
 			, {"data", invitation_to_object(req, info, sender_to_object(req.sender.id()), name, message)}}));
 	}
 
+	loop_executor executor() {
+		return loop_executor{*this};
+	}
+
+	securepath::task<std::string> create_chat_task(json::object obj);
+	securepath::task<std::string> join_chat_task(json::object obj);
+
 	void handle_event(std::unique_ptr<event_system::event_base> ev) override {
 		dispatch( *ev
+			, event_dest<run_on_loop>([](std::function<void()> const& work) { loop_executor::run(work); })
 			//, event_dest<events::on_connect>(&impl::on_connect)
 			//, event_dest<events::on_disconnect>(&impl::on_disconnect)
 			, event_dest<events::on_init>(&impl::on_init)
@@ -296,7 +307,7 @@ json_manager::~json_manager()
 }
 
 std::string json_manager::get_account() const {
-	return call([&]{
+	return call([&]() -> std::string {
 		auto acc = impl_->account_info();
 		if(acc) {
 			json::object user{{"name", acc->name}};
@@ -319,7 +330,7 @@ std::string json_manager::get_account() const {
 
 std::string json_manager::create_account(std::string_view const& arg) {
 	LOG_TRACE("json_manager::create_account");
-	return call([&]{
+	return call([&]() -> std::string {
 		auto acc = impl_->account_info();
 		if(acc) {
 			LOG_WARN("account already exists");
@@ -333,7 +344,7 @@ std::string json_manager::create_account(std::string_view const& arg) {
 }
 
 std::string json_manager::get_config(std::string_view const& arg) const {
-	return call([&]{
+	return call([&]() -> std::string {
 		json::array arr = json::parse(arg).as_array();
 		json::object obj;
 		for(auto&& v : arr) {
@@ -347,7 +358,7 @@ std::string json_manager::get_config(std::string_view const& arg) const {
 }
 
 std::string json_manager::set_config(std::string_view const& arg) {
-	return call([&]{
+	return call([&]() -> std::string {
 		json::object obj = json::parse(arg).as_object();
 		for(auto&& v : obj) {
 			impl_->config().set(std::string(v.key()), v.value());
@@ -357,21 +368,24 @@ std::string json_manager::set_config(std::string_view const& arg) {
 }
 
 std::string json_manager::connect() {
-	return call([&]{
+	return call([&]() -> std::string {
+		if(!impl_->account_info()) {
+			throw make_error(errc::invalid_state, "no account");
+		}
 		impl_->connect();
 		return std::string("{}");
 	});
 }
 
 std::string json_manager::disconnect() {
-	return call([&]{
+	return call([&]() -> std::string {
 		impl_->disconnect();
 		return std::string("{}");
 	});
 }
 
 std::string json_manager::get_contacts(std::string_view const&) const {
-	return call([&]{
+	return call([&]() -> std::string {
 		auto contacts = impl_->contacts().enumerate();
 		json::array json_c;
 		for(auto& v : contacts) {
@@ -387,7 +401,7 @@ std::string json_manager::get_contacts(std::string_view const&) const {
 }
 
 std::string json_manager::add_contact(std::string_view const& arg) {
-	return call([&]{
+	return call([&]() -> std::string {
 		json::object obj = json::parse(arg).as_object();
 		auto name = extract<std::string>(obj, "name");
 		auto message = extract_opt<std::string>(obj, "message");
@@ -408,7 +422,7 @@ std::string json_manager::add_contact(std::string_view const& arg) {
 }
 
 std::string json_manager::get_chats(std::string_view const& arg) const {
-	return call([&]{
+	return call([&]() -> std::string {
 		std::optional<message_search> s;
 
 		if(!arg.empty()) {
@@ -418,10 +432,13 @@ std::string json_manager::get_chats(std::string_view const& arg) const {
 			bool message_order = msg_arg ? extract_opt<std::string>(*msg_arg, "order").value_or("descending") == "ascending" : false;
 
 			if(msg_arg) {
+				// the preview is by sender time like the chat order itself: the chain order
+				// (message index) differs from the order the sender meant when early
+				// messages were rebased behind later ones
 				s = message_search{
 						0,
 						static_cast<std::size_t>(msg_count),
-						message_order ? msg_order::index_ascending : msg_order::index_descending};
+						message_order ? msg_order::time_ascending : msg_order::time_descending};
 			}
 		}
 
@@ -446,56 +463,87 @@ std::string json_manager::get_chats(std::string_view const& arg) const {
 	});
 }
 
-std::string json_manager::create_chat(std::string_view const& arg) {
-	return call([&]{
-		json::object obj = json::parse(arg).as_object();
-		std::string name = extract<std::string>(obj, "name");
-		std::string message = extract_opt<std::string>(obj, "message").value_or("");
-		auto conn = impl_->load(impl_->extract_storage_host_port(obj));
-		conn->connect().get(); //t: make this whole thing correctly async
-
-		users member_list;
-		std::optional<json::array> members = extract_opt<json::array>(obj, "members");
-		if(members) {
-			for(auto m : *members) {
-				json::object m_obj = m.as_object();
-				std::string kid = extract<std::string>(m_obj, "user");
-				member_list.add(sync::util::user_access{crypto::public_key_id{kid}
-					, sync::util::access_type::user_management_access});
-			}
+/// the members listed in a create request
+static users members_of(json::object const& obj) {
+	users member_list;
+	std::optional<json::array> members = extract_opt<json::array>(obj, "members");
+	if(members) {
+		for(auto m : *members) {
+			json::object m_obj = m.as_object();
+			std::string kid = extract<std::string>(m_obj, "user");
+			member_list.add(sync::util::user_access{crypto::public_key_id{kid}
+				, sync::util::access_type::user_management_access});
 		}
+	}
+	return member_list;
+}
 
-		auto cid = conn->create_chat(name, member_list).id();
-		return json::serialize(json::object{{"name", name}, {"id", to_hex(cid)}});
-	});
+/// the chat is created over a live session: connect (or share the attempt in flight)
+/// and suspend until it is up, the loop stays free meanwhile
+securepath::task<std::string> json_manager::impl::create_chat_task(json::object obj) {
+	std::string name = extract<std::string>(obj, "name");
+	auto conn = load(extract_storage_host_port(obj));
+	conn->connect();
+	co_await conn->connected();
+	auto cid = conn->create_chat(name, members_of(obj)).id();
+	co_return json::serialize(json::object{{"name", name}, {"id", to_hex(cid)}});
+}
+
+securepath::task<std::string> json_manager::impl::join_chat_task(json::object obj) {
+	chat_id cid = from_hex(extract<std::string>(obj, "id"));
+	std::string name = extract_opt<std::string>(obj, "name").value_or(to_hex(cid));
+	sync::client::storage_info sinfo{cid, extract_key_host_port(obj), extract_storage_host_port(obj), {}, {}};
+	auto conn = load(sinfo.sync_server);
+	conn->connect();
+	co_await conn->connected();
+	conn->join(sinfo, name);
+	co_return json::serialize(json::object{{"id", to_hex(cid)}});
+}
+
+std::string json_manager::create_chat(std::string_view const& arg) {
+	return call_task([&] { return impl_->create_chat_task(json::parse(arg).as_object()); });
 }
 
 std::string json_manager::join_chat(std::string_view const& arg) {
-	return call([&]{
-		json::object obj = json::parse(arg).as_object();
-		chat_id cid = from_hex(extract<std::string>(obj, "id"));
-		auto opt_name = extract_opt<std::string>(obj, "name");
-		if(!opt_name) {
-			opt_name = to_hex(cid);
+	return call_task([&] { return impl_->join_chat_task(json::parse(arg).as_object()); });
+}
+
+std::string json_manager::call(std::function<std::string()> body) const {
+	if(loop_->in_loop_thread()) {
+		// from the event callback: already on the loop
+		return json_call(body);
+	}
+	securepath::promise<std::string> result;
+	auto ready = result.get_future();
+	impl_->executor().execute([result, body]() mutable { result.set_value(json_call(body)); });
+	return ready.get();
+}
+
+std::string json_manager::call_task(std::function<securepath::task<std::string>()> make) const {
+	securepath::promise<std::string> result;
+	auto ready = result.get_future();
+	auto run = [result, make]() mutable {
+		try {
+			securepath::start(make(), result);
+		} catch(...) {
+			result.set_exception(std::current_exception());
 		}
-
-		sync::client::storage_info sinfo{
-			cid,
-			impl_->extract_key_host_port(obj),
-			impl_->extract_storage_host_port(obj),
-			{},
-			{}};
-
-		auto conn = impl_->load(sinfo.sync_server);
-		conn->connect().get(); //t: make this whole thing correctly async
-
-		conn->join(sinfo, *opt_name);
-		return json::serialize(json::object{{"id", to_hex(cid)}});
-	});
+	};
+	if(loop_->in_loop_thread()) {
+		// from the event callback: the body may only complete at once, the loop cannot be
+		// waited for from itself
+		run();
+		if(!ready.await_ready()) {
+			return error_to_json(make_error(errc::invalid_state, "cannot wait for the network from the event callback"));
+		}
+	} else {
+		impl_->executor().execute(std::move(run));
+	}
+	return json_call([&] { return ready.get(); });
 }
 
 std::string json_manager::get_chat_members(std::string_view const& arg) const {
-	return call([&]{
+	return call([&]() -> std::string {
 		json::object obj = json::parse(arg).as_object();
 		chat_id cid = from_hex(extract<std::string>(obj, "id"));
 
@@ -549,7 +597,7 @@ static users parse_users(json::object const& obj) {
 }
 
 std::string json_manager::change_chat_member(std::string_view const& arg) {
-	return call([&]{
+	return call([&]() -> std::string {
 		json::object obj = json::parse(arg).as_object();
 		chat_id cid = from_hex(extract<std::string>(obj, "id"));
 
@@ -575,7 +623,7 @@ std::string json_manager::change_chat_member(std::string_view const& arg) {
 
 std::string json_manager::get_messages(std::string_view const& arg) const {
 	LOG_TRACE("get_messages: {}", arg);
-	return call([&]{
+	return call([&]() -> std::string {
 		json::object obj = json::parse(arg).as_object();
 		chat_id cid = from_hex(extract<std::string>(obj, "id"));
 
@@ -603,7 +651,7 @@ std::string json_manager::get_messages(std::string_view const& arg) const {
 }
 
 std::string json_manager::send_message(std::string_view const& arg) {
-	return call([&]{
+	return call([&]() -> std::string {
 		json::object obj = json::parse(arg).as_object();
 		chat_id cid = from_hex(extract<std::string>(obj, "id"));
 		std::string message = extract<std::string>(obj, "message");
@@ -625,7 +673,7 @@ std::string json_manager::send_message(std::string_view const& arg) {
 //1) sp-gc:{"type":"user","data":{"id":"BF42982C6801562694A3B315009E8777FF751DD321DAA2753AD41895865A55D9","name":"my test name","server":{"host":"gc.securepath.fi"}}}
 //2) sp-gc:{"type":"join","data":{"id":"30202290BB417247B4D91F7E72544403","server":{"host":"gc.securepath.fi"}}}
 std::string json_manager::handle_qr_code(std::string_view const& arg) {
-	return call([&]{
+	return call([&]() -> std::string {
 		if(!arg.starts_with("sp-gc:")) {
 			LOG_WARN("qr code data does not start with 'sp-gc:' [data={}]", arg);
 			return error_to_json(make_error(errc::invalid_data, "invalid qr code data"));
@@ -650,7 +698,7 @@ std::string json_manager::handle_qr_code(std::string_view const& arg) {
 }
 
 std::string json_manager::get_version() const {
-	return call([&]{
+	return call([&]() -> std::string {
 		json::object ver_obj{
 			{"groupchat", securepath::groupchat::version().to_string()},
 			{"spsync", sync::version().to_string()},
@@ -671,7 +719,7 @@ std::string json_manager::get_version() const {
 }
 
 std::string json_manager::get_requests(std::string_view const&) const {
-	return call([&]{
+	return call([&]() -> std::string {
 		json::array arr;
 		auto list = impl_->requests().enumerate();
 		for(auto&& v : list) {
@@ -688,7 +736,7 @@ std::string json_manager::get_requests(std::string_view const&) const {
 }
 
 std::string json_manager::request_action(std::string_view const& arg) {
-	return call([&]{
+	return call([&]() -> std::string {
 		json::object obj = json::parse(arg).as_object();
 		std::string action = extract<std::string>(obj, "action");
 		auto id = extract<sync::client::request_id>(obj, "requestid");
