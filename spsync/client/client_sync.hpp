@@ -52,6 +52,8 @@ protected:
 
 	virtual void on_data_change(record_handle, std::deque<single_data_change>) = 0;
 	virtual void on_user_change(record_handle, user_change) = 0;
+	/// the server rejected a pending record for good (engine_output::on_record_rejected)
+	virtual void on_record_rejected(record_handle, error) {}
 
 private:
 	class impl;

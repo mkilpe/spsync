@@ -92,6 +92,11 @@ msg_change message_storage::insert(message_id const& id, msg_data const& md, msg
 	return msg_change{index, old_index, id, state};
 }
 
+bool message_storage::remove_pending(message_id const& id) {
+	database::transaction t{*db_};
+	return update_pending(id) != 0;
+}
+
 std::int64_t message_storage::update_pending(message_id const& id) {
 	std::int64_t pindex = 0;
 

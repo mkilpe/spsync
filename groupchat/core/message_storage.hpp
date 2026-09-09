@@ -57,6 +57,9 @@ public:
 
 	/// get latest in sync sequence, this is used on start-up to make sure we are in sync with records
 	sync::sequence_number latest_sequence() const;
+
+	/// drop a pending message (the record was rejected for good); false when not pending
+	bool remove_pending(message_id const& id);
 private:
 	std::int64_t update_pending(message_id const& id);
 	std::deque<message> get_by_time(message_search) const;

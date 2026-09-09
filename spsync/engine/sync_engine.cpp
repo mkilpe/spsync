@@ -21,6 +21,13 @@
 
 namespace securepath::sync {
 
+/// a commit rejection that no later state can lift: the record itself is not acceptable
+static bool permanent_commit_rejection(error const& err) {
+	return err.code() == make_error_code(protocol::errc::record_too_big)
+		|| err.code() == make_error_code(protocol::errc::invalid_record)
+		|| err.code() == make_error_code(protocol::errc::conflicting_record);
+}
+
 class sync_engine::impl {
 public:
 	impl(comm_input& comm, crypto_context& cc, sync_engine_config config)
@@ -143,6 +150,27 @@ public:
 			resolve_rejected_duplicates();
 			try_commit_pending();
 		}
+	}
+
+	/// a rejection no retry can lift: the record is dropped and the application told
+	void drop_rejected(record_tag const& tag, error const& err) {
+		auto h = records.find_tag(tag);
+		if(h && h->state() == record_state::pending_commit) {
+			LWARN("dropping pending record the server rejected for good [tag = {}, err = {}]", to_hex(tag), err);
+			h->set_state(record_state::invalid);
+			if(output) {
+				output->emit<engine_events::on_record_rejected>(h, err);
+			}
+		}
+		try_commit_pending();
+	}
+
+	/// a rejection that may pass later (replica syncing, key not registered yet, network):
+	/// the record stays pending and is not resent unchanged until something changes
+	void hold_rejected(record_tag const& tag, error const& err) {
+		LINFO("holding pending record after a transient rejection [tag = {}, err = {}]", to_hex(tag), err);
+		mark_rejected(tag, false);
+		try_commit_pending();
 	}
 
 	/// out of sync with nothing to fetch: a rebase (try_commit_pending) is the only way on
@@ -1047,6 +1075,10 @@ void sync_engine::on_commit_response(request_handle req_handle, commit_response 
 			impl_->on_out_of_sync_rejected(committed_tag);
 		} else if(check_result_error(res.data, protocol::errc::record_already_committed)) {
 			impl_->on_duplicate_rejected(committed_tag);
+		} else if(permanent_commit_rejection(res.data.get_error())) {
+			impl_->drop_rejected(committed_tag, res.data.get_error());
+		} else {
+			impl_->hold_rejected(committed_tag, res.data.get_error());
 		}
 	}
 }

@@ -81,6 +81,13 @@ void persist_modes(database::connection& db, storage_modes const& m, std::string
  * persisted one is a storage_mode_mismatch; limits outside their ranges are
  * invalid_storage_modes.
  */
+/// a rejection that no later state can lift: the record itself is not acceptable here
+bool permanent_rejection(error const& err) {
+	return err.code() == make_error_code(protocol::errc::invalid_record)
+		|| err.code() == make_error_code(protocol::errc::record_too_big)
+		|| err.code() == make_error_code(protocol::errc::conflicting_record);
+}
+
 storage_modes load_or_create_modes(database::connection& db, std::optional<storage_modes> const& requested,
 	storage_limits const& defaults, std::string const& log_id)
 {
@@ -276,6 +283,16 @@ error storage::apply_foreign(block_envelope const& env) {
 	if(!res) {
 		if(check_result_error(res, protocol::errc::record_already_committed)) {
 			// same operation under another tag was adopted already (op id dedup)
+			heads_->advance(head);
+			return {};
+		}
+		if(permanent_rejection(res.get_error())) {
+			// the origin accepted what our rules refuse (a validity disagreement or a
+			// misbehaving origin): retrying can never change the verdict, so the record
+			// is skipped and the origin head moves past it - anti-entropy goes on and the
+			// storage does not stay "syncing" for good. Logged once, here.
+			LOG_WARN("foreign record rejected for good, skipped [origin={}, origin seq={}, tag={}, err={}] (rsid={})"
+				, env.origin(), block.sequence(), to_hex(block.tag()), res.get_error(), to_hex(id_));
 			heads_->advance(head);
 			return {};
 		}

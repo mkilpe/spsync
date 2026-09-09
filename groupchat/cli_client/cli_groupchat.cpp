@@ -120,6 +120,11 @@ void cli_groupchat::on_message(server_chat_id id, msg_data md, msg_change) {
 	win_.add_message(*c_opt, s);
 }
 
+void cli_groupchat::on_message_failed(server_chat_id id, message_id mid, error err) {
+	auto s = print("message % was refused by the server: %", mid, err);
+	win_.add_info(notice_channel(id.cid), to_wstring(s));
+}
+
 void cli_groupchat::on_contacting(sync::client::request const& req
 		, std::string const& name
 		, std::string const& message)
@@ -138,7 +143,8 @@ void cli_groupchat::handle_event(std::unique_ptr<event_system::event_base> ev) {
 			, event_dest<events::on_init>(&cli_groupchat::on_init)
 			, event_dest<events::on_change_user>(&cli_groupchat::on_change_user)
 			, event_dest<events::on_join>(&cli_groupchat::on_join)
-			, event_dest<events::on_message>(&cli_groupchat::on_message) );
+			, event_dest<events::on_message>(&cli_groupchat::on_message)
+			, event_dest<events::on_message_failed>(&cli_groupchat::on_message_failed) );
 }
 
 int cli_groupchat::notice_channel(chat_id const& cid) const {

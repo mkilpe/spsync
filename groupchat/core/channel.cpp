@@ -98,6 +98,21 @@ void channel::on_data_change(sync::record_handle rec, std::deque<sync::single_da
 	}
 }
 
+void channel::on_record_rejected(sync::record_handle rec, error err) {
+	// the messages of a record the server refused for good stay pending forever otherwise
+	std::deque<sync::single_data_change> changes;
+	if(extract_single_data_changes(crypto_context().enc_keys(), rec, changes)) {
+		LOG_WARN("rejected record could not be read [tag={}, err={}]", to_hex(rec->tag()), err);
+	}
+	std::unique_lock l{mutex_};
+	for(auto const& c : changes) {
+		if(messages_.remove_pending(c.data.id)) {
+			LOG_WARN("message refused by the server [id={}, err={}]", c.data.id, err);
+			ccontext_.callback.emit<events::on_message_failed>(server_chat_id{ccontext_.sid, chat_id_}, c.data.id, err);
+		}
+	}
+}
+
 void channel::on_user_change(sync::record_handle rec, sync::user_change usc) {
 	if(rec->block_id().sequence == sync::sequence_number{1}) {
 		if(usc.signer) {

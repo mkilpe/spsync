@@ -3,6 +3,7 @@
 
 #include <spsync/client/record_util.hpp>
 #include <spsync/engine/record_creator.hpp>
+#include <spsync/protocol/error.hpp>
 #include <spsync/engine/record_verifier.hpp>
 
 #include <spsync/core/records/data_change_record.hpp>
@@ -19,6 +20,21 @@ using namespace securepath::sync::util;
 namespace {
 
 /// engine output observer counting object conflicts (events arrive on the loop thread)
+struct rejection_observer : engine_output {
+	using engine_output::engine_output;
+	~rejection_observer() { stop_handler(); }
+
+	void on_record_rejected(record_handle rec, error err) override {
+		last = rec;
+		last_error = err;
+		++rejections;
+	}
+
+	std::atomic<int> rejections{0};
+	record_handle last;
+	error last_error;
+};
+
 struct conflict_observer : engine_output {
 	using engine_output::engine_output;
 	~conflict_observer() { stop_handler(); }
@@ -183,6 +199,35 @@ TEST_CASE("sync new records after disconnect/connect", "[unit]") {
 	CHECK(context.compare_record_storages(sequence_number{2}));
 }
 
+
+// (10d) a pending record the server refuses for good (its limits were not known in
+// advance) is dropped and reported once; a transient rejection keeps it pending
+TEST_CASE("engine sync drops a permanently rejected record", "[unit]") {
+	chain_sync_config config{sync_mode::allow_all};
+	config.max_record_size = 4096;   // the server enforces, the client was never told
+	test::test_sync_context context(config);
+	context.add_client(true, 1);
+	context.create_initial_record();
+	while(context.handle_events()) {}
+
+	rejection_observer observer{context.client(0).single_thread_event_loop};
+	context.client(0).engine.set_output(&observer);
+
+	metadata big;
+	big.insert("blob", octet_vector(8000, 1));
+	auto h = context.client(0).engine.sync_object_change(util::create_object_id(), big);
+	while(context.handle_events()) {}
+	CHECK(h->state() == record_state::invalid);
+	CHECK(observer.rejections == 1);
+	CHECK(observer.last_error.code() == make_error_code(protocol::errc::record_too_big));
+	CHECK(!context.client(0).io.records().find_first_pending_commit());
+
+	// a record that fits goes through as before
+	context.client(0).engine.sync_object_change(util::create_object_id(), metadata{});
+	while(context.handle_events()) {}
+	CHECK(context.server.sync.current_sequence_number() == sequence_number{2});
+	context.client(0).engine.set_output(nullptr);
+}
 
 // (10c, RDS 8) the engine refuses a change that exceeds the storage's record limit before
 // committing, once the server reported the limits with the sequence answer

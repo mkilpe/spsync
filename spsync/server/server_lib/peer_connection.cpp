@@ -3,6 +3,7 @@
 
 #include <spsync/protocol/error.hpp>
 
+#include <securepath/crypto/error.hpp>
 #include <securepath/log/log.hpp>
 
 #include <map>
@@ -257,6 +258,10 @@ void peer_connection::apply_envelopes(std::shared_ptr<storage> const& handle,
 				if(auto signer = env.block().auth().signature_issuer()) {
 					request_signer_key(*signer);
 				}
+			} else if(err.code() == make_error_code(crypto::errc::no_such_key)) {
+				// an origin we never met (a transitive one while bootstrapping): the peer
+				// serving its records verified them, so it holds the key
+				request_signer_key(env.origin());
 			}
 		}
 	}

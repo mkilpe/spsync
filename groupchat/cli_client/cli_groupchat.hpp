@@ -38,6 +38,8 @@ public:
 	void on_join(server_chat_id, sync::users change, error);
 	/// called when chat message received
 	void on_message(server_chat_id, msg_data, msg_change);
+	/// called when the server refused a pending message for good
+	void on_message_failed(server_chat_id, message_id, error);
 
 	void on_contacting(sync::client::request const& req
 		, std::string const& name

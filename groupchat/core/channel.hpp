@@ -54,6 +54,7 @@ private:
 
 	void on_data_change(sync::record_handle, std::deque<sync::single_data_change>) override;
 	void on_user_change(sync::record_handle, sync::user_change) override;
+	void on_record_rejected(sync::record_handle, error) override;
 
 private:
 	mutable std::mutex mutex_;

@@ -76,6 +76,10 @@ struct client_sync::impl : engine_output {
 	}
 
 
+	void on_record_rejected(record_handle rec, error err) override {
+		parent->on_record_rejected(rec, err);
+	}
+
 	void on_object_data_changed(record_handle rec) override {
 		assert(engine);
 

@@ -73,6 +73,14 @@ struct engine_output : event_system::event_handler {
 	 */
 	virtual void on_object_conflict(record_handle local, record_handle remote) {}
 
+	/**
+	 * Called when the server rejected a pending record for a reason no retry can lift
+	 * (too big, invalid): the record was set invalid and will not be committed. The
+	 * application decides what to tell the user. Transient rejections (a replica still
+	 * syncing, an unknown signer) are not reported: the engine retries them itself.
+	 */
+	virtual void on_record_rejected(record_handle, error) {}
+
 	//users changed
 	//conflicting user change ??
 
@@ -93,6 +101,9 @@ struct on_object_conflict {
 };
 struct on_fork_suspected {
 	typedef void type(record_handle, chain_block);
+};
+struct on_record_rejected {
+	typedef void type(record_handle, error);
 };
 }
 

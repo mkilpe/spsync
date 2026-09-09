@@ -33,4 +33,9 @@ struct on_message {
 	typedef void type(server_chat_id, msg_data, msg_change);
 };
 
+/// a pending message the server refused for good; it was removed from the pending list
+struct on_message_failed {
+	typedef void type(server_chat_id, message_id, error);
+};
+
 }
