@@ -17,7 +17,12 @@ namespace securepath::sync {
  * The functions returning record_handle will cache the record_handle, this means that
  *  subsequent calls will return the same handle
  *
- * This interface is thread safe
+ * Individual calls are thread safe (the handle cache and the cached fields of a handle
+ * are locked, the database serialises each statement). Compound operations are not:
+ * create, set_record, truncate_from and truncate_prefix run several statements as a
+ * savepoint on the shared connection, and another thread using the storage meanwhile
+ * interleaves with (and is rolled back with) them. The caller serialises those, in
+ * practice the engine's mutex on the loop thread.
  */
 class record_storage {
 public:
