@@ -592,4 +592,31 @@ TEST_CASE("s2s own origin pull across many foreign records", "[unit]") {
 	std::filesystem::remove_all("test-s2s-ob");
 }
 
+
+// the timer and link handlers of a storage server hold it weakly: a server that is
+// closed and destroyed while its anti-entropy timer fires continuously and its link to
+// an unreachable peer keeps reconnecting must go away cleanly
+TEST_CASE("s2s server lifetime under running timers", "[unit]") {
+	std::filesystem::remove_all("test-s2s-la");
+	test::test_context tctx;
+	tctx.add_client(2);
+	network::enable_pk_handshake(tctx.client_context(0));
+	auto const key_b = tctx.key_id(1);
+	protocol::storage_id const sid = securepath::test::random_octet_vector(8);
+	storage_modes const modes{sync_mode::allow_all, auth_mode::sign_records, replication_mode::weak};
+
+	for(int i = 0; i != 20; ++i) {
+		// nobody listens on the peer port: the link dials, fails and schedules reconnects
+		auto params = s2s_test_params("test-s2s-la", 42820, 42830, {peer_config{"127.0.0.1", 42831, key_b}});
+		params.anti_entropy_interval = std::chrono::seconds{0};
+		auto server = std::make_unique<storage_server>(tctx.client_context(0), params);
+		REQUIRE(server->open_storage(sid, modes));
+		server->start();
+		std::this_thread::sleep_for(std::chrono::milliseconds{i % 5});
+		server->close();
+		server.reset();
+	}
+	std::filesystem::remove_all("test-s2s-la");
+}
+
 }

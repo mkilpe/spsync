@@ -397,11 +397,20 @@ public:
 		s2s_->start(params_.create_s2s_endpoint(), params_.timeout);
 		LOG_INFO("s2s listening on port {}", s2s_->local_endpoint().port());
 		for(auto const& peer : identity_.peers) {
-			links_.push_back(std::make_unique<peer_link>(context_.io_context(), peer));
-			connect_link(*links_.back());
+			links_.push_back(std::make_shared<peer_link>(context_.io_context(), peer));
+			connect_link(links_.back());
 		}
 		ae_timer_.emplace(context_.io_context());
 		schedule_anti_entropy();
+	}
+
+	/**
+	 * The timer and link handlers run on io threads and may already be dequeued when
+	 * close_s2s cancels them: they capture the impl and the link weakly and do nothing
+	 * once either is gone (the storage_server destructor drops the impl right after close)
+	 */
+	std::weak_ptr<impl> weak_self() {
+		return std::static_pointer_cast<impl>(shared_from_this());
 	}
 
 	/// the periodic heads announcement (plan 4.4); receivers pull what they are missing
@@ -411,9 +420,10 @@ public:
 			return;
 		}
 		ae_timer_->expires_after(params_.anti_entropy_interval);
-		ae_timer_->async_wait([this](std::error_code const& ec) {
-			if(!ec) {
-				run_anti_entropy();
+		ae_timer_->async_wait([weak = weak_self()](std::error_code const& ec) {
+			auto self = weak.lock();
+			if(self && !ec) {
+				self->run_anti_entropy();
 			}
 		});
 	}
@@ -426,38 +436,48 @@ public:
 		schedule_anti_entropy();
 	}
 
-	void connect_link(peer_link& link) {
+	void connect_link(std::shared_ptr<peer_link> const& link) {
 		auto conn = std::make_shared<peer_connection>(context_, *this, handshake_data_);
-		conn->set_disconnect_handler([this, &link](securepath::error const&) {
-			schedule_reconnect(link);
+		conn->set_disconnect_handler([weak = weak_self(), wlink = std::weak_ptr<peer_link>(link)](securepath::error const&) {
+			auto self = weak.lock();
+			auto l = wlink.lock();
+			if(self && l) {
+				self->schedule_reconnect(l);
+			}
 		});
-		conn->set_connected_handler([this, &link] {
+		conn->set_connected_handler([weak = weak_self(), wlink = std::weak_ptr<peer_link>(link)] {
 			// a link that came up starts over with the short backoff when it drops
-			std::unique_lock lock{mutex_};
-			link.backoff = std::chrono::seconds{1};
+			auto self = weak.lock();
+			auto l = wlink.lock();
+			if(self && l) {
+				std::unique_lock lock{self->mutex_};
+				l->backoff = std::chrono::seconds{1};
+			}
 		});
 		{
 			std::unique_lock lock{mutex_};
 			if(closing_) {
 				return;
 			}
-			link.conn = conn;
+			link->conn = conn;
 		}
-		conn->connect_peer(link.peer, params_.timeout);
+		conn->connect_peer(link->peer, params_.timeout);
 	}
 
-	/// exponential backoff capped at one minute; the links live as long as the impl
-	void schedule_reconnect(peer_link& link) {
+	/// exponential backoff capped at one minute
+	void schedule_reconnect(std::shared_ptr<peer_link> const& link) {
 		std::unique_lock lock{mutex_};
 		if(closing_) {
 			return;
 		}
-		LOG_TRACE("reconnecting to peer {} in {}s", link.peer, link.backoff.count());
-		link.timer.expires_after(link.backoff);
-		link.backoff = std::min(link.backoff * 2, std::chrono::seconds{60});
-		link.timer.async_wait([this, &link](std::error_code const& ec) {
-			if(!ec) {
-				connect_link(link);
+		LOG_TRACE("reconnecting to peer {} in {}s", link->peer, link->backoff.count());
+		link->timer.expires_after(link->backoff);
+		link->backoff = std::min(link->backoff * 2, std::chrono::seconds{60});
+		link->timer.async_wait([weak = weak_self(), wlink = std::weak_ptr<peer_link>(link)](std::error_code const& ec) {
+			auto self = weak.lock();
+			auto l = wlink.lock();
+			if(self && l && !ec) {
+				self->connect_link(l);
 			}
 		});
 	}
@@ -468,7 +488,7 @@ public:
 	 * closing_ and backs off). The links stay alive until every close returned.
 	 */
 	void close_s2s() {
-		std::vector<std::unique_ptr<peer_link>> links;
+		std::vector<std::shared_ptr<peer_link>> links;
 		std::shared_ptr<s2s_listener> listener;
 		{
 			std::unique_lock lock{mutex_};
@@ -521,7 +541,8 @@ public:
 
 	// -- the s2s side (plan 4.1) --
 	std::shared_ptr<s2s_listener> s2s_;
-	std::vector<std::unique_ptr<peer_link>> links_;
+	/// shared so the timer and connection handlers can hold them weakly
+	std::vector<std::shared_ptr<peer_link>> links_;
 	std::optional<asio::steady_timer> ae_timer_;
 	bool closing_{};
 };
