@@ -6,36 +6,48 @@
 
 namespace securepath::sync::util {
 
-config::config(database::connection_ptr db, std::string_view tablename)
-: db_(db)
+config::config(event_system::event_handler* events)
+: events_(events)
+{
+}
+
+config::config(database::connection_ptr db, std::string_view tablename, event_system::event_handler* events)
+: events_(events)
+, db_(db)
 , tablename_(tablename)
 {
-	if(!db_->has_table(tablename_)) {
-		std::string prepare_str =
-			"CREATE TABLE " + tablename_ + "("
-				"key STRING PRIMARY KEY, "
-				"value STRING);";
-		db_->prepare(prepare_str).execute();
-	}
+	create_table();
 	load();
 }
 
 void config::set_database(database::connection_ptr db, std::string_view tablename) {
-	std::unique_lock l{mutex_};
-	db_ = db;
-	tablename_ = tablename;
-
-	if(!db_->has_table(tablename_)) {
-		std::string prepare_str =
-			"CREATE TABLE " + tablename_ + "("
-				"key STRING PRIMARY KEY, "
-				"value STRING);";
-		db_->prepare(prepare_str).execute();
+	std::vector<std::string> changed;
+	{
+		std::unique_lock l{mutex_};
+		db_ = db;
+		tablename_ = tablename;
+		create_table();
+		update_db("", root_, changed);
+		root_ = {};
+		load();
 	}
+	notify(changed);
+}
 
-	update_db("", root_);
-	root_ = {};
-	load();
+void config::create_table() {
+	if(!db_->has_table(tablename_)) {
+		// TEXT: SQLite gives an unknown type name like STRING numeric affinity, which would
+		// store a serialised number as a number
+		db_->prepare("CREATE TABLE " + tablename_ + "(key TEXT PRIMARY KEY, value TEXT);").execute();
+	}
+}
+
+void config::notify(std::vector<std::string> const& changed) const {
+	if(events_) {
+		for(auto const& key : changed) {
+			events_->emit<events::on_config_changed>(key);
+		}
+	}
 }
 
 void config::load() {
@@ -53,7 +65,7 @@ void config::load() {
 	}
 }
 
-void config::update_db(std::string_view key, json::value const& v) {
+void config::update_db(std::string_view key, json::value const& v, std::vector<std::string>& changed) {
 	// recursively write objects to database as single non-object entities
 	if(v.is_object()) {
 		for(auto value : v.as_object()) {
@@ -62,19 +74,18 @@ void config::update_db(std::string_view key, json::value const& v) {
 				next_key += ".";
 			}
 			next_key += value.key();
-			update_db(next_key, value.value());
+			update_db(next_key, value.value(), changed);
 		}
 	} else {
 		auto q = db_->prepare("INSERT OR REPLACE INTO " + tablename_ + " VALUES(:key,:value);");
 		q.bind(":key", key);
 		q.bind(":value", json::serialize(v));
 		q.execute();
-
-		events_.emit<events::on_config_changed>(key);
+		changed.emplace_back(key);
 	}
 }
 
-void config::remove_db(std::string_view key, json::value const& v) {
+void config::remove_db(std::string_view key, json::value const& v, std::vector<std::string>& changed) {
 	if(v.is_object()) {
 		for(auto value : v.as_object()) {
 			std::string next_key{key};
@@ -82,14 +93,13 @@ void config::remove_db(std::string_view key, json::value const& v) {
 				next_key += ".";
 			}
 			next_key += value.key();
-			remove_db(next_key, value.value());
+			remove_db(next_key, value.value(), changed);
 		}
 	} else {
 		auto q = db_->prepare("DELETE FROM " + tablename_ + " WHERE key = :key");
 		q.bind(":key", key);
 		q.execute();
-
-		events_.emit<events::on_config_changed>(key);
+		changed.emplace_back(key);
 	}
 }
 
@@ -120,11 +130,15 @@ void config::set_impl(std::string_view key, json::value const& v, bool overwrite
 
 void config::set(std::string_view option, json::value const& v, bool only_leaf) {
 	LOG_TRACE("config set [{} = {}]", option, json::serialize(v));
-	std::unique_lock l{mutex_};
-	set_impl(option, v, !only_leaf);
-	if(db_) {
-		update_db(option, v);
+	std::vector<std::string> changed;
+	{
+		std::unique_lock l{mutex_};
+		set_impl(option, v, !only_leaf);
+		if(db_) {
+			update_db(option, v, changed);
+		}
 	}
+	notify(changed);
 }
 
 std::optional<json::value> config::find(std::string_view option) const {
@@ -162,30 +176,31 @@ json::value config::get_default(std::string_view option, json::value const& def)
 }
 
 void config::remove(std::string_view option) {
-	std::unique_lock l{mutex_};
-	json::object* cur = &root_;
-	auto key_parts = split_view(option, ".");
-	if(!key_parts.empty()) {
-		for(std::size_t i = 0; i != key_parts.size()-1; ++i) {
+	std::vector<std::string> changed;
+	{
+		std::unique_lock l{mutex_};
+		json::object* cur = &root_;
+		auto key_parts = split_view(option, ".");
+		bool found = !key_parts.empty();
+		for(std::size_t i = 0; found && i != key_parts.size()-1; ++i) {
 			auto it = cur->find(key_parts[i]);
-			if(it == cur->end() || !it->value().is_object()) {
-				return;
+			found = it != cur->end() && it->value().is_object();
+			if(found) {
+				cur = &it->value().as_object();
 			}
-			cur = &it->value().as_object();
 		}
-		auto it = cur->find(key_parts.back());
-		if(it != cur->end()) {
-			json::value v = it->value();
-			cur->erase(it);
-			if(db_) {
-				remove_db(option, v);
+		if(found) {
+			auto it = cur->find(key_parts.back());
+			if(it != cur->end()) {
+				json::value v = it->value();
+				cur->erase(it);
+				if(db_) {
+					remove_db(option, v, changed);
+				}
 			}
 		}
 	}
-}
-
-event_system::broadcast_event_handler& config::change_notification() {
-	return events_;
+	notify(changed);
 }
 
 }

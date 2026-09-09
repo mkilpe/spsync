@@ -1,27 +1,37 @@
 #include <securepath/test_frame/test_suite.hpp>
 #include <securepath/test_frame/test_serialisation.hpp>
 
-#include <securepath/event_system/asio_broadcast_observer.hpp>
+#include <securepath/event_system/event_handler_helpers.hpp>
+#include <securepath/event_system/event_loop.hpp>
 
-#include <spsync/test/test_context.hpp>
 #include <spsync/test/util.hpp>
 #include <spsync/util/config.hpp>
 
 namespace securepath::sync::util {
+namespace {
+
+/// counts the change events delivered through the loop
+struct change_counter : event_system::event_handler {
+	using event_handler::event_handler;
+	~change_counter() { stop_handler(); }
+
+	void handle_event(std::unique_ptr<event_system::event_base> ev) override {
+		dispatch(*ev, event_dest<events::on_config_changed>([this](std::string const& key) {
+				LOG_TRACE("event: {}", key);
+				++counter;
+			}));
+	}
+
+	std::atomic<int> counter{0};
+};
+
+}
 
 TEST_CASE("config test", "[unit]") {
-	test::test_context context;
-	context.add_client(1);
-	config cfg(test::create_test_database("config_test.db"), "config");
-
-	event_system::asio_broadcast_observer o(cfg.change_notification(), context.client_context(0).io_context());
-	std::atomic<int> counter(0);
-
-	o.connect<events::on_config_changed>( [&](auto s)
-		{
-			LOG_TRACE("event: {}", s);
-			++counter;
-		} );
+	event_system::single_thread_event_loop loop;
+	change_counter o{loop};
+	auto& counter = o.counter;
+	config cfg(test::create_test_database("config_test.db"), "config", &o);
 
 	CHECK(!cfg.find(""));
 	CHECK(!cfg.find("test"));

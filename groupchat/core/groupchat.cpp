@@ -316,6 +316,7 @@ bool groupchat::check_account_exists(groupchat_config const& conf) const {
 groupchat::groupchat(event_system::event_handler& callback, groupchat_config conf)
 : gc_config_(std::move(conf))
 , callback_(callback)
+, config_(&callback_)
 , impl_(check_account_exists(gc_config_) ? std::make_unique<impl>(callback_, nullptr, gc_config_, config_) : nullptr)
 {
 	if(impl_) {
@@ -327,6 +328,7 @@ groupchat::groupchat(event_system::event_handler& callback, network::context& co
 : gc_config_(std::move(conf))
 , callback_(callback)
 , context_(&context)
+, config_(&callback_)
 , impl_(check_account_exists(gc_config_) ? std::make_unique<impl>(callback_, &context, gc_config_, config_) : nullptr)
 {
 	if(impl_) {
