@@ -5,6 +5,7 @@
 #include <securepath/database/util.hpp>
 #include <securepath/serialisation/util.hpp>
 #include <securepath/util/conversions.hpp>
+#include <spsync/core/data/data_state_table.hpp>
 #include <spsync/core/records/data_change_record.hpp>
 
 #include <spsync/core/records/user_change_record.hpp>
@@ -30,9 +31,44 @@ void create_object_records(database::connection_ptr db, octet_vector const& tag,
 		q.bind(":tag", tag);
 		q.bind(":prev_tag", obj.data.previous_oid_record_tag);
 		q.bind(":oid", obj.data.id.value());
-		q.bind(":data_ref");
+		if(obj.data.data) {
+			// every record naming the data shares its row (reference counting by data_id, RD9)
+			q.bind(":data_ref", static_cast<std::int64_t>(data_state_table{db}.ensure(*obj.data.data)));
+		} else {
+			q.bind(":data_ref");
+		}
 		q.execute();
 	}
+}
+
+char const* const create_object_table =
+	"CREATE TABLE record_objects("
+	"key INTEGER PRIMARY KEY,"
+	"tag BLOB,"
+	"prev_tag BLOB,"
+	"oid BLOB,"
+	"data_ref INTEGER);";
+
+/// true for a table from before RDS 2: data_ref was unique there, now records share data rows
+bool has_unique_data_ref(database::connection& db) {
+	auto q = db.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'record_objects';");
+	auto res = q.execute();
+	return res && res.value<std::string>(0).value_or("").find("data_ref INTEGER UNIQUE") != std::string::npos;
+}
+
+void create_or_upgrade_object_table(database::connection& db) {
+	if(!db.has_table("record_objects")) {
+		db.prepare(create_object_table).execute();
+	} else if(has_unique_data_ref(db)) {
+		// sqlite cannot drop a constraint: rebuild the table
+		database::transaction tact(db);
+		db.prepare("ALTER TABLE record_objects RENAME TO record_objects_old;").execute();
+		db.prepare(create_object_table).execute();
+		db.prepare("INSERT INTO record_objects(key, tag, prev_tag, oid, data_ref)"
+			" SELECT key, tag, prev_tag, oid, data_ref FROM record_objects_old;").execute();
+		db.prepare("DROP TABLE record_objects_old;").execute();
+	}
+	db.prepare("CREATE INDEX IF NOT EXISTS record_objects_data_ref ON record_objects(data_ref);").execute();
 }
 
 class database_record : public record_interface {
@@ -244,7 +280,8 @@ private:
 		tag: the record tag this row belongs to
 		prev_tag: the record tag for previous change to the same object
 		oid: object id as blob
-		data_ref: unique id to record data database table as integer
+		data_ref: row of the record data table (data_state_table) when the change has data,
+			shared by every change naming the same data_id
 */
 
 struct record_storage::impl {
@@ -268,14 +305,7 @@ struct record_storage::impl {
 				"unique_seq_selector INTEGER DEFAULT NULL,"
 				"UNIQUE(seq, unique_seq_selector));").execute();
 		}
-		if(!db->has_table("record_objects")) {
-			db->prepare("CREATE TABLE record_objects("
-				"key INTEGER PRIMARY KEY,"
-				"tag BLOB,"
-				"prev_tag BLOB,"
-				"oid BLOB,"
-				"data_ref INTEGER UNIQUE);").execute();
-		}
+		create_or_upgrade_object_table(*db);
 		if(!db->has_table("sync_state")) {
 			db->prepare("CREATE TABLE sync_state("
 				"key INTEGER PRIMARY KEY CHECK(key = 1),"
@@ -853,6 +883,13 @@ void record_storage::set_limits(storage_limits const& l) {
 	q.bind(":m", static_cast<std::int64_t>(l.max_record_size));
 	q.bind(":c", static_cast<std::int64_t>(l.chunk_size));
 	q.execute();
+}
+
+std::uint64_t record_storage::data_reference_count(std::uint64_t data_ref) const {
+	auto q = impl_->db->prepare("SELECT count(*) FROM record_objects WHERE data_ref = :d;");
+	q.bind(":d", static_cast<std::int64_t>(data_ref));
+	// a count is a plain integer (sequences are stored with the unsigned offset)
+	return static_cast<std::uint64_t>(q.execute().value<std::int64_t>(0).value_or(0));
 }
 
 record_handle record_storage::find_internal(record_internal_id iid) const {

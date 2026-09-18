@@ -3,6 +3,7 @@
 #include <securepath/test_frame/test_utils.hpp>
 
 #include <spsync/core/record_storage.hpp>
+#include <spsync/core/data/data_state_table.hpp>
 
 #include <securepath/database/sqlite/connection.hpp>
 #include <securepath/util/octet_vector.hpp>
@@ -788,6 +789,106 @@ TEST_CASE("record_storage limits persist", "[unit]") {
 	CHECK(storage.cursor_owner() == octet_vector(32, 7));
 	storage.set_cursor_owner(octet_vector(32, 8));
 	CHECK(storage.limits() == storage_limits{16 * 1024, 512 * 1024});
+}
+
+
+// (RDS 2) changes with a data descriptor point at the row of their data_id; the rows are
+// shared and the references follow the records
+TEST_CASE("record_storage data references", "[unit]") {
+	remove_database_test_db();
+	auto db_conn = database::sqlite::create_sqlite_connection(db_name);
+	record_storage storage(db_conn);
+	data_state_table table{db_conn};
+	test_block_creator creator;
+
+	data_descriptor const data_a{5080, 1000, securepath::test::random_octet_vector(64)};
+	data_descriptor const data_b{4112, 4096, securepath::test::random_octet_vector(64)};
+
+	REQUIRE(storage.create(creator.test_user_change(), record_state::in_sync));
+	// a change without data references nothing
+	REQUIRE(storage.create(creator.test_data_change(), record_state::in_sync));
+	CHECK(table.all_ids().empty());
+
+	auto const b3 = creator.test_data_change_with_data(data_a);
+	REQUIRE(storage.create(b3, record_state::in_sync));
+	auto const row_a = table.find(data_a.manifest_digest);
+	REQUIRE(row_a);
+	CHECK(row_a->descriptor == data_a);
+	CHECK(row_a->state == record_data_state::deferred);
+	CHECK(row_a->have.count() == 0);
+	CHECK(storage.data_reference_count(row_a->local_id) == 1);
+
+	// a known data keeps its row and state
+	table.set_state(row_a->local_id, record_data_state::in_sync);
+	REQUIRE(storage.create(creator.test_data_change_with_data(data_a), record_state::in_sync));
+	REQUIRE(storage.create(creator.test_data_change_with_data(data_b), record_state::in_sync));
+	CHECK(table.all_ids().size() == 2);
+	CHECK(table.find(data_a.manifest_digest)->state == record_data_state::in_sync);
+	CHECK(storage.data_reference_count(row_a->local_id) == 2);
+	auto const row_b = table.find(data_b.manifest_digest);
+	REQUIRE(row_b);
+	CHECK(storage.data_reference_count(row_b->local_id) == 1);
+	CHECK(storage.data_reference_count(row_b->local_id + 100) == 0);
+
+	SECTION("a rebase keeps the reference") {
+		auto creator_copy = creator;
+		auto pending = storage.create(creator_copy.test_data_change_with_data(data_b).to_auth_record<data_change_record>());
+		REQUIRE(pending);
+		CHECK(storage.data_reference_count(row_b->local_id) == 2);
+
+		auto last_seen = storage.create(creator.test_data_change(), record_state::in_sync);
+		auto rec = pending->record().deserialise_to<data_change_record>();
+		rec.set_last_seen_block(last_seen->block_id());
+		chain_block block{rec, content_auth{securepath::test::random_octet_vector(16)}};
+		block.set_sequence_and_parent_hash(last_seen->block_id().sequence + 1, last_seen->block_id().hash);
+		CHECK_NOTHROW(pending->set_record(block));
+		CHECK(storage.data_reference_count(row_b->local_id) == 2);
+		CHECK(table.all_ids().size() == 2);
+	}
+
+	SECTION("truncation drops the references") {
+		auto const removed = storage.truncate_from(b3.sequence() + 1);
+		CHECK(removed.size() == 2);
+		CHECK(storage.data_reference_count(row_a->local_id) == 1);
+		CHECK(storage.data_reference_count(row_b->local_id) == 0);
+		// the row stays until the data store sweeps the unreferenced
+		CHECK(table.find(data_b.manifest_digest));
+
+		storage.truncate_prefix(b3.sequence() + 1, {});
+		CHECK(storage.data_reference_count(row_a->local_id) == 0);
+	}
+}
+
+// (RDS 2) a database from before shared data rows had data_ref unique
+TEST_CASE("record_storage upgrades the object table", "[unit]") {
+	remove_database_test_db();
+	auto db_conn = database::sqlite::create_sqlite_connection(db_name);
+	db_conn->prepare("CREATE TABLE record_objects("
+		"key INTEGER PRIMARY KEY,"
+		"tag BLOB,"
+		"prev_tag BLOB,"
+		"oid BLOB,"
+		"data_ref INTEGER UNIQUE);").execute();
+	{
+		auto q = db_conn->prepare("INSERT INTO record_objects(tag, oid) VALUES(:tag, :oid);");
+		q.bind(":tag", octet_vector(16, 1));
+		q.bind(":oid", octet_vector(16, 2));
+		q.execute();
+	}
+
+	record_storage storage(db_conn);
+	test_block_creator creator;
+	data_descriptor const data{5080, 1000, securepath::test::random_octet_vector(64)};
+	REQUIRE(storage.create(creator.test_user_change(), record_state::in_sync));
+	REQUIRE(storage.create(creator.test_data_change_with_data(data), record_state::in_sync));
+	REQUIRE(storage.create(creator.test_data_change_with_data(data), record_state::in_sync));
+	CHECK(storage.data_reference_count(data_state_table{db_conn}.find(data.manifest_digest)->local_id) == 2);
+
+	// the old rows came along
+	auto q = db_conn->prepare("SELECT count(*) FROM record_objects WHERE tag = :tag;");
+	q.bind(":tag", octet_vector(16, 1));
+	CHECK(q.execute().value<std::int64_t>(0).value_or(-1) == 1);
+	CHECK(!db_conn->has_table("record_objects_old"));
 }
 
 }

@@ -175,6 +175,19 @@ public:
 	record_handle find_internal(record_internal_id) const;
 
 
+	// -- record data --
+
+	/**
+	 * Number of object records, of records in any state, that reference the given row
+	 * of the record data table (record_data::local_id). A change with a data descriptor
+	 * gets the row of its data_id when the record is stored (created as deferred when
+	 * the data is new), so records naming the same data share one row; removing records
+	 * (truncation, a rebase replacing the record) drops their references. Data without
+	 * references is dead (record_data.txt RD9, record_data_store::remove_unreferenced).
+	 */
+	std::uint64_t data_reference_count(std::uint64_t data_ref) const;
+
+
 	/// create new record, the first function sets the state to be unknown and the object id is not set
 	template<typename RecordType>
 	record_handle create(auth_record<RecordType> const&);

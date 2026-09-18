@@ -61,6 +61,14 @@ struct test_block_creator {
 		return next_block(test_record);
 	}
 
+	/// Create data change record with one object id whose change carries the given data descriptor
+	chain_block test_data_change_with_data(data_descriptor descriptor) {
+		record_tag tag = securepath::test::random_octet_vector(16);
+		auth_record<data_change_record> test_record{data_change_record{next_record_base()}, util::content_auth{tag}};
+		test_record.record.add(single_change{plain_single_change_data{util::create_object_id(), {}, std::move(descriptor)}, {}});
+		return next_block(test_record);
+	}
+
 	/// Create data change record that has same object ids as the given record and those set as the previous change of the object id
 	chain_block test_followup_data_change(chain_block const& previous) {
 		data_change_record rec = previous.deserialise_to<data_change_record>();

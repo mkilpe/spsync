@@ -114,9 +114,11 @@ RD6 Client data store. One record_data implementation over the same chunk-file
     layout plus local state (record_objects.data_ref finally points at a client
     data table row: {data_id, state, have-bitmap}). Policy per storage: lazy
     (deferred until asked - mobile default) or auto-fetch up to a size threshold.
-    read() decrypts chunk-wise and verifies on the fly; write() only for locally
-    created data before upload; remove_data() evicts local chunks (state removed,
-    refetchable) without touching the record.
+    read() decrypts chunk-wise and verifies on the fly; locally created data is
+    written through the store's data_writer before upload (RDS 2: the data_id
+    exists only after the last chunk, so a stored record_data is immutable);
+    remove_data() evicts local chunks (state removed, refetchable) without
+    touching the record.
 
 RD7 Engine flow. sync_object_change with a data handle: stream the source once -
     encrypt chunks into the local store, build the manifest, put the descriptor
@@ -321,11 +323,69 @@ Implementation steps
         header padding classes), engine creator/verifier (descriptor halves and
         their authentication, padding invisible + size classes, version gate).
 
-- RDS 2  Client data store                                                   [1.5d]
++ RDS 2  Client data store -- done 2026-09-18                               [1.5d]
       record_data implementation over chunk files + state table, data_ref wiring
       in record storage, eviction, data_id reference counting. Tests: offset
       read/write across chunk boundaries, remove/refetch state, big-file
       streaming without loading whole blobs.
+      + core/data/, four pieces a data server can reuse (RDS 4): have_bitmap
+        (one bit per chunk, the persisted/wire octets normalised), chunk_files
+        (<root>/<hex data_id>/<chunk no, 8 hex digits>, temp + rename so a chunk
+        file is complete or absent; a staging area under <root>/.staging for a
+        data whose id is not known before its last chunk, renamed on commit,
+        cleared when the store opens), data_state_table (sqlite table
+        record_data {key, data_id unique, enc_size, chunk_size, state, have,
+        manifest}) and record_data_store on top of them.
+      + creating: store.create(group key, chunk size) gives a data_writer -
+        write() plaintext in any pieces, chunks are encrypted into the staging
+        area as they complete, finish() registers the data as upload_pending
+        with everything held and the manifest kept for the upload. The row is
+        written before the rename, so a crash leaves an unreferenced row for
+        the sweep and never chunk files nothing knows of. This replaces the
+        "write() for locally created data" of RD6: a stored data is what its
+        descriptor says, record_data::write on it throws.
+      + reading: store.open(key candidates, descriptor, header) gives the
+        record_data handle; read() at any offset decrypts only the covering
+        chunks (the last one is cached, small sequential reads decrypt each
+        chunk once), stops at a chunk that is not held, size() is plain_size,
+        available_size() the data octets in held chunks (not necessarily
+        contiguous). The candidates are the group keys of the header's key_seq
+        (D9 collisions); the one that authenticates is found on the first
+        chunk. A descriptor contradicting the row of its data_id opens nothing.
+      + failed chunk (RD3), two cases told apart by the manifest: a held chunk
+        that is no longer the one the manifest names (bit rot, lost file) is
+        dropped and the data goes download_pending - refetchable; a chunk the
+        manifest names but no key authenticates makes the data invalid. While
+        upload_pending (the only copy) both are invalid.
+      + transfer side, ciphertext only: set_manifest (must match the
+        descriptor), store_chunk (verified against the manifest, so a download
+        fetches the manifest first - detail for RDS 6; the last missing chunk
+        flips the data to in_sync), read_chunk + manifest for the upload.
+      + eviction: evict()/remove_data() drops the chunk files, state removed,
+        row and manifest stay so the refetch verifies at once; refused while
+        upload_pending.
+      + references: record_storage stores the row of the data_id in
+        record_objects.data_ref for every change with a descriptor (row created
+        as deferred when the data is new - an incoming record - and left alone
+        when known); data_ref is no longer unique, old tables are rebuilt on
+        open. data_reference_count(local id) counts object rows of records in
+        any state, so a rebase (set_record) and truncate_from/truncate_prefix
+        move the count with the records; store.remove_unreferenced(predicate)
+        sweeps rows + chunks nobody references (RD9) - the engine calls it
+        after truncation/rebase, never between a writer's finish() and the
+        creation of its record. Servers get the rows as well: the index of the
+        data their chain names, which RDS 5 needs for tickets.
+      + tests: core test_record_data_store (bitmap, chunk files + staging,
+        table persistence, offset reads and pieced writes across chunk
+        boundaries, empty data, evict/refetch with tampered and misplaced
+        chunks, download into a second store in any order with a gap, key
+        candidates, rot vs invalid, writer cleanup, sweep, 24 MiB streamed in
+        64 KiB pieces and verified against content_digest) and
+        test_record_storage (shared rows, rebase keeps the reference,
+        truncation drops it, upgrade of the unique data_ref table).
+      Not here: where the client keeps its data directory and the wiring into
+      client_sync/engine (RDS 3), a content_digest index for the download skip
+      (RDS 3), fsync of chunk files (decide with the server store, RDS 4).
 
 - RDS 3  Engine create path and upload                                       [1.5d]
       sync_object_change streams source -> local chunks + descriptor; upload

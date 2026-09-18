@@ -15,7 +15,7 @@
 
 --- phase 2 (multi change per oid and per record support)
 + previous oid support (server validation + per-change rebase, 2026-08-27)
-- record data support (record_data is an interface only, data_ref never set; design: record_data.txt, 2026-08-30)
+* record data support (design + steps: record_data.txt; descriptor/chunk crypto, chain limits and the client data store done, RDS 1/2/8, 2026-09-18; transfer and engine wiring open)
 + user conflict handling (conflict_policy rebase_on_top/ask + on_object_conflict, 2026-08-27)
 
 --- phase 3 (full record support)
