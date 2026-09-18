@@ -4,6 +4,7 @@
 #include "encrypted_record_header.hpp"
 #include "record_base.hpp"
 #include "record_types.hpp"
+#include <spsync/core/data/data_descriptor.hpp>
 
 #include <securepath/serialisation/deque.hpp>
 
@@ -19,6 +20,9 @@ struct plain_single_change_data {
 	// tag of the previous record with same object id
 	record_tag previous_oid_record_tag;
 
+	// the server-visible half of the data descriptor (RD2) when the change carries data
+	std::optional<data_descriptor> data;
+
 	// q: should we have change type (like remove) so that the server can remove unused data?
 
 	serialisation::trailing_data trailing_data_;
@@ -26,7 +30,7 @@ struct plain_single_change_data {
 	template<typename Ar>
 	void serialise(Ar& ar) {
 		serialisation::sequence<Ar> seq(ar);
-		seq & id & previous_oid_record_tag & trailing_data_;
+		seq & id & previous_oid_record_tag & data & trailing_data_;
 	}
 };
 

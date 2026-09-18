@@ -289,13 +289,37 @@ RD13 Availability, holder lists, load balancing, copy count (2026-09-07). Two
 Implementation steps
 --------------------
 
-- RDS 1  Descriptor and chunk crypto                                           [1d]
++ RDS 1  Descriptor and chunk crypto -- done 2026-09-10                        [1d]
       Descriptor v2 in single_change + encrypted header (RD2), per-data key
       derivation, chunker with manifest build/verify (RD3), size-class padding of
       the data and the trailing padding field of the encrypted record header
       (RD11, structure version bump). Unit tests: round trip, tamper per chunk,
       reorder, wrong manifest, padding classes and stripping, header padding
       invisible to readers. data_change_info retired.
+      + core/data/: size_padding (Padme, constexpr; data floor 4 KiB, header
+        floor 256 B - "the same rule" of RD11 with a smaller floor so a chat
+        message costs ~250 B of chain, not 4 KiB), data_descriptor {enc_size,
+        chunk_size, manifest_digest} in plain_single_change_data and data_header
+        {plain_size, content_digest, nonce, key_seq, flags} in
+        data_change_header, chunk_crypto (HKDF-SHA3-512 data key from group key
+        + 16 B nonce, iv = chunk counter, AAD = nonce + counter, tag appended),
+        data_manifest (digest, matches(descriptor), verify_chunk),
+        data_encryptor (streaming: write() any pieces, chunks to a sink as they
+        complete, finish() pads inside the ciphertext and returns descriptor +
+        header + manifest) and data_decryptor (any chunk alone, padding
+        stripped by plain_size). chunk_count derives from enc_size and
+        chunk_size (each chunk carries a tag), nothing extra on the wire.
+      + encrypted record headers (all three record kinds) are padded_record_header
+        {header, padding} inside the AEAD; record_base::current_structure_version
+        = 2, verifiers report supported() and never read another version
+        (is_authentic false, headers empty) - old records are not migrated.
+      + securepath crypto::hash_stream (incremental sha3) for content and manifest
+        digests over streams.
+      + tests: core test_record_data_crypto (padding classes, chunk binding,
+        round trip incl. 0 bytes and chunk boundaries, tamper/reorder/transplant/
+        foreign manifest/wrong key, random access, descriptor serialisation,
+        header padding classes), engine creator/verifier (descriptor halves and
+        their authentication, padding invisible + size classes, version gate).
 
 - RDS 2  Client data store                                                   [1.5d]
       record_data implementation over chunk files + state table, data_ref wiring

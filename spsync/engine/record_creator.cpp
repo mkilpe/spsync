@@ -24,12 +24,11 @@ util::content_auth record_creator_base::authentication_tag() {
 }
 
 
-void data_change_record_creator::add_change(object_id oid, record_tag previous_oid_record_tag, metadata meta) {
-	plain_single_change_data data{std::move(oid), std::move(previous_oid_record_tag)};
-
-	//todo: when handling the change data, set the iv, tag et al here for data
-	data_change_header header{std::move(meta)};
-
+void data_change_record_creator::add_change(object_id oid, record_tag previous_oid_record_tag, metadata meta,
+	std::optional<data_descriptor> descriptor, std::optional<data_header> data_info)
+{
+	plain_single_change_data data{std::move(oid), std::move(previous_oid_record_tag), std::move(descriptor)};
+	data_change_header header{std::move(meta), std::move(data_info)};
 	add_change(std::move(header), std::move(data));
 }
 
@@ -43,8 +42,8 @@ void data_change_record_creator::add_change(data_change_header header, plain_sin
 	// first authenticate the unencrypted data
 	encryptor_->process_auth(serialisation::asn_der_serialise(data));
 
-	// create encrypted header that contains the user's metadata
-	encrypted_record_header<data_change_header> enc_header(encryptor_->process(serialisation::asn_der_serialise(header)));
+	// create encrypted header that contains the user's metadata (padded to a size class, RD11)
+	encrypted_record_header<data_change_header> enc_header(encryptor_->process(pad_record_header(serialisation::asn_der_serialise(header))));
 
 	changes_.push_back(single_change{std::move(data), std::move(enc_header)});
 }
@@ -64,7 +63,7 @@ auth_record<user_change_record> user_change_record_creator::result() {
 	encryptor_->process_auth(serialisation::asn_der_serialise(plain_record_));
 
 	// create encrypted header that contains the user's metadata
-	encrypted_record_header<user_change_header> enc_header(encryptor_->process(serialisation::asn_der_serialise(header_)));
+	encrypted_record_header<user_change_header> enc_header(encryptor_->process(pad_record_header(serialisation::asn_der_serialise(header_))));
 
 	user_change_record record{std::move(base_), std::move(plain_record_), std::move(enc_header)};
 	auto auth = make_auth(record);
@@ -86,7 +85,7 @@ auth_record<segment_record> segment_record_creator::result() {
 	encryptor_->process_auth(serialisation::asn_der_serialise(plain_record_));
 
 	// create encrypted header that contains the user's metadata
-	encrypted_record_header<segment_header> enc_header(encryptor_->process(serialisation::asn_der_serialise(header_)));
+	encrypted_record_header<segment_header> enc_header(encryptor_->process(pad_record_header(serialisation::asn_der_serialise(header_))));
 
 	segment_record record{std::move(base_), std::move(plain_record_), std::move(enc_header)};
 	auto auth = make_auth(record);

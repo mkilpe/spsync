@@ -51,9 +51,13 @@ class data_change_record_creator: public record_creator_base {
 public:
 	using record_creator_base::record_creator_base;
 
-	//todo: support change data
-	/// add single change to the data change record
-	void add_change(object_id oid, record_tag previous_oid_record_tag, metadata);
+	/**
+	 * add single change to the data change record; a change carrying data gives both
+	 * halves of its descriptor (RD2): the plain one goes next to the object id, the
+	 * secret one into the encrypted header
+	 */
+	void add_change(object_id oid, record_tag previous_oid_record_tag, metadata,
+		std::optional<data_descriptor> = std::nullopt, std::optional<data_header> = std::nullopt);
 
 	/// Returns the ready data_change_record, it can be called only once as it will move content
 	auth_record<data_change_record> result();

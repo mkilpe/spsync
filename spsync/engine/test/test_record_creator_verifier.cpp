@@ -5,6 +5,7 @@
 #include <spsync/test/util.hpp>
 
 #include <spsync/client/record_util.hpp>
+#include <spsync/core/data/chunk_crypto.hpp>
 #include <spsync/core/encryption_key_storage.hpp>
 #include <spsync/engine/record_creator.hpp>
 #include <spsync/engine/record_verifier.hpp>
@@ -23,7 +24,9 @@ using namespace securepath::test;
 // - (3) create data change record with multiple changes
 // - (4) create segment record
 // + (5) manipulation causes verify failure
-// - (6) data change with data
+// + (6) data change with data (RDS 1: descriptor halves)
+// + (7) encrypted headers are padded to a size class and read back unpadded (RD11)
+// + (8) a record of another structure version is not read
 
 // (1)
 TEST_CASE("data_change_record_creator single", "[unit]") {
@@ -159,6 +162,110 @@ TEST_CASE("record manipulation", "[unit]") {
 			// if we happen to alter the serialisation header, deserialisation fails
 		}
 	}
+}
+
+
+namespace {
+
+encryption_key test_key() {
+	return encryption_key{1, random_octet_vector(crypto::aes_gcm_key_size())};
+}
+
+/// a single-change record whose metadata carries a payload of the given size
+auth_record<data_change_record> record_with_payload(encryption_key const& key, std::size_t payload) {
+	data_change_record_creator creator(key, chain_block_id{sequence_number{1}, to_octet_vector("tag")});
+	creator.add_change(object_id{to_octet_vector("oid")}, {}, metadata{{"payload", random_octet_vector(payload)}});
+	return creator.result();
+}
+
+std::size_t header_size(auth_record<data_change_record> const& rec) {
+	return rec.record.begin()->header.data().size();
+}
+
+}
+
+// (6)
+TEST_CASE("data_change_record_creator with data descriptor", "[unit]") {
+	auto key = test_key();
+	data_descriptor desc{123456, 4096, random_octet_vector(64)};
+	data_header dh{100000, random_octet_vector(64), random_octet_vector(data_nonce_size), sequence_number{1}, 0};
+
+	data_change_record_creator creator(key, chain_block_id{sequence_number{1}, to_octet_vector("tag")});
+	object_id oid{to_octet_vector("oid")};
+	creator.add_change(oid, {}, metadata{{"name", to_octet_vector("file")}}, desc, dh);
+	creator.add_change(object_id{to_octet_vector("other")}, {}, metadata{});
+	auto rec = creator.result();
+
+	// the plain half is visible without the key, the secret half only after decryption
+	REQUIRE(std::distance(rec.record.begin(), rec.record.end()) == 2);
+	CHECK(rec.record.begin()->data.data == desc);
+	CHECK(!std::next(rec.record.begin())->data.data);
+
+	data_change_record_verifier ver(key, rec.record, rec.auth);
+	REQUIRE(ver.is_authentic());
+	auto headers = ver.headers();
+	REQUIRE(headers.size() == 2);
+	CHECK(headers[0].data.data == desc);
+	CHECK(headers[0].header.data_info() == dh);
+	CHECK(headers[0].header.metadata().find("name") == to_octet_vector("file"));
+	CHECK(!headers[1].data.data);
+	CHECK(!headers[1].header.data_info());
+
+	// the descriptor is authenticated: a changed size fails the record
+	auto tampered = rec;
+	data_change_record forged{static_cast<record_base const&>(rec.record)};
+	for(auto const& c : rec.record) {
+		auto change = c;
+		if(change.data.data) {
+			change.data.data->enc_size += 1;
+		}
+		forged.add(change);
+	}
+	CHECK(!data_change_record_verifier(key, forged, rec.auth).is_authentic());
+}
+
+// (7)
+TEST_CASE("encrypted record headers pad to size classes", "[unit]") {
+	auto key = test_key();
+	// short payloads all look the same, a longer one falls into another class
+	auto small = record_with_payload(key, 10);
+	auto medium = record_with_payload(key, 150);
+	auto large = record_with_payload(key, 900);
+	CHECK(header_size(small) == header_size(medium));
+	CHECK(header_size(small) < header_size(large));
+	CHECK(header_size(small) >= min_padded_header_size);
+
+	// readers never see the padding
+	for(auto const* rec : {&small, &medium, &large}) {
+		data_change_record_verifier ver(key, rec->record, rec->auth);
+		REQUIRE(ver.is_authentic());
+		auto meta = ver.headers().front().header.metadata();
+		auto payload = meta.find("payload");
+		REQUIRE(payload);
+		CHECK(payload->size() == (rec == &small ? 10u : rec == &medium ? 150u : 900u));
+	}
+}
+
+// (8)
+TEST_CASE("record of another structure version is not read", "[unit]") {
+	auto key = test_key();
+	auto rec = record_with_payload(key, 10);
+	CHECK(rec.record.structure_version() == record_base::current_structure_version);
+
+	// rewrite the version integer (the first field of the base, the first field of the
+	// record) to 1 and read the record back
+	auto der = serialisation::asn_der_serialise(rec.record);
+	octet_vector const current{0x02, 0x01, static_cast<std::uint8_t>(record_base::current_structure_version)};
+	auto it = std::search(der.begin(), der.end(), current.begin(), current.end());
+	REQUIRE(it != der.end());
+	it[2] = 1;
+	auto old = serialisation::asn_der_deserialise<data_change_record>(der);
+	REQUIRE(old.structure_version() == 1);
+
+	data_change_record_verifier ver(key, old, rec.auth);
+	CHECK(!ver.supported());
+	CHECK(!ver.is_authentic());
+	CHECK(ver.headers().empty());
 }
 
 }

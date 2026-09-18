@@ -59,4 +59,8 @@
   * use storage connection to send broadcast message to all online members (msg not saved on server side)
   * client side interface to send and receive such messages
   * message encrypted using storage encryption key?
+* review backlog (see doc/review_2026-09-08.txt, "Backlog as of 2026-09-09")
+  - R1 groupchat blocking create_account/register_my_key, swallowed on_create/connect errors
+  - R2 strict mode on a different replica (phase 6)
+  - D1-D9 duplication and dead code, D1 candidate-key helper first
 

@@ -18,7 +18,11 @@ public:
 	record_verifier_base(encryption_key const& key, util::content_auth auth, record_base record);
 
 	/// Return whether the record is authentic based on the auth stream tag. This can be called only once as it consumes the tag.
+	/// A record of a structure version this client does not read is never authentic.
 	bool is_authentic() const;
+
+	/// whether the record's structure version is the one this client reads
+	bool supported() const { return base_.structure_version() == record_base::current_structure_version; }
 
 	/// The record base for the verified record
 	record_base const& base() const { return base_; }

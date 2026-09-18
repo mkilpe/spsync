@@ -41,6 +41,12 @@ Chain of structures:
 		* iv for encrypted data and key id
 		* encrypted header
 		* signature/tag
+		update 2026-09-10 (record_data.txt RD2/RD11, structure version 2): the plain
+		part may carry a data_descriptor {enc_size, chunk_size, manifest_digest}
+		next to the object id (authenticated, server-visible); the encrypted header
+		then carries data_header {plain_size, content_digest, nonce, key_seq}. Every
+		encrypted header (all record kinds) is padded_record_header {header,
+		padding} inside the AEAD, padded to a size class (Padme, floor 256 B).
 
 	- aggregated change
 		* sequence

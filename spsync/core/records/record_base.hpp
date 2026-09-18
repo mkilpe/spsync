@@ -10,6 +10,8 @@ namespace securepath::sync {
  */
 class record_base {
 public:
+	/// version of the record structures a client writes and reads; 2 = padded encrypted headers (RD11)
+	static constexpr int current_structure_version = 2;
 
 	record_base() = default;
 	record_base(chain_block_id last_seen_block, octet_vector iv, sequence_number enc_key_id, octet_vector op_id = {},
@@ -30,6 +32,9 @@ public:
 
 	/// Returns the chain block id that was the last one seen before this record was created
 	chain_block_id const& last_seen_block() const { return last_seen_block_; }
+
+	/// the structure version the record was written with
+	int structure_version() const { return structure_version_; }
 
 	/// Returns the initialisation vector that is used to encrypted the data in this record
 	octet_vector const& iv() const { return iv_; }
@@ -61,7 +66,7 @@ public:
 
 private:
 	// version of the current structure
-	int structure_version_{1};
+	int structure_version_{current_structure_version};
 
 	// this is the last chain block id the client has seen when creating this record
 	chain_block_id last_seen_block_;
