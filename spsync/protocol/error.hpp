@@ -22,6 +22,22 @@ enum class errc {
 	storage_syncing,
 	/// the record content exceeds the storage's max_record_size (record_data.txt RD10)
 	record_too_big,
+	/// the data ticket is not one this data server accepts: unsigned, forged, unknown or
+	/// untrusted issuer, another member's, the wrong right (record_data.txt RD12)
+	invalid_data_ticket,
+	/// the data ticket has expired: ask the record server for a new one
+	data_ticket_expired,
+	/// the manifest is not the one the descriptor commits to
+	invalid_data_manifest,
+	/// the chunk is not the one the manifest names at that position
+	invalid_data_chunk,
+	/// a chunk for a data no manifest opened on this connection
+	no_such_upload,
+	/// the data server's storage quota does not allow the data now (RD10: availability,
+	/// never validity - the record stays valid, another holder or a later try may take it)
+	data_quota_exceeded,
+	/// the data is bigger than this data server takes (RD10)
+	data_too_big,
 	end_of_list
 };
 

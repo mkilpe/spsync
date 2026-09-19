@@ -45,6 +45,9 @@ public:
 	/// every row id, ascending
 	std::vector<std::uint64_t> all_ids() const;
 
+	/// the enc_size of every row added up: what the known data takes when all of it is held
+	std::uint64_t total_enc_size() const;
+
 	void set_state(std::uint64_t local_id, record_data_state);
 	void set_have(std::uint64_t local_id, have_bitmap const&);
 

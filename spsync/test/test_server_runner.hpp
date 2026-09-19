@@ -36,6 +36,9 @@ public:
 	/// the storage server side
 	storage_server& storages() { return server_.storages(); }
 
+	/// the data role; listening when the parameters enable it
+	data_server& data() { return server_.data(); }
+
 	void stop() {
 		server_.close();
 		if(server_future_.valid()) {

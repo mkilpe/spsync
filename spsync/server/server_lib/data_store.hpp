@@ -1,0 +1,79 @@
+#pragma once
+
+#include <spsync/core/data/record_data_store.hpp>
+#include <spsync/util/result.hpp>
+
+#include <filesystem>
+#include <mutex>
+
+namespace securepath::sync {
+
+/**
+ * Resource quota of a data server (record_data.txt RD10): server-local, it never makes a
+ * record invalid - a refused upload degrades availability, another holder or a later try
+ * may take the data. 0 = no limit.
+ */
+struct data_quota {
+	/// the biggest single data (enc_size) this server takes
+	std::uint64_t max_data_size{};
+
+	/// what the data of one storage may take in total; an upload reserves its whole
+	/// enc_size when it is opened, so uploads in progress cannot overshoot together
+	std::uint64_t max_storage_bytes{};
+};
+
+/**
+ * The data of one storage on a data-role server (RD5): the same chunk files and data
+ * table as a client keeps (record_data_store), ciphertext only and verified against the
+ * manifest, plus what only a server needs - the quota and the expiry of uploads that
+ * never completed. The server never decrypts (D1) and knows no chain: what a data is and
+ * that it belongs here is stated by the ticket the caller verified.
+ *
+ * Thread safe.
+ */
+class server_data_store {
+public:
+	server_data_store(database::connection_ptr, std::filesystem::path data_root, data_quota = {});
+
+	/**
+	 * Open the upload of a data or resume it: the chunks already held. Errors (protocol
+	 * errc): data_too_big, invalid_data_manifest (not the descriptor's manifest, or the
+	 * descriptor contradicts the known data), data_quota_exceeded.
+	 */
+	util::result<have_bitmap> open_upload(data_descriptor const&, data_manifest const&, time_point now);
+
+	/**
+	 * Keep a chunk of an opened upload; true when it completed the data. Errors:
+	 * no_such_upload (no manifest for the data), invalid_data_chunk (not the chunk the
+	 * manifest names there).
+	 */
+	util::result<bool> store_chunk(data_id const&, std::uint64_t chunk_no, octet_span encrypted, time_point now);
+
+	/// what is known of the data; in_sync = complete
+	std::optional<data_state_row> find(data_id const&) const;
+
+	/// a held encrypted chunk
+	std::optional<octet_vector> read_chunk(data_id const&, std::uint64_t chunk_no) const;
+
+	/// what the storage's data takes against the quota: the enc_size of every known data
+	std::uint64_t used_bytes() const;
+
+	/**
+	 * Drop the incomplete uploads nothing touched since the given time, rows and chunks:
+	 * their reservation is free again. Returns how many went.
+	 */
+	std::size_t expire_incomplete(time_point untouched_since);
+
+private:
+	void touch(data_id const&, time_point now);
+	void forget_activity(data_id const&);
+
+private:
+	mutable std::mutex mutex_;
+	database::connection_ptr db_;
+	record_data_store store_;
+	data_state_table table_;
+	data_quota const quota_;
+};
+
+}

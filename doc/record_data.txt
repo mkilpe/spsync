@@ -485,17 +485,94 @@ Implementation steps
       fixed-nonce constructor) and checking the result against the manifest
       digest.
 
-- RDS 4  Data role: server store and upload handling                         [1.5d]
++ RDS 4  Data role: server store and upload handling -- done 2026-09-19    [1.5d]
       The data listener (own port), chunk files + data table, ticket
       verification (RD12), manifest verification, data quota (RD10 resource
       side), expiry of incomplete uploads, availability announcements to the
       record servers (RD13). Tests: junk chunk rejected, bad/expired ticket
       rejected, resume reply, quota errors, announcement after completion.
-      From RDS 2/3: the store pieces are reusable as they are (chunk_files,
-      have_bitmap, data_manifest::verify_chunk); the data protocol packets and
-      the client's real data_channel (data connection, open_upload/send_chunk
-      over the wire) are defined here together with the listener that answers
-      them, and client_sync hands the channel to create_storage_connection.
+      Scope: both ends of the upload are real over the wire. What needs the
+      record server side waits for RDS 5 behind a small interface each: who
+      issues tickets (the client channel takes a ticket_source, tests sign with
+      a test record server key), where completions are announced (the data
+      server calls a complete handler; the announcement packet, the
+      availability table and anti-entropy are RDS 5) and the wiring of the
+      channel into client_sync (no ticket source to give it yet).
+      + data_ticket (core/data/data_ticket): {sid, descriptor (data_id =
+        manifest_digest, enc_size, chunk_size), member key id, right
+        upload/download, expiry} signed by a record server over a length
+        prefixed digest with the context "spsync-data-ticket" (expiry in
+        seconds, as it travels). verify(keys, now): signature of the stated
+        issuer, not expired; whether the issuer is a record server the holder
+        accepts is the holder's check. data_endpoint {host, port, key id,
+        region} for the endpoint/holder lists. The digest helpers of
+        block_envelope moved to util/digest_buffer.hpp and are shared.
+      + data protocol (protocol/data_protocol.hpp, own packet families c2d/d2c
+        on the data port 18202): data_hello / data_hello_reply (version),
+        upload_data_manifest {ticket, manifest} -> reply {have octets} (open or
+        resume), upload_data_chunk {sid, data_id, chunk no, bytes} -> reply
+        {complete}. Download packets come with RDS 6. New protocol errors:
+        invalid_data_ticket, data_ticket_expired, invalid_data_manifest,
+        invalid_data_chunk, no_such_upload, data_quota_exceeded, data_too_big.
+      + server_data_store (server_lib/data_store): one per storage on top of the
+        client's record_data_store (same chunk files, table and verification;
+        record_data_store::register_data makes a data known by descriptor +
+        manifest, data_state_table::total_enc_size), in <root>/<sid>/data.db and
+        <root>/<sid>/data/ - a database of its own, so a pure data server needs
+        no chain and an all-in-one server keeps the data next to storage.db.
+        open_upload -> have-bitmap (the resume reply), store_chunk -> complete.
+        Quota (data_quota, server-local, 0 = none): max_data_size ->
+        data_too_big; max_storage_bytes -> data_quota_exceeded, counted as the
+        enc_size of every known data, so an opened upload RESERVES its whole
+        size (uploads in progress cannot overshoot together) and a resume is
+        never refused. Expiry: table data_activity {data_id, touched} for
+        uploads in progress; expire_incomplete(untouched since) drops rows +
+        chunks and frees the reservation, complete data never expires.
+      + data_connection (server_lib/data_connection, transport left out like
+        connection): ticket check = verify + trusted issuer + issued to the key
+        this connection authenticated with + right upload + a descriptor whose
+        chunks fit a frame (chunk_size 1..max_chunk_size; the lower bound and
+        the match with the committed record are the issuer's business, RDS 5).
+        Uploads are opened per connection by (sid, data_id); a chunk for
+        anything else is no_such_upload. Completion calls
+        data_server_context::announce_complete once.
+      + data_server (server_lib/data_server): the listener (certified client
+        key required, no anonymous clients), stores opened on demand and those
+        found on disk at start, trusted issuers = --record_servers key ids +
+        the server's own key (all-in-one issues tickets to itself), expiry at
+        start and every expiry_check_interval (10 min) with
+        incomplete_upload_expiry (24 h). spsync_server has the role behind
+        --data_role with --data_port, --record_servers, --max_data_size,
+        --max_storage_data, --upload_expiry; the data root is the storage root.
+      + client: net_data_channel (comm/net_data_channel) implements the
+        data_channel of RDS 3 over the network: grant (ticket + ordered
+        holders) from the ticket_source, the manifest goes to the first holder
+        that can be reached - a transport failure moves down the list (RD13
+        failover), a refusal by a holder is the answer - one connection per data
+        server shared by the uploads going there, the server must authenticate
+        with the key the grant names, a lost connection fails the calls still
+        out. Known limit: when only the DATA connection drops the upload is
+        reported failed and the engine retries after the next record server
+        connect (RDS 3 rule); a retry timer belongs to RDS 7 (kill/resume).
+      + tests: core test_data_ticket (round trip, expiry, unknown issuer, every
+        signed field tampered through the wire form); server_lib
+        test_data_store (upload + resume reply, junk/misplaced/oversized chunk,
+        foreign or short manifest, contradicting descriptor, both quotas with
+        reservation and resume at the limit, expiry across a restart),
+        test_data_connection (hello version, eight kinds of bad ticket incl.
+        expired, resume on a second connection, chunk without manifest or of
+        another storage, junk chunk, one announcement after completion, quota
+        errors per storage), test_data_server over TLS with the real uploader
+        (end to end incl. chunk-by-chunk equality, resume from ten chunks with
+        progress starting there, failover, nobody reachable, no holder, server
+        key mismatch, expired / foreign ticket and refusing record server as
+        their error codes, expiry at restart) and the data role inside
+        spsync_server (off by default, all-in-one with a self signed ticket).
+      For RDS 5: chain_sync does not validate descriptors yet - the ticket
+      issuer must check the descriptor against the committed record and the
+      storage's chunk_size; a separate data server learns the record servers'
+      public keys through the link RDS 5 adds (today they must be in its key
+      store), the same link carries the announcements.
 
 - RDS 5  Record role: tickets, endpoints, availability table                   [1d]
       Ticket issue (upload placement, download holder ordering, quota
@@ -503,6 +580,11 @@ Implementation steps
       table fed by data servers and relayed between record servers with the
       heads, load fields. Tests: holder order by completeness/load, endpoint list
       persisted by the client, ticket for an unknown data refused.
+      From RDS 4: data_ticket, data_endpoint and the data server's trust in
+      issuers exist; open are request_data_ticket on the record connection (the
+      client's ticket_source), the holder ordering, the announcement packet from
+      data_server::set_complete_handler into the availability table, and
+      client_sync creating a net_data_channel for create_storage_connection.
       From RDS 2: the record server already has a record_data row per data_id
       its chain names (descriptor sizes included) and the references from the
       object rows, so a ticket request can name the data_id alone and "unknown

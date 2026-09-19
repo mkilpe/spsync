@@ -1,0 +1,213 @@
+#include <securepath/test_frame/test_suite.hpp>
+#include <securepath/test_frame/test_utils.hpp>
+
+#include <spsync/server/server_lib/data_store.hpp>
+#include <spsync/protocol/error.hpp>
+
+#include <securepath/crypto/aes_gcm.hpp>
+#include <securepath/database/sqlite/connection.hpp>
+#include <securepath/util/conversions.hpp>
+
+#include <filesystem>
+#include <map>
+
+namespace securepath::sync {
+namespace {
+
+using namespace std::chrono_literals;
+
+std::string const db_name = "server_data_store_test.db";
+std::filesystem::path const data_root = "server_data_store_test";
+
+database::connection_ptr fresh_database(std::string const& name = db_name, std::filesystem::path const& root = data_root) {
+	std::remove(name.c_str());
+	std::filesystem::remove_all(root);
+	return database::sqlite::create_sqlite_connection(name);
+}
+
+/// a data as a client made it: descriptor, manifest and the encrypted chunks
+struct client_data {
+	data_descriptor descriptor;
+	data_manifest manifest;
+	std::map<std::uint64_t, octet_vector> chunks;
+};
+
+client_data make_data(std::size_t size, std::uint32_t chunk_size = 1000) {
+	encryption_key const key{sequence_number{1}, securepath::test::random_octet_vector(crypto::aes_gcm_key_size())};
+	client_data ret;
+	data_encryptor enc(key, chunk_size, [&](std::uint64_t no, octet_vector const& c) { ret.chunks[no] = c; });
+	enc.write(securepath::test::random_octet_vector(size));
+	auto result = enc.finish();
+	ret.descriptor = result.descriptor;
+	ret.manifest = result.manifest;
+	return ret;
+}
+
+bool is_error(auto const& result, protocol::errc code) {
+	return !result && result.get_error().code() == make_error_code(code);
+}
+
+}
+
+// RD5: manifest first, then chunks checked against it; the reply to the manifest is the resume point
+TEST_CASE("server data store upload and resume", "[unit]") {
+	server_data_store store{fresh_database(), data_root};
+	auto const now = clock_type::now();
+	auto const data = make_data(4500);
+	auto const& id = data.descriptor.manifest_digest;
+	REQUIRE(data.chunks.size() == 5);
+
+	CHECK(!store.find(id));
+	CHECK(store.used_bytes() == 0);
+
+	// no chunk without a manifest
+	CHECK(is_error(store.store_chunk(id, 0, data.chunks.at(0), now), protocol::errc::no_such_upload));
+
+	// not the manifest the descriptor commits to
+	auto foreign = data.manifest;
+	foreign.chunk_digests[2] = securepath::test::random_octet_vector(64);
+	CHECK(is_error(store.open_upload(data.descriptor, foreign, now), protocol::errc::invalid_data_manifest));
+	auto short_manifest = data.manifest;
+	short_manifest.chunk_digests.pop_back();
+	CHECK(is_error(store.open_upload(data.descriptor, short_manifest, now), protocol::errc::invalid_data_manifest));
+	CHECK(!store.find(id));
+
+	auto have = store.open_upload(data.descriptor, data.manifest, now);
+	REQUIRE(have);
+	CHECK(have->size() == 5);
+	CHECK(have->count() == 0);
+	CHECK(store.used_bytes() == data.descriptor.enc_size);
+
+	// junk dies at the edge: a changed chunk, a chunk of another position, a chunk past the end
+	auto junk = data.chunks.at(1);
+	junk[7] ^= 0x01;
+	CHECK(is_error(store.store_chunk(id, 1, junk, now), protocol::errc::invalid_data_chunk));
+	CHECK(is_error(store.store_chunk(id, 1, data.chunks.at(2), now), protocol::errc::invalid_data_chunk));
+	CHECK(is_error(store.store_chunk(id, 5, data.chunks.at(0), now), protocol::errc::invalid_data_chunk));
+	CHECK(store.find(id)->have.count() == 0);
+
+	auto stored = store.store_chunk(id, 3, data.chunks.at(3), now);
+	REQUIRE(stored);
+	CHECK(!stored.value());
+	CHECK(store.store_chunk(id, 0, data.chunks.at(0), now));
+
+	// the connection went: the next manifest is answered with what is held
+	auto resumed = store.open_upload(data.descriptor, data.manifest, now);
+	REQUIRE(resumed);
+	CHECK(resumed->count() == 2);
+	CHECK(resumed->test(0));
+	CHECK(resumed->test(3));
+	CHECK(store.used_bytes() == data.descriptor.enc_size);
+
+	// the same descriptor id with other sizes is not this data
+	auto contradicting = data.descriptor;
+	contradicting.chunk_size = 900;
+	CHECK(is_error(store.open_upload(contradicting, data.manifest, now), protocol::errc::invalid_data_manifest));
+
+	for(std::uint64_t no : {1u, 2u, 4u}) {
+		auto res = store.store_chunk(id, no, data.chunks.at(no), now);
+		REQUIRE(res);
+		CHECK(res.value() == (no == 4));
+	}
+	CHECK(store.find(id)->state == record_data_state::in_sync);
+	for(auto const& [no, chunk] : data.chunks) {
+		CHECK(store.read_chunk(id, no) == chunk);
+	}
+
+	// complete: a further manifest says so, a repeated chunk does no harm
+	auto again = store.open_upload(data.descriptor, data.manifest, now);
+	REQUIRE(again);
+	CHECK(again->complete());
+	auto repeated = store.store_chunk(id, 2, data.chunks.at(2), now);
+	REQUIRE(repeated);
+	CHECK(repeated.value());
+}
+
+// RD10: resource quota - refuses uploads, never says anything about validity
+TEST_CASE("server data store quota", "[unit]") {
+	auto const now = clock_type::now();
+	auto const small = make_data(100);      // pads to 4096
+	auto const medium = make_data(6000);
+	auto const big = make_data(20000);
+
+	SECTION("single data size") {
+		server_data_store store{fresh_database(), data_root, data_quota{medium.descriptor.enc_size, 0}};
+		CHECK(store.open_upload(small.descriptor, small.manifest, now));
+		CHECK(store.open_upload(medium.descriptor, medium.manifest, now));
+		CHECK(is_error(store.open_upload(big.descriptor, big.manifest, now), protocol::errc::data_too_big));
+		CHECK(!store.find(big.descriptor.manifest_digest));
+	}
+
+	SECTION("storage total with reservation") {
+		auto const limit = small.descriptor.enc_size + medium.descriptor.enc_size;
+		server_data_store store{fresh_database(), data_root, data_quota{0, limit}};
+		// an opened upload reserves its whole size, held or not
+		CHECK(store.open_upload(medium.descriptor, medium.manifest, now));
+		CHECK(store.used_bytes() == medium.descriptor.enc_size);
+		CHECK(is_error(store.open_upload(big.descriptor, big.manifest, now), protocol::errc::data_quota_exceeded));
+		CHECK(store.open_upload(small.descriptor, small.manifest, now));
+		CHECK(store.used_bytes() == limit);
+
+		auto const another = make_data(100);
+		CHECK(is_error(store.open_upload(another.descriptor, another.manifest, now), protocol::errc::data_quota_exceeded));
+		CHECK(!store.find(another.descriptor.manifest_digest));
+
+		// a resume of what is reserved is never refused, and works at the limit
+		CHECK(store.open_upload(medium.descriptor, medium.manifest, now));
+		for(auto const& [no, chunk] : medium.chunks) {
+			CHECK(store.store_chunk(medium.descriptor.manifest_digest, no, chunk, now));
+		}
+		CHECK(store.find(medium.descriptor.manifest_digest)->state == record_data_state::in_sync);
+
+		// an expired reservation makes room again
+		CHECK(store.expire_incomplete(now + 1s) == 1);
+		CHECK(store.used_bytes() == medium.descriptor.enc_size);
+		CHECK(store.open_upload(another.descriptor, another.manifest, now));
+	}
+}
+
+// RD5: incomplete uploads expire, complete data never does
+TEST_CASE("server data store expiry", "[unit]") {
+	auto db = fresh_database();
+	auto const t0 = clock_type::now();
+	auto const done = make_data(3000);
+	auto const stale = make_data(3000);
+	auto const active = make_data(3000);
+	{
+		server_data_store store{db, data_root};
+		for(auto const* d : {&done, &stale, &active}) {
+			REQUIRE(store.open_upload(d->descriptor, d->manifest, t0));
+			REQUIRE(store.store_chunk(d->descriptor.manifest_digest, 0, d->chunks.at(0), t0));
+		}
+		for(auto const& [no, chunk] : done.chunks) {
+			REQUIRE(store.store_chunk(done.descriptor.manifest_digest, no, chunk, t0));
+		}
+		// one upload goes on an hour later
+		REQUIRE(store.store_chunk(active.descriptor.manifest_digest, 1, active.chunks.at(1), t0 + 1h));
+
+		CHECK(store.expire_incomplete(t0) == 0);
+	}
+
+	// the bookkeeping survives a restart
+	server_data_store store{db, data_root};
+	CHECK(store.expire_incomplete(t0 + 30min) == 1);
+	CHECK(!store.find(stale.descriptor.manifest_digest));
+	CHECK(!std::filesystem::exists(data_root / to_hex(stale.descriptor.manifest_digest)));
+	CHECK(store.find(done.descriptor.manifest_digest)->state == record_data_state::in_sync);
+	auto const kept = store.find(active.descriptor.manifest_digest);
+	REQUIRE(kept);
+	CHECK(kept->have.count() == 2);
+	CHECK(store.used_bytes() == done.descriptor.enc_size + active.descriptor.enc_size);
+
+	// the expired one starts over
+	auto have = store.open_upload(stale.descriptor, stale.manifest, t0 + 2h);
+	REQUIRE(have);
+	CHECK(have->count() == 0);
+
+	CHECK(store.expire_incomplete(t0 + 3h) == 2);
+	CHECK(store.find(done.descriptor.manifest_digest));
+	CHECK(store.used_bytes() == done.descriptor.enc_size);
+	CHECK(store.expire_incomplete(t0 + 100h) == 0);
+}
+
+}

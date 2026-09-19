@@ -19,6 +19,13 @@ namespace {
 		, "invalid storage modes"
 		, "storage syncing"
 		, "record too big"
+		, "invalid data ticket"
+		, "data ticket expired"
+		, "invalid data manifest"
+		, "invalid data chunk"
+		, "no such upload"
+		, "data quota exceeded"
+		, "data too big"
 		};
 
 	using category_type = def_error_category<errc>;

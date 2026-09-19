@@ -389,6 +389,20 @@ bool record_data_store::set_manifest(data_id const& id, data_manifest const& man
 	return ok;
 }
 
+std::optional<data_state_row> record_data_store::register_data(data_descriptor const& descriptor, data_manifest const& manifest) {
+	std::optional<data_state_row> ret;
+	if(manifest.matches(descriptor)) {
+		std::unique_lock lock{impl_->mutex};
+		auto const local_id = impl_->table.ensure(descriptor);
+		auto row = impl_->table.find(local_id);
+		if(row && row->descriptor == descriptor) {
+			impl_->table.set_manifest(local_id, manifest);
+			ret = std::move(row);
+		}
+	}
+	return ret;
+}
+
 std::optional<data_manifest> record_data_store::manifest(data_id const& id) const {
 	std::optional<data_manifest> ret;
 	auto const row = impl_->table.find(id);

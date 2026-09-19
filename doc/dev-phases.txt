@@ -15,7 +15,7 @@
 
 --- phase 2 (multi change per oid and per record support)
 + previous oid support (server validation + per-change rebase, 2026-08-27)
-* record data support (design + steps: record_data.txt; descriptor/chunk crypto, chain limits, client data store, engine create path + upload queue done, RDS 1/2/3/8, 2026-09-18; data servers, tickets and download open)
+* record data support (design + steps: record_data.txt; descriptor/chunk crypto, chain limits, client data store, engine create path + upload queue, data server + client data channel done, RDS 1/2/3/4/8, 2026-09-19; ticket issuing/availability and download open)
 + user conflict handling (conflict_policy rebase_on_top/ask + on_object_conflict, 2026-08-27)
 
 --- phase 3 (full record support)

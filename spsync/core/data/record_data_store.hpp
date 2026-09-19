@@ -100,6 +100,14 @@ public:
 	/// keep the manifest of a known data; false when it is not the one the descriptor commits to
 	bool set_manifest(data_id const&, data_manifest const&);
 
+	/**
+	 * Make a data known by descriptor and manifest in one step (a data server learns of a
+	 * data from a ticket, not from a record): the row as deferred with nothing held when
+	 * it is new. Nullopt when the manifest is not the descriptor's or the descriptor
+	 * contradicts what is known of the data id.
+	 */
+	std::optional<data_state_row> register_data(data_descriptor const&, data_manifest const&);
+
 	std::optional<data_manifest> manifest(data_id const&) const;
 
 	/**

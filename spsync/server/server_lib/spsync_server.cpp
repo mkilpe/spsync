@@ -16,6 +16,7 @@ spsync_server::spsync_server(spsync_server_params params)
 , params_(std::move(params))
 , storage_context_store_(construct_context())
 , storage_server_(*storage_context_store_, params_.storage_params)
+, data_server_(*storage_context_store_, params_.data_params)
 {
 	// role dispatched: the same context accepts clients/peers and dials out to peers (plan 4.1)
 	network::enable_pk_handshake(*storage_context_store_);
@@ -25,6 +26,7 @@ spsync_server::spsync_server(network::context& context, spsync_server_params par
 : key_server::server(context, params.key_params)
 , params_(std::move(params))
 , storage_server_(context, params_.storage_params)
+, data_server_(context, params_.data_params)
 {
 }
 
@@ -45,6 +47,9 @@ int spsync_server::run_and_wait() {
 	int ret = key_server::server::run(4, 2);
 	if(!ret) {
 		storage_server_.start();
+		if(params_.data_params.enabled) {
+			data_server_.start();
+		}
 		key_server::server::wait();
 	}
 	return ret;
@@ -52,6 +57,7 @@ int spsync_server::run_and_wait() {
 
 void spsync_server::close() {
 	LOG_TRACE("closing spsync server");
+	data_server_.close();
 	storage_server_.close();
 	key_server::server::close();
 }

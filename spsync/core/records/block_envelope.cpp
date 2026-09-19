@@ -1,42 +1,16 @@
 #include "block_envelope.hpp"
 
+#include <spsync/util/digest_buffer.hpp>
+
 #include <securepath/crypto/hash.hpp>
 #include <securepath/log/log.hpp>
 
-#include <string_view>
-
 namespace securepath::sync {
-namespace {
-
-void append_u32(octet_vector& buf, std::uint32_t v) {
-	for(int i = 3; i >= 0; --i) {
-		buf.push_back(std::uint8_t(v >> (i*8)));
-	}
-}
-
-void append_u64(octet_vector& buf, std::uint64_t v) {
-	for(int i = 7; i >= 0; --i) {
-		buf.push_back(std::uint8_t(v >> (i*8)));
-	}
-}
-
-void append_sized(octet_vector& buf, octet_vector const& v) {
-	append_u32(buf, std::uint32_t(v.size()));
-	buf.insert(buf.end(), v.begin(), v.end());
-}
-
-}
 
 octet_vector block_envelope::assignment_digest(octet_vector const& storage_id) const {
-	std::string_view const context{"spsync-assign"};
-	octet_vector buf;
-	buf.insert(buf.end(), context.begin(), context.end());
-	append_sized(buf, storage_id);
-	append_sized(buf, origin_.data());
-	append_u64(buf, term_);
-	append_u64(buf, block_.sequence().value);
-	append_sized(buf, block_.hash());
-	return crypto::hash(buf);
+	util::digest_buffer buf{"spsync-assign"};
+	buf.sized(storage_id).sized(origin_.data()).u64(term_).u64(block_.sequence().value).sized(block_.hash());
+	return crypto::hash(buf.octets());
 }
 
 void block_envelope::sign(octet_vector const& storage_id, crypto::private_key const& key) {

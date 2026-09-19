@@ -100,6 +100,12 @@ std::vector<std::uint64_t> data_state_table::all_ids() const {
 	return ret;
 }
 
+std::uint64_t data_state_table::total_enc_size() const {
+	auto q = db_->prepare("SELECT sum(enc_size) FROM record_data;");
+	// a sum is a plain integer
+	return static_cast<std::uint64_t>(q.execute().value<std::int64_t>(0).value_or(0));
+}
+
 void data_state_table::set_state(std::uint64_t local_id, record_data_state state) {
 	auto q = db_->prepare("UPDATE record_data SET state = :state WHERE key = :k;");
 	q.bind(":state", static_cast<std::int64_t>(std::to_underlying(state)));
