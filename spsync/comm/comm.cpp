@@ -1,17 +1,27 @@
 #include "comm.hpp"
 #include "net_connection_impl.hpp"
 
+#include <spsync/core/progress.hpp>
 #include <spsync/protocol/error.hpp>
 
 namespace securepath::sync {
 
-comm::comm(network_connection_impl* nc_impl, storage_id sid, record_storage& s, sync::progress& p, std::optional<storage_modes> expected_modes)
+comm::comm(network_connection_impl* nc_impl, storage_id sid, record_storage& s, sync::progress& p, std::optional<storage_modes> expected_modes
+	, record_data_store* data, data_channel* channel)
 : nc_impl_(nc_impl)
 , sid_(std::move(sid))
 , expected_modes_(expected_modes)
 , storage_(s)
 , progress_(p)
+, data_(data)
 {
+	if(data && channel) {
+		uploader_ = std::make_unique<data_uploader>(*data, *channel, data_upload_config{}
+			, [this](data_id const& id, std::optional<error> err) { on_upload_done(id, std::move(err)); }
+			, [this](data_id const& id, std::uint64_t transferred, std::uint64_t total) {
+				progress_.emit<progress_events::on_data_progress>(id, transferred, total, true);
+			});
+	}
 }
 
 comm::~comm()
@@ -29,6 +39,14 @@ void comm::on_connected() {
 
 void comm::on_disconnected(error const& err) {
 	assert(output_);
+	if(uploader_) {
+		// what the server got stays there; the engine asks again after the reconnect
+		uploader_->reset();
+	}
+	{
+		std::unique_lock lock{upload_mutex_};
+		uploads_.clear();
+	}
 	std::optional<error> opt_err;
 	if(err) {
 		opt_err = err;
@@ -116,12 +134,54 @@ request_handle comm::commit_record(record_handle h) {
 	return nc_impl_->commit_record(sid_, h->record());
 }
 
+request_handle comm::upload_data(data_id const& id) {
+	assert(output_);
+	request_handle handle{};
+	bool is_new = false;
+	{
+		std::unique_lock lock{upload_mutex_};
+		auto it = uploads_.find(id);
+		is_new = it == uploads_.end();
+		if(is_new) {
+			it = uploads_.emplace(id, ++nc_impl_->call_id).first;
+		}
+		handle = it->second;
+	}
+	if(is_new) {
+		if(uploader_) {
+			uploader_->enqueue(id);
+		} else {
+			on_upload_done(id, make_error(securepath::errc::not_supported, "the storage has no data channel"));
+		}
+	}
+	return handle;
+}
+
+void comm::on_upload_done(data_id const& id, std::optional<error> err) {
+	std::optional<request_handle> handle;
+	{
+		std::unique_lock lock{upload_mutex_};
+		auto it = uploads_.find(id);
+		if(it != uploads_.end()) {
+			handle = it->second;
+			uploads_.erase(it);
+		}
+	}
+	if(handle) {
+		output_->emit<comm_events::on_data_uploaded>(*handle, std::move(err));
+	}
+}
+
 sync::progress& comm::progress() const {
 	return progress_;
 }
 
 record_storage& comm::records() const {
 	return storage_;
+}
+
+record_data_store* comm::data() const {
+	return data_;
 }
 
 }

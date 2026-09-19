@@ -14,16 +14,21 @@ public:
 	std::deque<std::move_only_function<fetch_record_sig>> fetch_records_queue;
 	std::deque<std::move_only_function<fetch_data_sig>> fetch_data_queue;
 	std::deque<std::move_only_function<commit_sig>> commit_queue;
+	std::deque<std::move_only_function<upload_sig>> upload_queue;
+
+	record_data_store* data_store{};
+	std::vector<data_id> upload_requests;
 
 	// generic actions which are handled before the above specific ones
 	std::deque<std::move_only_function<void(comm_output&)>> action_queue;
 };
 
-comm_test_interface::comm_test_interface(sync::progress& p, record_storage& s)
+comm_test_interface::comm_test_interface(sync::progress& p, record_storage& s, record_data_store* data)
 : progress_(p)
 , records_(s)
 , impl_(std::make_unique<impl>())
 {
+	impl_->data_store = data;
 }
 
 comm_test_interface::~comm_test_interface()
@@ -44,6 +49,18 @@ void comm_test_interface::add_fetch_data_response(std::move_only_function<fetch_
 
 void comm_test_interface::add_commit_record_response(std::move_only_function<commit_sig> f) {
 	impl_->commit_queue.push_back(std::move(f));
+}
+
+void comm_test_interface::add_upload_data_response(std::move_only_function<upload_sig> f) {
+	impl_->upload_queue.push_back(std::move(f));
+}
+
+std::vector<data_id> const& comm_test_interface::upload_requests() const {
+	return impl_->upload_requests;
+}
+
+record_data_store* comm_test_interface::data() const {
+	return impl_->data_store;
 }
 
 void comm_test_interface::add_action(std::move_only_function<void(comm_output&)> f) {
@@ -124,6 +141,21 @@ request_handle comm_test_interface::commit_record(record_handle record) {
 			impl_->output->on_commit_response(ret, commit_response{impl_->current_seq, res});
 		} else {
 			LOG_TRACE("empty commit queue");
+		}
+	});
+	return ret;
+}
+
+request_handle comm_test_interface::upload_data(data_id const& id) {
+	request_handle ret = ++impl_->req_handle;
+	impl_->upload_requests.push_back(id);
+	impl_->event_queue.push_back([=, this] {
+		if(!impl_->upload_queue.empty()) {
+			auto res = impl_->upload_queue.front()(id);
+			impl_->upload_queue.pop_front();
+			impl_->output->on_data_uploaded(ret, res);
+		} else {
+			LOG_TRACE("empty upload queue");
 		}
 	});
 	return ret;

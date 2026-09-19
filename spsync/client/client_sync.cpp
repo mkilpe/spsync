@@ -1,5 +1,7 @@
 #include "client_sync.hpp"
 
+#include <spsync/core/data/record_data_store.hpp>
+
 #include <utility>
 #include <securepath/crypto/public_key_access.hpp>
 #include "record_util.hpp"
@@ -37,6 +39,9 @@ struct client_sync::impl : engine_output {
 	, crypto(cc.public_keys(), cc.private_data(), enc_keys, storage)
 	, config(std::move(config))
 	{
+		if(!this->config.data_root.empty()) {
+			data_store.emplace(db, this->config.data_root);
+		}
 		if(!db->has_table("members")) {
 			std::string prepare_str =
 				"CREATE TABLE members("
@@ -58,7 +63,10 @@ struct client_sync::impl : engine_output {
 	}
 
 	void init(storage_id const& storage_sid, network_connection& conn) {
-		storage_connection sconn{conn.create_storage_connection(storage_sid, storage, progress, storage_modes{config.mode, config.auth_mode, config.replication})};
+		// the way to the data servers comes with the data role (record_data.txt RDS 4/5):
+		// until then own data stays upload_pending
+		storage_connection sconn{conn.create_storage_connection(storage_sid, storage, progress
+			, storage_modes{config.mode, config.auth_mode, config.replication}, data_store ? &*data_store : nullptr)};
 		engine = std::make_unique<sync_engine>(event_loop(), sconn.input(), crypto, config);
 		engine->set_output(this);
 		net = &conn;
@@ -78,6 +86,14 @@ struct client_sync::impl : engine_output {
 
 	void on_record_rejected(record_handle rec, error err) override {
 		parent->on_record_rejected(rec, err);
+	}
+
+	void on_data_state_changed(data_id id, record_data_state state) override {
+		parent->on_data_state_changed(std::move(id), state);
+	}
+
+	void on_data_transfer_failed(data_id id, error err) override {
+		parent->on_data_transfer_failed(std::move(id), std::move(err));
 	}
 
 	void on_object_data_changed(record_handle rec) override {
@@ -263,6 +279,8 @@ public:
 	dummy_progress progress;
 
 	record_storage storage;
+	/// set when the config names a data directory
+	std::optional<record_data_store> data_store;
 	encryption_key_storage enc_keys;
 	sync::crypto_context crypto;
 
@@ -294,6 +312,13 @@ record_handle client_sync::send_data_change(object_id oid, metadata mdata, recor
 		throw make_error(securepath::errc::invalid_state, "client sync engine not initialised yet");
 	}
 	return impl_->engine->sync_object_change(std::move(oid), std::move(mdata), dhandle);
+}
+
+record_data_handle client_sync::object_data(record_handle rec, std::size_t change) {
+	if(!impl_->engine) {
+		throw make_error(securepath::errc::invalid_state, "client sync engine not initialised yet");
+	}
+	return impl_->engine->object_data(std::move(rec), change);
 }
 
 record_handle client_sync::send_user_change(users us, metadata mdata) {

@@ -302,6 +302,20 @@ encrypted_data_result data_writer::finish() {
 	return result;
 }
 
+void copy_record_data(record_data& source, data_writer& writer) {
+	std::uint64_t const size = source.size();
+	octet_vector piece(static_cast<std::size_t>(std::min<std::uint64_t>(size, 256 * 1024)));
+	std::uint64_t pos = 0;
+	while(pos < size) {
+		std::uint64_t const n = source.read(pos, piece.data(), std::min<std::uint64_t>(piece.size(), size - pos));
+		if(n == 0) {
+			throw make_error(securepath::errc::invalid_data, "record data source ended before its size");
+		}
+		writer.write(octet_span{piece}.first(static_cast<std::size_t>(n)));
+		pos += n;
+	}
+}
+
 // -- record_data_store --
 
 record_data_store::record_data_store(database::connection_ptr db, std::filesystem::path data_root)

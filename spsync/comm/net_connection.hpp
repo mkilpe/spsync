@@ -11,6 +11,7 @@ namespace securepath::sync {
 
 using storage_id = octet_vector;
 class network_connection_impl;
+struct data_channel;
 
 /**
  * Helper to connect input and output of storage to the network connection
@@ -73,7 +74,9 @@ public:
 
 	/// Create storage connection, returns storage connection helper. Nothing is received before the attach on the returned object is called.
 	/// When expected_modes is set, the server rejects the connection flow with storage_mode_mismatch if the storage modes differ.
-	storage_connection create_storage_connection(storage_id, record_storage&, sync::progress&, std::optional<storage_modes> expected_modes = {});
+	/// data is the storage's record data store, channel the way to its data servers (RD12); a storage without them carries no record data
+	storage_connection create_storage_connection(storage_id, record_storage&, sync::progress&, std::optional<storage_modes> expected_modes = {}
+		, record_data_store* data = nullptr, data_channel* channel = nullptr);
 
 	/// This will destroy the underlying comm_input, so make sure nothing is using it any more when this is called
 	void detach(storage_id const& id);

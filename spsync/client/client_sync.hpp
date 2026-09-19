@@ -29,7 +29,12 @@ public:
 	/// this needs to be called from the most derived class when destroying it to make sure there are no calls via the virtual functions any more
 	void stop_handler();
 
+	/// the data handle is a source streamed into the data store (engine_input::sync_object_change);
+	/// it needs sync_engine_config::data_root
 	record_handle send_data_change(object_id, metadata, record_data_handle = {});
+
+	/// the record data of a change of a data change record (engine_input::object_data)
+	record_data_handle object_data(record_handle, std::size_t change = 0);
 	record_handle send_user_change(users user_change, metadata = {});
 
 	std::deque<std::unique_ptr<member>> members() const;
@@ -54,6 +59,10 @@ protected:
 	virtual void on_user_change(record_handle, user_change) = 0;
 	/// the server rejected a pending record for good (engine_output::on_record_rejected)
 	virtual void on_record_rejected(record_handle, error) {}
+	/// the local state of a record data changed (engine_output::on_data_state_changed)
+	virtual void on_data_state_changed(data_id, record_data_state) {}
+	/// a record data transfer ended with an error (engine_output::on_data_transfer_failed)
+	virtual void on_data_transfer_failed(data_id, error) {}
 
 private:
 	class impl;

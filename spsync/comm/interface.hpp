@@ -22,12 +22,24 @@ struct comm_input {
 	/// Fetches record data for given record
 	virtual request_handle fetch_data(sequence_number record) = 0;
 
-	/// Tries to commit to a record and uploads the record data if committing was successful
+	/// Tries to commit to a record
 	virtual request_handle commit_record(record_handle) = 0;
+
+	/**
+	 * Uploads a data of the data store to the storage's data servers (RD7), to be asked
+	 * once a record naming the data is server confirmed. Answered with on_data_uploaded;
+	 * asking again for a data already on its way returns the handle of the running
+	 * upload. A lost connection ends the upload without an answer, the chunks the server
+	 * got stay there: ask again after the reconnect.
+	 */
+	virtual request_handle upload_data(data_id const&) = 0;
 
 	/// Accessors to common, shared infrastructure
 	virtual sync::progress& progress() const = 0;
 	virtual record_storage& records() const = 0;
+
+	/// the storage's record data store; null when the storage keeps no record data
+	virtual record_data_store* data() const = 0;
 };
 
 /**

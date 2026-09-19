@@ -385,14 +385,105 @@ Implementation steps
         truncation drops it, upgrade of the unique data_ref table).
       Not here: where the client keeps its data directory and the wiring into
       client_sync/engine (RDS 3), a content_digest index for the download skip
-      (RDS 3), fsync of chunk files (decide with the server store, RDS 4).
+      (RDS 6), fsync of chunk files (decide with the server store, RDS 4).
 
-- RDS 3  Engine create path and upload                                       [1.5d]
++ RDS 3  Engine create path and upload -- done 2026-09-18                   [1.5d]
       sync_object_change streams source -> local chunks + descriptor; upload
       queue in comm (ticket, manifest, chunks, resume; two datas in flight, a
-      window of 4-8 chunks, commit order), states and progress events, skip of
-      a download whose content_digest the client already holds. Tests:
+      window of 4-8 chunks, commit order), states and progress events. Tests:
       commit-then-upload ordering, interrupted upload resume.
+      Scope: the data servers (RDS 4) and the tickets (RDS 5) do not exist yet,
+      so the upload logic is complete and tested against an interface, the wire
+      packets and the real channel come with the servers that answer them. Until
+      then a real client's own data stays upload_pending (readable locally) and
+      the upload attempt reports not_supported.
+      + sources: core/data/source_record_data - memory_record_data and
+        file_record_data (read-only), what an application hands to
+        sync_object_change. The handle is a source only, streamed once in 256 KiB
+        pieces by copy_record_data into a data_writer; it never becomes the
+        stored data.
+      + engine create path: the source is streamed and encrypted BEFORE the
+        engine mutex is taken (a multi-gigabyte source must not stall the
+        engine; the call itself takes that long, engine_input documents it),
+        with the current group key and the storage's chunk size (limits learned
+        on attach, 1 MiB default until then). Under the mutex: writer.finish(),
+        descriptor halves into the change, record created and committed - the
+        sweep runs under the same mutex, so it never sees a finished data
+        without its record. A change that cannot become a record (too big for
+        max_record_size, no chain yet) sweeps its data away again; a source
+        shorter than its size() is refused before anything is registered.
+        Rebase keeps both descriptor halves untouched (update_record copies
+        header and plain data), the reference moves with set_record.
+      + upload trigger: request_uploads() asks the record storage for
+        confirmed_data_in_state(upload_pending) - the upload_pending data that a
+        server confirmed record (in_sync, acked) names, ordered by the sequence
+        of its first record = commit order - and calls comm.upload_data(data_id)
+        for what is not asked yet. One query covers every way a record gets
+        confirmed (commit answer, the server's push beating it, a fetch) and the
+        resume: it runs after a commit answer, a received record, a record
+        fetch and the sequence answer of a (re)connect. on_disconnected forgets
+        the requests; a failed upload is remembered for the connection and
+        tried again after the next connect (no retry storm on a quota refusal).
+      + answers: on_data_uploaded without error flips upload_pending -> in_sync
+        in the store and emits engine_output::on_data_state_changed(data_id,
+        state); with an error on_data_transfer_failed(data_id, error), state
+        unchanged. Data is named by data_id in events (several records may share
+        it). client_sync relays both and gets sync_engine_config::data_root: the
+        chunk directory (record-storages/<sid>/data next to the database),
+        empty = the storage keeps no record data and refuses changes with data.
+      + reading: engine_input::object_data(record, change index) /
+        client_sync::object_data - decrypts the change's header, takes the group
+        keys of the data header's key_seq (D9 candidates; after a rebase the
+        record key may be newer than the data key) and opens the store handle.
+        Works for own data (upload_pending) and for data of others (deferred,
+        size known, nothing held).
+      + comm: comm_input::upload_data(data_id) -> request handle, answered by
+        on_data_uploaded; comm_input::data() gives the engine the store (null =
+        no record data). comm owns a data_uploader when it has a store and a
+        data_channel (both optional parameters of create_storage_connection).
+      + data_channel (comm/data_channel.hpp): open_upload(descriptor, manifest)
+        -> the holder's have-bitmap, send_chunk(data_id, no, bytes) -> ack, both
+        answered once through a callback from any thread. What is behind it -
+        ticket from the record server, choice of the holder, data connection -
+        is the implementation's business (RDS 4/5).
+      + data_uploader (comm/data_uploader): queue in call order, max_datas = 2 on
+        their way, per data manifest first, then only the chunks the holder
+        lacks with window = 6 unanswered; resume is the same flow. A failure
+        stops sending for that data and reports once the outstanding answers are
+        in; the next data is not held up. reset() on disconnect forgets
+        everything (generation counter: late answers are ignored, no callback),
+        the engine queues again after the reconnect. The channel is never called
+        with the lock held and may answer inside the call: rounds are flagged,
+        never nested. It moves ciphertext only and does not touch data states.
+      + progress: progress_events::on_data_progress(data_id, transferred, total,
+        upload) on the storage's progress handler - encrypted octets known to
+        be at the holder of enc_size, a resumed upload starts from what the
+        holder had.
+      + tests: comm test_data_uploader (fake holder answering at once, held, or
+        from another thread: order and two at a time, window, resume from a
+        partial bitmap, interrupted + re-queued sends only the rest, refused
+        manifest / chunk / throwing channel / data not held, 600 chunk data
+        without nested rounds), engine test_engine_data (commit then upload,
+        commit order of two datas, no second request while on its way, resume
+        after reconnect, stale answer ignored, failure left alone until the next
+        connect, too big record and short source leave no data, learned chunk
+        size, file source, engine without a store), client test_comm_upload
+        (comm wiring: answer event, progress events, not_supported without a
+        channel) and test_client_sync "data change with record data" (two
+        clients over the real server: record commits with its descriptor, author
+        reads its data back, the other member sees deferred data of the right
+        size), engine test_engine_sync "rebases a change with record data"
+        (two clients through the real chain logic: the losing change is rebuilt
+        with the same descriptor, its data keeps id, reference and chunks, the
+        upload is asked once the rebased record is confirmed, the server's
+        record_data index names both datas), core (sources, copy_record_data,
+        chunk_enc_size, confirmed_data_in_state).
+      Moved: the skip of a download whose content_digest is already held goes to
+      RDS 6. It is engine logic at the fetch decision: the held copy can only be
+      read through the header of a record naming it, and adopting it means
+      re-encrypting with the new data's nonce and key (the encryptor needs a
+      fixed-nonce constructor) and checking the result against the manifest
+      digest.
 
 - RDS 4  Data role: server store and upload handling                         [1.5d]
       The data listener (own port), chunk files + data table, ticket
@@ -400,6 +491,11 @@ Implementation steps
       side), expiry of incomplete uploads, availability announcements to the
       record servers (RD13). Tests: junk chunk rejected, bad/expired ticket
       rejected, resume reply, quota errors, announcement after completion.
+      From RDS 2/3: the store pieces are reusable as they are (chunk_files,
+      have_bitmap, data_manifest::verify_chunk); the data protocol packets and
+      the client's real data_channel (data connection, open_upload/send_chunk
+      over the wire) are defined here together with the listener that answers
+      them, and client_sync hands the channel to create_storage_connection.
 
 - RDS 5  Record role: tickets, endpoints, availability table                   [1d]
       Ticket issue (upload placement, download holder ordering, quota
@@ -407,12 +503,19 @@ Implementation steps
       table fed by data servers and relayed between record servers with the
       heads, load fields. Tests: holder order by completeness/load, endpoint list
       persisted by the client, ticket for an unknown data refused.
+      From RDS 2: the record server already has a record_data row per data_id
+      its chain names (descriptor sizes included) and the references from the
+      object rows, so a ticket request can name the data_id alone and "unknown
+      data" is a lookup; the ticket step sits inside the client's data_channel.
 
 - RDS 6  Download path                                                         [1d]
       Client data connections to the holders, request_data/response_data ranges
       with parallel ranges across holders, notify_data, lazy/auto fetch policy,
       verification on fetch, redirect handling and failover down the holder
-      list, transfer quota windows (RD10) on serving. Tests: second client
+      list, transfer quota windows (RD10) on serving; the manifest is fetched
+      before the chunks (the store verifies every chunk against it, RDS 2); the
+      skip of a download whose content_digest is already held (moved here from
+      RDS 3). Tests: second client
       fetches while upload in progress (remote_not_complete), completes after
       notify, holder down -> next holder, quota-exceeded fetch resumes in the
       next window.

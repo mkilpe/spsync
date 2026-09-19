@@ -4,6 +4,7 @@
 #include "rebase_policy.hpp"
 #include "types.hpp"
 
+#include <spsync/core/data/record_data_store.hpp>
 #include <spsync/core/encryption_key_storage.hpp>
 #include <spsync/protocol/types.hpp>
 #include <spsync/protocol/error.hpp>
@@ -14,6 +15,7 @@
 #include <algorithm>
 #include <map>
 #include <mutex>
+#include <set>
 
 #define LTRACE(format, ...) LOG_TRACE(format " (rsid={})" __VA_OPT__(,) __VA_ARGS__, config.log_id)
 #define LINFO(format, ...) LOG_INFO(format " (rsid={})" __VA_OPT__(,) __VA_ARGS__, config.log_id)
@@ -34,6 +36,7 @@ public:
 	: comm(comm)
 	, crypto(cc)
 	, records(comm.records())
+	, data(comm.data())
 	, config(std::move(config))
 	{
 		// the limits learned on an earlier attach (RDS 8); zero until then
@@ -643,6 +646,7 @@ public:
 		}
 		// only the pending_sync partials are left with server sequences; drop them
 		records.truncate_from(sequence_number{1});
+		sweep_data();
 		records.set_cursor_owner(owner.data());
 		server_seq = sequence_number{};
 	}
@@ -902,6 +906,156 @@ public:
 		}
 	}
 
+	// -- record data (record_data.txt RD7) --
+
+	/// the chunk size new data is cut into: the storage's, the default until it is learned
+	std::uint32_t data_chunk_size() const {
+		return limits.chunk_size != 0 ? limits.chunk_size : default_chunk_size;
+	}
+
+	/**
+	 * Stream a source into the data store, encrypted. The writer is finished by the
+	 * caller under the engine mutex together with the creation of the record, so the
+	 * sweep never sees the data without its record; the streaming itself takes the
+	 * mutex only for the key, a big source does not stall the engine.
+	 */
+	data_writer stream_source(record_data& source) {
+		if(!data) {
+			throw make_error(errc::invalid_configuration, "the storage keeps no record data");
+		}
+		std::unique_lock lock{mutex};
+		auto const key = crypto.enc_keys().current_key();
+		auto const chunk_size = data_chunk_size();
+		lock.unlock();
+
+		auto writer = data->create(key, chunk_size);
+		copy_record_data(source, writer);
+		return writer;
+	}
+
+	/**
+	 * Ask comm for the uploads that are owed: the upload_pending data of server
+	 * confirmed records in commit order (RD4: an upload starts after the record is
+	 * acked; after a reconnect this is the resume). A data already asked for, or refused
+	 * during this connection, is left alone.
+	 */
+	void request_uploads() {
+		if(data) {
+			for(auto const& id : records.confirmed_data_in_state(record_data_state::upload_pending)) {
+				bool const asked = std::any_of(uploads.begin(), uploads.end(), [&](auto const& u) { return u.second == id; });
+				if(!asked && !failed_uploads.contains(id)) {
+					auto const handle = comm.upload_data(id);
+					uploads[handle] = id;
+					LINFO("requested record data upload [data_id = {}, request handle = {}]", to_hex(id), handle);
+				}
+			}
+		}
+	}
+
+	void on_upload_answer(request_handle handle, std::optional<error> const& err) {
+		auto it = uploads.find(handle);
+		if(it != uploads.end()) {
+			data_id const id = it->second;
+			uploads.erase(it);
+			if(err) {
+				LWARN("record data upload failed [data_id = {}]: {}", to_hex(id), *err);
+				failed_uploads.insert(id);
+				if(output) {
+					output->emit<engine_events::on_data_transfer_failed>(id, *err);
+				}
+			} else {
+				mark_uploaded(id);
+			}
+		}
+	}
+
+	void mark_uploaded(data_id const& id) {
+		auto const row = data->find(id);
+		if(row && row->state == record_data_state::upload_pending) {
+			LINFO("record data uploaded [data_id = {}]", to_hex(id));
+			data->set_state(id, record_data_state::in_sync);
+			if(output) {
+				output->emit<engine_events::on_data_state_changed>(id, record_data_state::in_sync);
+			}
+		}
+	}
+
+	/**
+	 * Drop the data no stored record references any more (RD9): records went with a
+	 * truncation or a history cut, or a record could not be created for its data. Runs
+	 * under the engine mutex like the creation of a data with its record.
+	 */
+	void sweep_data() {
+		if(data) {
+			auto const removed = data->remove_unreferenced(
+				[this](std::uint64_t local_id) { return records.data_reference_count(local_id) != 0; });
+			if(removed != 0) {
+				LINFO("dropped {} unreferenced record data", removed);
+			}
+		}
+	}
+
+	/// the record data of a change, null when there is none or it cannot be read
+	record_data_handle open_object_data(record_handle const& h, std::size_t change) const {
+		record_data_handle ret;
+		if(data && h && h->type() == data_change_record_tag) {
+			auto const block = h->record();
+			auto const rec = block.deserialise_to<data_change_record>();
+			auto const key = find_record_key(rec, block);
+			if(key) {
+				data_change_record_verifier ver(*key, rec, block.auth());
+				auto const headers = ver.headers();
+				if(ver.is_authentic() && change < headers.size()) {
+					ret = open_change_data(headers[change]);
+				}
+			}
+		}
+		return ret;
+	}
+
+	record_data_handle open_change_data(data_change_record_verifier::single_data const& change) const {
+		record_data_handle ret;
+		auto const info = change.header.data_info();
+		if(change.data.data && info) {
+			// the data key derives from the group key of the header's sequence, which
+			// may differ from the record's after a rebase; colliding rotations (D9)
+			// leave several candidates
+			auto const keys = crypto.enc_keys().find_all(info->key_seq);
+			if(!keys.empty()) {
+				ret = data->open(keys, *change.data.data, *info);
+			}
+		}
+		return ret;
+	}
+
+	/// create and commit the record of an object change; data is what a finished writer returned
+	record_handle create_object_change(object_id oid, metadata mdata, std::optional<encrypted_data_result> const& change_data) {
+		auto last_oid_record = records.find_last(oid);
+		auto last_block = base_block();
+		if(!last_block.is_valid()) {
+			throw error(errc::invalid_record_chain_state, "Can't find last record, data change cannot be first record");
+		}
+		record_tag last_oid_tag = last_oid_record ? last_oid_record->tag() : record_tag{};
+
+		std::optional<crypto::private_key> signer;
+		if(config.auth_mode == auth_mode::sign_records) {
+			signer = my_private_key(crypto.private_data());
+		}
+		data_change_record_creator creator(crypto.enc_keys().current_key(), last_block, signer
+			, {}, last_special_tag());
+		if(change_data) {
+			creator.add_change(std::move(oid), last_oid_tag, std::move(mdata), change_data->descriptor, change_data->header);
+		} else {
+			creator.add_change(std::move(oid), last_oid_tag, std::move(mdata));
+		}
+
+		auto record = creator.result();
+		check_record_size(record);
+		record_handle h = records.create(record);
+		commit_record(h);
+		return h;
+	}
+
 	void update_server_seq(sequence_number s) {
 		if(s > server_seq) {
 			LTRACE("biggest seen server sequence: {}", s);
@@ -914,6 +1068,8 @@ public:
 	comm_input& comm;
 	crypto_context& crypto;
 	record_storage& records;
+	/// the storage's record data store; null when the storage keeps no record data
+	record_data_store* data{};
 	sync_engine_config config;
 	engine_output* output{};
 	sequence_number server_seq;
@@ -931,6 +1087,10 @@ public:
 	/// pending records the server rejected; try_commit_pending skips them while they are
 	/// unchanged, new records / a completed fetch / a reconnect clear the marks
 	std::map<record_tag, rejection> rejected_pending;
+	/// the data uploads asked from comm without an answer yet, by request handle
+	std::map<request_handle, data_id> uploads;
+	/// data whose upload failed during this connection; tried again after the next connect
+	std::set<data_id> failed_uploads;
 	// set when the server is suspected of showing two histories; commits stop (plan 2.6)
 	bool fork_suspected{};
 };
@@ -981,6 +1141,8 @@ void sync_engine::on_connected() {
 	std::unique_lock lock{impl_->mutex};
 	impl_->pushing_pending_commit = 0;
 	impl_->clear_rejections();
+	impl_->uploads.clear();
+	impl_->failed_uploads.clear();
 	auto handle = impl_->comm.fetch_sequence_number();
 	LTRACE("on_connected, requested sequence number (request handle {})", handle);
 }
@@ -990,6 +1152,7 @@ void sync_engine::on_disconnected(std::optional<error> err) {
 	impl_->pushing_pending_commit = 0;
 	// the answers to these never come
 	impl_->in_flight_commits.clear();
+	impl_->uploads.clear();
 	LTRACE("on_disconnected [error = {}]", err.value_or(error()));
 	// nothing for sync_engine
 }
@@ -1005,6 +1168,8 @@ void sync_engine::on_sequence_number_response(request_handle req_handle, result<
 			//already up-to-date with server but perhaps we have some local pending commits
 			impl_->try_commit_pending();
 		}
+		// the uploads a lost connection interrupted (RD4: resume by manifest)
+		impl_->request_uploads();
 	} else {
 		LINFO("on_sequence_number_response with error: {} (request handle {})", res.get_error(), req_handle);
 	}
@@ -1027,6 +1192,8 @@ void sync_engine::on_record_response(request_handle req_handle, record_response 
 			} else {
 				impl_->on_fetch_complete();
 			}
+			// an own record may have been confirmed by the fetch instead of its commit answer
+			impl_->request_uploads();
 		} else {
 			impl_->on_fetch_complete();
 		}
@@ -1061,6 +1228,8 @@ void sync_engine::on_commit_response(request_handle req_handle, commit_response 
 				if(res.envelope) {
 					handle->set_assignment(serialisation::asn_der_serialise(*res.envelope));
 				}
+				// the record exists on the server: its data may follow (RD4)
+				impl_->request_uploads();
 				impl_->try_commit_pending();
 			} else {
 				LWARN("commit reply with unknown tag [block id = {}, tag = {}]", id, to_hex(block.tag()));
@@ -1091,49 +1260,51 @@ void sync_engine::on_commit_response(request_handle req_handle, commit_response 
 	}
 }
 
-void sync_engine::on_data_uploaded(request_handle req_handle, std::optional<error>) {
-	assert(not "implemented");
+void sync_engine::on_data_uploaded(request_handle req_handle, std::optional<error> err) {
+	std::unique_lock lock{impl_->mutex};
+	LINFO("on_data_uploaded [request handle = {}]", req_handle);
+	impl_->on_upload_answer(req_handle, err);
 }
 
 void sync_engine::on_record_received(chain_block const& block, std::optional<block_envelope> const& envelope) {
 	std::unique_lock lock{impl_->mutex};
 	LINFO("on_record_received [seq = {}]", block.sequence());
 	impl_->handle_incoming_record(block, envelope);
+	// the server's push of an own record can beat its commit answer
+	impl_->request_uploads();
 }
 
 
 //--- engine_input interface, see interface.hpp
 
-//f: for now just implement plain record without data
-record_handle sync_engine::sync_object_change(object_id oid, metadata mdata, record_data_handle) {
+record_handle sync_engine::sync_object_change(object_id oid, metadata mdata, record_data_handle source) {
+	// the source is streamed before the engine is locked: it may be big
+	std::optional<data_writer> writer;
+	if(source) {
+		writer.emplace(impl_->stream_source(*source));
+	}
+
 	std::unique_lock lock{impl_->mutex};
 	LTRACE("sync object change: oid={}", oid.to_hex());
 
-	auto last_oid_record = impl_->records.find_last(oid);
-	auto last_block = impl_->base_block();
-
-	if(!last_block.is_valid()) {
-		throw error(errc::invalid_record_chain_state, "Can't find last record, data change cannot be first record");
+	std::optional<encrypted_data_result> change_data;
+	if(writer) {
+		change_data = writer->finish();
 	}
-
-	record_tag last_oid_tag = last_oid_record ? last_oid_record->tag() : record_tag{};
-
-	std::optional<crypto::private_key> signer;
-	if(impl_->config.auth_mode == auth_mode::sign_records) {
-		signer = my_private_key(impl_->crypto.private_data());
+	try {
+		return impl_->create_object_change(std::move(oid), std::move(mdata), change_data);
+	} catch(...) {
+		// no record: the data just finished has nothing referencing it
+		if(change_data) {
+			impl_->sweep_data();
+		}
+		throw;
 	}
-	data_change_record_creator creator(impl_->crypto.enc_keys().current_key(), last_block, signer
-		, {}, impl_->last_special_tag());
-	creator.add_change(std::move(oid), last_oid_tag, std::move(mdata));
+}
 
-	auto record = creator.result();
-	impl_->check_record_size(record);
-	record_handle h = impl_->records.create(record);
-	//f: handle record data
-
-	impl_->commit_record(h);
-
-	return h;
+record_data_handle sync_engine::object_data(record_handle h, std::size_t change) {
+	std::unique_lock lock{impl_->mutex};
+	return impl_->open_object_data(h, change);
 }
 
 record_handle sync_engine::sync_user_change(plain_user_change_data change_data, metadata mdata) {
@@ -1205,6 +1376,7 @@ octet_vector sync_engine::prune_history(record_tag const& segment_tag) {
 	auto const anchor = segment->block_id();
 	auto retained = impl_->records.object_chain_tags_below(anchor.sequence);
 	auto removed = impl_->records.truncate_prefix(anchor.sequence, retained);
+	impl_->sweep_data();
 	LINFO("pruned local history [anchor=({},{}), removed={}, retained={}]"
 		, anchor.sequence, to_hex(anchor.hash), removed.size(), retained.size());
 

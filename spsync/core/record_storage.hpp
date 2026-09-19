@@ -1,7 +1,9 @@
 #pragma once
 
+#include "record_data.hpp"
 #include "record_interface.hpp"
 #include "sync_mode.hpp"
+#include <spsync/core/data/data_descriptor.hpp>
 #include <securepath/database/connection.hpp>
 
 #include <deque>
@@ -186,6 +188,14 @@ public:
 	 * references is dead (record_data.txt RD9, record_data_store::remove_unreferenced).
 	 */
 	std::uint64_t data_reference_count(std::uint64_t data_ref) const;
+
+	/**
+	 * The data in the given state that a server confirmed record (in_sync, acked)
+	 * references, ordered by the sequence of the first such record: with upload_pending
+	 * the uploads still owed, in commit order (RD4/RD7 - an upload starts after the
+	 * record is acked and resumes after a reconnect).
+	 */
+	std::vector<data_id> confirmed_data_in_state(record_data_state) const;
 
 
 	/// create new record, the first function sets the state to be unknown and the object id is not set

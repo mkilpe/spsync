@@ -43,6 +43,7 @@ public:
 
 	// --- engine_input interface, see interface.hpp ---
 	virtual record_handle sync_object_change(object_id, metadata, record_data_handle = {});
+	virtual record_data_handle object_data(record_handle, std::size_t change = 0);
 	virtual record_handle sync_user_change(plain_user_change_data change_data, metadata = {});
 	virtual record_handle sync_segment_end(metadata = {});
 

@@ -2,6 +2,7 @@
 #include <spsync/test/test_block_creator.hpp>
 
 #include <spsync/client/record_util.hpp>
+#include <spsync/core/data/source_record_data.hpp>
 #include <spsync/engine/record_creator.hpp>
 #include <spsync/protocol/error.hpp>
 #include <spsync/engine/record_verifier.hpp>
@@ -394,6 +395,66 @@ TEST_CASE("engine sync object conflict rebase", "[unit]") {
 	CHECK(h->record().deserialise_to<data_change_record>().op_id() == original_op);
 	WAIT_CHECK(observer.conflicts == 1, 2s);
 	context.client(1).engine.set_output(nullptr);
+}
+
+// (RDS 3) a change with record data that loses the race is rebased with its data: the
+// descriptor halves move into the rebuilt record, the data keeps its id, its reference
+// and its chunks, and is uploaded once the rebased record is confirmed. The other
+// client sees both datas as deferred; the server indexes what its chain names
+TEST_CASE("engine sync rebases a change with record data", "[unit]") {
+	test::test_sync_context context(chain_sync_config{sync_mode::require_all_seen});
+	context.add_client(true, 2);
+	context.create_initial_record();
+	while(context.handle_events()) {}
+
+	auto oid = create_object_id();
+	context.client(0).engine.sync_object_change(oid, metadata{});
+	while(context.handle_events()) {}
+
+	auto const content0 = securepath::test::random_octet_vector(3000);
+	auto const content1 = securepath::test::random_octet_vector(70000);
+	auto h0 = context.client(0).engine.sync_object_change(oid, metadata{}, std::make_shared<memory_record_data>(content0));
+	auto h1 = context.client(1).engine.sync_object_change(oid, metadata{}, std::make_shared<memory_record_data>(content1));
+	auto const original_tag = h1->tag();
+	auto const descriptor1 = h1->record().deserialise_to<data_change_record>().begin()->data.data;
+	REQUIRE(descriptor1);
+	while(context.handle_events()) {}
+
+	CHECK(context.compare_record_storages(sequence_number{4}));
+	CHECK(h1->tag() != original_tag);
+	CHECK(h1->state() == record_state::in_sync);
+	CHECK(h1->record().deserialise_to<data_change_record>().begin()->data.data == descriptor1);
+
+	// the loser's data: still the same, referenced once, uploaded after the rebased commit
+	auto& io1 = context.client(1).io;
+	auto const row1 = io1.data()->find(descriptor1->manifest_digest);
+	REQUIRE(row1);
+	CHECK(row1->state == record_data_state::in_sync);
+	CHECK(row1->have.complete());
+	CHECK(io1.records().data_reference_count(row1->local_id) == 1);
+	CHECK(io1.upload_requests() == std::vector<data_id>{descriptor1->manifest_digest});
+
+	auto own = context.client(1).engine.object_data(h1);
+	REQUIRE(own);
+	octet_vector read_back(content1.size());
+	CHECK(own->read(0, read_back.data(), read_back.size()) == content1.size());
+	CHECK(read_back == content1);
+
+	// the winner's data as client 1 sees it
+	auto const descriptor0 = h0->record().deserialise_to<data_change_record>().begin()->data.data;
+	REQUIRE(descriptor0);
+	auto remote = context.client(1).engine.object_data(io1.records().find_tag(h0->tag()));
+	REQUIRE(remote);
+	CHECK(remote->state() == record_data_state::deferred);
+	CHECK(remote->size() == content0.size());
+	CHECK(remote->available_size() == 0);
+	CHECK(context.client(0).io.upload_requests() == std::vector<data_id>{descriptor0->manifest_digest});
+
+	// the server's index of the data its chain names
+	data_state_table server_index{context.server.database};
+	CHECK(server_index.find(descriptor0->manifest_digest));
+	CHECK(server_index.find(descriptor1->manifest_digest));
+	CHECK(server_index.all_ids().size() == 2);
 }
 
 // (13b) the same client changes an object twice before the first change is confirmed:

@@ -14,6 +14,9 @@ struct data_descriptor {
 	/// number of encrypted chunks: each carries a GCM tag, the last one may be short
 	std::uint64_t chunk_count() const;
 
+	/// size of the given encrypted chunk incl. its tag; 0 past the end
+	std::uint64_t chunk_enc_size(std::uint64_t chunk_no) const;
+
 	bool operator==(data_descriptor const&) const = default;
 
 	template<typename Ar>

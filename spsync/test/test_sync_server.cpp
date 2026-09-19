@@ -13,8 +13,9 @@
 
 namespace securepath::sync::test {
 
-test_sync_server_client::test_sync_server_client(database::connection_ptr db)
+test_sync_server_client::test_sync_server_client(database::connection_ptr db, std::filesystem::path data_root)
 : storage_(db)
+, data_store_(db, (std::filesystem::remove_all(data_root), data_root))
 {
 }
 
@@ -93,6 +94,18 @@ request_handle test_sync_server_client::fetch_data(sequence_number record) {
 	return ret;
 }
 
+request_handle test_sync_server_client::upload_data(data_id const& id) {
+	assert(output_);
+	request_handle ret = ++req_handle;
+	upload_requests_.push_back(id);
+	if(server_) {
+		events_.push_back([=, this] {
+			output_->on_data_uploaded(ret, std::nullopt);
+		});
+	}
+	return ret;
+}
+
 request_handle test_sync_server_client::commit_record(record_handle h) {
 	assert(output_);
 	request_handle ret = ++req_handle;
@@ -117,6 +130,7 @@ record_storage& test_sync_server_client::records() const {
 
 test_sync_server_client_context::test_sync_server_client_context(int n, sync_mode mode, auth_mode amode)
 : database{create_test_database("test_sync_server_client_" + std::to_string(n) + ".db")}
+, io{database, "test_sync_server_client_data_" + std::to_string(n)}
 , engine_config{.mode=mode, .auth_mode=amode, .log_id=std::to_string(n)}
 {
 	// own public key needs to be in the public key access that is given to the sync engine

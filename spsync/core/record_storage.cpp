@@ -306,6 +306,8 @@ struct record_storage::impl {
 				"UNIQUE(seq, unique_seq_selector));").execute();
 		}
 		create_or_upgrade_object_table(*db);
+		// the object rows point into the record data table: it comes with the storage
+		data_state_table{db};
 		if(!db->has_table("sync_state")) {
 			db->prepare("CREATE TABLE sync_state("
 				"key INTEGER PRIMARY KEY CHECK(key = 1),"
@@ -890,6 +892,27 @@ std::uint64_t record_storage::data_reference_count(std::uint64_t data_ref) const
 	q.bind(":d", static_cast<std::int64_t>(data_ref));
 	// a count is a plain integer (sequences are stored with the unsigned offset)
 	return static_cast<std::uint64_t>(q.execute().value<std::int64_t>(0).value_or(0));
+}
+
+std::vector<data_id> record_storage::confirmed_data_in_state(record_data_state state) const {
+	auto q = impl_->db->prepare(
+		"SELECT record_data.data_id, min(record.seq) AS first_seq FROM record_objects"
+		" JOIN record ON record.tag = record_objects.tag"
+		" JOIN record_data ON record_data.key = record_objects.data_ref"
+		" WHERE record_data.state = :ds AND (record.state = :s1 OR record.state = :s2)"
+		" GROUP BY record_data.key ORDER BY first_seq ASC;");
+	q.bind(":ds", static_cast<std::int64_t>(std::to_underlying(state)));
+	q.bind(":s1", std::to_underlying(record_state::in_sync));
+	q.bind(":s2", std::to_underlying(record_state::acked));
+
+	std::vector<data_id> ret;
+	for(auto res = q.execute(); res; res.next()) {
+		auto id = res.value<octet_vector>(0);
+		if(id) {
+			ret.push_back(std::move(*id));
+		}
+	}
+	return ret;
 }
 
 record_handle record_storage::find_internal(record_internal_id iid) const {

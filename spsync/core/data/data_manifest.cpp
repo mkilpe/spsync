@@ -3,6 +3,8 @@
 
 #include <securepath/crypto/hash.hpp>
 
+#include <algorithm>
+
 namespace securepath::sync {
 
 octet_vector data_manifest::digest() const {
@@ -19,6 +21,15 @@ bool data_manifest::matches(data_descriptor const& d) const {
 
 bool data_manifest::verify_chunk(std::uint64_t chunk_no, octet_span encrypted) const {
 	return chunk_no < chunk_digests.size() && chunk_digests[chunk_no] == chunk_digest(encrypted);
+}
+
+std::uint64_t data_descriptor::chunk_enc_size(std::uint64_t chunk_no) const {
+	std::uint64_t ret = 0;
+	if(chunk_no < chunk_count()) {
+		std::uint64_t const per_chunk = chunk_size + chunk_tag_size();
+		ret = std::min<std::uint64_t>(per_chunk, enc_size - chunk_no * per_chunk);
+	}
+	return ret;
 }
 
 std::uint64_t data_descriptor::chunk_count() const {

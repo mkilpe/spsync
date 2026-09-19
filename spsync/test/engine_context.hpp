@@ -6,12 +6,17 @@
 #include "util.hpp"
 
 #include <spsync/client/record_util.hpp>
+#include <spsync/core/data/record_data_store.hpp>
 #include <spsync/core/encryption_key_storage.hpp>
 #include <securepath/crypto/public_key_cache.hpp>
 #include <securepath/crypto/private_data_cache.hpp>
 #include <securepath/crypto/private_key.hpp>
 #include <securepath/crypto/key_generation.hpp>
 #include <securepath/database/sqlite/connection.hpp>
+
+#include <atomic>
+#include <filesystem>
+#include <string>
 
 namespace securepath::sync::test {
 
@@ -44,6 +49,13 @@ public:
 			});
 	}
 
+	static std::filesystem::path fresh_data_root() {
+		static std::atomic<int> counter{0};
+		std::filesystem::path root = "engine_test_data_" + std::to_string(counter++);
+		std::filesystem::remove_all(root);
+		return root;
+	}
+
 	crypto::private_key root_user_key{crypto::generate_private_key()};
 	util::user_id root_user{root_user_key.id()};
 
@@ -51,7 +63,10 @@ public:
 	database::connection_ptr database{create_test_database()};
 	test_progress progress;
 	record_storage storage{database};
-	comm_test_interface io{progress, storage};
+	/// every context gets its own, empty chunk directory
+	std::filesystem::path data_root{fresh_data_root()};
+	record_data_store data_store{database, data_root};
+	comm_test_interface io{progress, storage, &data_store};
 	encryption_key_storage enc_keys{database};
 	crypto::public_key_cache pkeys;
 	crypto::private_data_cache pdata;

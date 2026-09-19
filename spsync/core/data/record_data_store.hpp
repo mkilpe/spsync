@@ -40,6 +40,12 @@ private:
 };
 
 /**
+ * Stream a whole source into a writer in pieces, never holding more than one piece
+ * (RD7: "stream the source once"). Throws when the source ends before its size().
+ */
+void copy_record_data(record_data& source, data_writer& writer);
+
+/**
  * The client data store (RD6): record data as encrypted chunk files (chunk_files)
  * plus the data table (data_state_table) in the storage database. Data is identified
  * by its data_id and shared by every record naming it; the record storage counts the

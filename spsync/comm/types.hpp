@@ -1,6 +1,7 @@
 #pragma once
 
 #include <spsync/core/sync_mode.hpp>
+#include <spsync/core/data/data_descriptor.hpp>
 #include <spsync/core/record_interface.hpp>
 #include <spsync/core/records/block_envelope.hpp>
 #include <spsync/util/result.hpp>
@@ -12,6 +13,7 @@
 namespace securepath::sync {
 
 class progress;
+class record_data_store;
 class record_storage;
 class serialised_record;
 

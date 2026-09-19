@@ -4,12 +4,14 @@
 
 #include <spsync/client/client_sync.hpp>
 #include <spsync/client/record_util.hpp>
+#include <spsync/core/data/source_record_data.hpp>
 
 #include <spsync/test/util.hpp>
 #include <spsync/test/test_context.hpp>
 #include <spsync/test/test_progress.hpp>
 #include <spsync/test/test_server_runner.hpp>
 
+#include <filesystem>
 
 namespace securepath::sync::client::test {
 namespace {
@@ -23,10 +25,10 @@ struct test_net {
 
 class test_client : public event_system::event_handler, public test_net, public client_sync {
 public:
-	test_client(event_system::event_loop& loop, network::context& context, std::string const& dbname)
+	test_client(event_system::event_loop& loop, network::context& context, std::string const& dbname, sync_engine_config config = {})
 	: event_handler(loop)
 	, test_net(context, *this)
-	, client_sync(context, loop, sync::test::create_test_database(dbname))
+	, client_sync(context, loop, sync::test::create_test_database(dbname), std::move(config))
 	{}
 
 	~test_client() {
@@ -90,14 +92,30 @@ public:
 	}
 
 
-	void on_data_change(record_handle, std::deque<single_data_change> c) override {
+	void on_data_change(record_handle rec, std::deque<single_data_change> c) override {
 		std::unique_lock l{mutex};
 		d_changes.insert(d_changes.end(), c.begin(), c.end());
+		d_records.push_back(std::move(rec));
+	}
+
+	std::deque<record_handle> data_records() const {
+		std::unique_lock l{mutex};
+		return d_records;
 	}
 
 	void on_user_change(record_handle, user_change c) override {
 		std::unique_lock l{mutex};
 		u_changes.push_back(c);
+	}
+
+	void on_data_transfer_failed(data_id id, error) override {
+		std::unique_lock l{mutex};
+		failed_transfers.push_back(std::move(id));
+	}
+
+	std::size_t failed_transfer_count() const {
+		std::unique_lock l{mutex};
+		return failed_transfers.size();
 	}
 
 	std::deque<single_data_change> data_changes() const {
@@ -113,7 +131,9 @@ public:
 public:
 	mutable std::mutex mutex;
 	std::deque<single_data_change> d_changes;
+	std::deque<record_handle> d_records;
 	std::deque<user_change> u_changes;
+	std::deque<data_id> failed_transfers;
 
 private:
 	std::promise<void> connected_;
@@ -253,6 +273,79 @@ TEST_CASE("client_sync", "[unit]") {
 		CHECK(check_member_status(c2, net_context.key_id(0), member_status::member));
 		CHECK(check_member_status(c2, net_context.key_id(2), member_status::member));
 	}
+}
+
+// (RDS 3) the record side of record data over the real server: the change commits with
+// its descriptor, the author holds the data (upload_pending until the data servers
+// exist, RDS 4/5), the other member sees what it would have to fetch
+TEST_CASE("client_sync data change with record data", "[unit]") {
+	event_system::single_thread_event_loop single_thread_event_loop;
+	sync::test::test_context net_context;
+
+	net_context.add_client(2);
+	net_context.add_client_keys_for_server();
+	net_context.share_client_keys();
+
+	sync::test::test_server server(net_context.server_context());
+	server.run();
+	std::this_thread::sleep_for(1s);
+
+	std::filesystem::remove_all("client_sync_data_c1");
+	std::filesystem::remove_all("client_sync_data_c2");
+	sync_engine_config config1;
+	config1.data_root = "client_sync_data_c1";
+	sync_engine_config config2;
+	config2.data_root = "client_sync_data_c2";
+	test_client c1(single_thread_event_loop, net_context.client_context(0), "client_sync_data_c1.db", config1);
+	test_client c2(single_thread_event_loop, net_context.client_context(1), "client_sync_data_c2.db", config2);
+
+	c1.connect();
+	c2.connect();
+	c1.wait_for_connection();
+	auto sid = c1.create_remote_storage();
+	c1.wait_for_storage_created();
+	c2.wait_for_connection();
+	c2.connect_to_storage(sid);
+
+	users us(users_change_mode::full);
+	us.add(util::user_access{net_context.key_id(0), util::access_type::user_management_access});
+	us.add(util::user_access{net_context.key_id(1), util::access_type::user_management_access});
+	c1.send_user_change(us);
+	WAIT_CHECK(c1.user_changes().size() == 1, 2s);
+	WAIT_CHECK(c2.user_changes().size() == 1, 2s);
+
+	auto const content = securepath::test::random_octet_vector(300000);
+	auto sent = c1.send_data_change(util::create_object_id(), util::metadata{}, std::make_shared<memory_record_data>(content));
+	REQUIRE(sent);
+
+	WAIT_CHECK(c1.data_changes().size() == 1, 2s);
+	WAIT_CHECK(c2.data_changes().size() == 1, 2s);
+	CHECK(sent->state() == record_state::in_sync);
+
+	// the author: everything held, the upload refused for the lack of a data channel
+	WAIT_CHECK(c1.failed_transfer_count() == 1, 2s);
+	auto own = c1.object_data(sent);
+	REQUIRE(own);
+	CHECK(own->state() == record_data_state::upload_pending);
+	octet_vector read_back(content.size());
+	CHECK(own->read(0, read_back.data(), read_back.size()) == content.size());
+	CHECK(read_back == content);
+
+	// the other member: both descriptor halves arrived, nothing is held
+	REQUIRE(c2.data_changes().size() == 1);
+	auto const change = c2.data_changes().front();
+	REQUIRE(change.data.data);
+	REQUIRE(change.header.data_info());
+	CHECK(change.header.data_info()->plain_size == content.size());
+	CHECK(c1.failed_transfers.front() == change.data.data->manifest_digest);
+
+	auto remote = c2.object_data(c2.data_records().front());
+	REQUIRE(remote);
+	CHECK(remote->state() == record_data_state::deferred);
+	CHECK(remote->size() == content.size());
+	CHECK(remote->available_size() == 0);
+	CHECK(remote->read(0, read_back.data(), read_back.size()) == 0);
+	CHECK(c2.failed_transfer_count() == 0);
 }
 
 }

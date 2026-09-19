@@ -1,6 +1,7 @@
 #pragma once
 
 #include <spsync/core/record_data.hpp>
+#include <spsync/core/data/data_descriptor.hpp>
 #include <spsync/core/record_storage.hpp>
 #include <spsync/core/users.hpp>
 #include <spsync/core/records/user_change_record.hpp>
@@ -22,8 +23,23 @@ using util::metadata;
 struct engine_input {
 	virtual ~engine_input() = default;
 
-	/// synchronise object change with given id, user metadata and data
+	/**
+	 * Synchronise object change with given id, user metadata and data. The data handle
+	 * is a source (e.g. memory_record_data, file_record_data): it is streamed once into
+	 * the storage's data store, encrypted, before the record is created (RD7), so for a
+	 * big source this call takes the time of reading and encrypting it - call it from a
+	 * thread that may wait. The record commits without waiting for the upload; the data
+	 * is upload_pending until on_data_state_changed says otherwise.
+	 */
 	virtual record_handle sync_object_change(object_id, metadata, record_data_handle = {}) = 0;
+
+	/**
+	 * The record data of a change of a data change record, read through the storage's
+	 * data store; null when the change carries no data, the record cannot be read (no
+	 * key) or the storage keeps no record data. The handle tells what is held locally
+	 * (state, available_size).
+	 */
+	virtual record_data_handle object_data(record_handle, std::size_t change = 0) = 0;
 
 	/// synchronise user change
 	virtual record_handle sync_user_change(plain_user_change_data, metadata = {}) = 0;
@@ -81,6 +97,20 @@ struct engine_output : event_system::event_handler {
 	 */
 	virtual void on_record_rejected(record_handle, error) {}
 
+	/**
+	 * Called when the local state of a record data changed (RD7), e.g. to in_sync when
+	 * the upload of an own data completed. The data is named by its data_id: every
+	 * record whose descriptor has this manifest_digest shares it.
+	 */
+	virtual void on_data_state_changed(data_id, record_data_state) {}
+
+	/**
+	 * Called when the transfer of a record data ended with an error (refused by the
+	 * server, quota, no data server). The state stays as it was (upload_pending); the
+	 * engine tries again after the next connect.
+	 */
+	virtual void on_data_transfer_failed(data_id, error) {}
+
 	//users changed
 	//conflicting user change ??
 
@@ -104,6 +134,12 @@ struct on_fork_suspected {
 };
 struct on_record_rejected {
 	typedef void type(record_handle, error);
+};
+struct on_data_state_changed {
+	typedef void type(data_id, record_data_state);
+};
+struct on_data_transfer_failed {
+	typedef void type(data_id, error);
 };
 }
 

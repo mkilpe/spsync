@@ -830,6 +830,31 @@ TEST_CASE("record_storage data references", "[unit]") {
 	CHECK(storage.data_reference_count(row_b->local_id) == 1);
 	CHECK(storage.data_reference_count(row_b->local_id + 100) == 0);
 
+	SECTION("confirmed data in a state") {
+		// (RDS 3) the uploads owed: upload_pending data of server confirmed records, in commit order
+		CHECK(storage.confirmed_data_in_state(record_data_state::upload_pending).empty());
+		CHECK(storage.confirmed_data_in_state(record_data_state::in_sync) == std::vector<data_id>{data_a.manifest_digest});
+		CHECK(storage.confirmed_data_in_state(record_data_state::deferred) == std::vector<data_id>{data_b.manifest_digest});
+
+		table.set_state(row_a->local_id, record_data_state::upload_pending);
+		table.set_state(row_b->local_id, record_data_state::upload_pending);
+		// data_a is named by two records: once, at its first record
+		CHECK(storage.confirmed_data_in_state(record_data_state::upload_pending)
+			== std::vector<data_id>{data_a.manifest_digest, data_b.manifest_digest});
+
+		// the data of a record the server does not have yet is not owed
+		data_descriptor const data_c{4112, 4096, securepath::test::random_octet_vector(64)};
+		auto creator_copy = creator;
+		auto pending = storage.create(creator_copy.test_data_change_with_data(data_c).to_auth_record<data_change_record>());
+		REQUIRE(pending);
+		table.set_state(table.find(data_c.manifest_digest)->local_id, record_data_state::upload_pending);
+		CHECK(storage.confirmed_data_in_state(record_data_state::upload_pending).size() == 2);
+
+		pending->set_state(record_state::acked, chain_block_id{sequence_number{20}, securepath::test::random_octet_vector(64)}, octet_vector{});
+		CHECK(storage.confirmed_data_in_state(record_data_state::upload_pending)
+			== std::vector<data_id>{data_a.manifest_digest, data_b.manifest_digest, data_c.manifest_digest});
+	}
+
 	SECTION("a rebase keeps the reference") {
 		auto creator_copy = creator;
 		auto pending = storage.create(creator_copy.test_data_change_with_data(data_b).to_auth_record<data_change_record>());

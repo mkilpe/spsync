@@ -4,6 +4,7 @@
 
 #include <securepath/util/octet_vector.hpp>
 
+#include <filesystem>
 #include <string>
 
 namespace securepath::sync {
@@ -59,6 +60,14 @@ struct sync_engine_config {
 	/// the replication mode the storage is expected to have (plan 2.4: replication
 	/// requires sign_records, the engine refuses an invalid combination)
 	replication_mode replication{replication_mode::none};
+
+	/**
+	 * Directory of the storage's record data chunk files (record_data.txt RD6), e.g.
+	 * record-storages/<sid>/data next to the storage database. Empty: the storage keeps
+	 * no record data - changes with data are refused, the data of others stays deferred.
+	 * Used by the owner of the engine (client_sync) to set up the data store.
+	 */
+	std::filesystem::path data_root;
 
 	/// this is id for the repository, it is only used for logging to help trace/debug things if set
 	std::string log_id;

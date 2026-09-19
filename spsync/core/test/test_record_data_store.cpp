@@ -5,6 +5,7 @@
 #include <spsync/core/data/data_state_table.hpp>
 #include <spsync/core/data/have_bitmap.hpp>
 #include <spsync/core/data/record_data_store.hpp>
+#include <spsync/core/data/source_record_data.hpp>
 
 #include <securepath/crypto/aes_gcm.hpp>
 #include <securepath/crypto/hash.hpp>
@@ -565,6 +566,95 @@ TEST_CASE("record data store streams big data", "[unit]") {
 
 	// random access decrypts the covering chunks only
 	CHECK(read_bytes(*handle, 17 * std::uint64_t{chunk_size} - 3, 6) == pattern_bytes(17 * std::uint64_t{chunk_size} - 3, 6));
+}
+
+// (RDS 3) what an application hands to the engine as the source of a data
+TEST_CASE("record data sources", "[unit]") {
+	auto const content = pattern_bytes(0, 10000);
+
+	SECTION("memory") {
+		memory_record_data source{content};
+		CHECK(source.size() == content.size());
+		CHECK(source.available_size() == content.size());
+		CHECK(source.local_id() == 0);
+		CHECK(read_bytes(source, 0, content.size()) == content);
+		CHECK(read_bytes(source, 9990, 100) == pattern_bytes(9990, 10));
+		CHECK(read_bytes(source, 10000, 10).empty());
+
+		// grows by writes at or before the end
+		auto const more = pattern_bytes(10000, 500);
+		CHECK(source.write(10000, more.data(), more.size()) == more.size());
+		CHECK(source.size() == 10500);
+		CHECK(read_bytes(source, 0, 10500) == pattern_bytes(0, 10500));
+		CHECK(source.write(20000, more.data(), more.size()) == 0);
+		CHECK(source.write(100, content.data(), 50) == 50);
+		CHECK(read_bytes(source, 100, 50) == pattern_bytes(0, 50));
+
+		memory_record_data empty;
+		CHECK(empty.size() == 0);
+		CHECK(empty.write(0, content.data(), 10) == 10);
+		CHECK(empty.size() == 10);
+	}
+
+	SECTION("file") {
+		std::filesystem::path const path = "record_data_source_test.bin";
+		{
+			std::ofstream out(path, std::ios::binary | std::ios::trunc);
+			out.write(reinterpret_cast<char const*>(content.data()), static_cast<std::streamsize>(content.size()));
+		}
+		file_record_data source{path};
+		CHECK(source.size() == content.size());
+		CHECK(read_bytes(source, 0, content.size()) == content);
+		CHECK(read_bytes(source, 5000, 100) == pattern_bytes(5000, 100));
+		CHECK(read_bytes(source, 9990, 100) == pattern_bytes(9990, 10));
+		CHECK(read_bytes(source, 10000, 10).empty());
+		// a read past the end does not break the next one
+		CHECK(read_bytes(source, 0, 10) == pattern_bytes(0, 10));
+		CHECK_THROWS(source.write(0, content.data(), 1));
+		std::filesystem::remove(path);
+		CHECK_THROWS(file_record_data{path});
+	}
+}
+
+// (RDS 3, RD7) a source goes into the store in pieces
+TEST_CASE("record data store copy from a source", "[unit]") {
+	auto db = fresh_database();
+	record_data_store store{db, data_root};
+	auto const key = test_group_key();
+
+	std::uint64_t const size = 700000;
+	memory_record_data source{pattern_bytes(0, size)};
+	auto writer = store.create(key, 100000);
+	copy_record_data(source, writer);
+	auto const data = writer.finish();
+	CHECK(data.header.plain_size == size);
+
+	auto handle = store.open({key}, data.descriptor, data.header);
+	REQUIRE(handle);
+	CHECK(read_bytes(*handle, 0, size) == pattern_bytes(0, size));
+
+	// the chunk sizes of a descriptor add up to enc_size, the last one is short
+	std::uint64_t sum = 0;
+	for(std::uint64_t no = 0; no != data.descriptor.chunk_count(); ++no) {
+		CHECK(data.descriptor.chunk_enc_size(no) == store.read_chunk(data.descriptor.manifest_digest, no)->size());
+		sum += data.descriptor.chunk_enc_size(no);
+	}
+	CHECK(sum == data.descriptor.enc_size);
+	CHECK(data.descriptor.chunk_enc_size(data.descriptor.chunk_count()) == 0);
+
+	// a source that promises more than it has
+	struct short_source : memory_record_data {
+		using memory_record_data::memory_record_data;
+		std::uint64_t size() const override { return memory_record_data::size() + 1; }
+	};
+	short_source liar{pattern_bytes(0, 1000)};
+	auto refused = store.create(key, 100000);
+	CHECK_THROWS(copy_record_data(liar, refused));
+
+	memory_record_data nothing;
+	auto empty = store.create(key, 100000);
+	CHECK_NOTHROW(copy_record_data(nothing, empty));
+	CHECK(empty.finish().header.plain_size == 0);
 }
 
 }

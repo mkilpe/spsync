@@ -1,5 +1,9 @@
 #pragma once
 
+#include <spsync/core/data/record_data_store.hpp>
+
+#include <filesystem>
+
 #include "test_progress.hpp"
 #include "test_sync_engine.hpp"
 #include "util.hpp"
@@ -30,7 +34,8 @@ class test_sync_server;
  */
 class test_sync_server_client : public comm_input {
 public:
-	test_sync_server_client(database::connection_ptr);
+	/// data_root: the chunk directory of the client's record data store, emptied first
+	test_sync_server_client(database::connection_ptr, std::filesystem::path data_root);
 
 	void set_output(comm_output&);
 	void connect(test_sync_server& server);
@@ -50,9 +55,16 @@ public:
 	/// Tries to commit to a record and uploads the record data if committing was successful
 	virtual request_handle commit_record(record_handle);
 
+	/// the data servers of this harness take everything: answered with success while connected
+	virtual request_handle upload_data(data_id const&);
+
 	/// Accessors to common, shared infrastructure
 	virtual sync::progress& progress() const;
 	virtual record_storage& records() const;
+	virtual record_data_store* data() const { return &data_store_; }
+
+	/// every upload_data call so far, in order
+	std::vector<data_id> const& upload_requests() const { return upload_requests_; }
 
 	/// number of requests the engine issued through this client (sequence/fetch/commit)
 	std::uint64_t request_count() const { return req_handle; }
@@ -63,6 +75,8 @@ public:
 private:
 	mutable test_progress progress_;
 	mutable record_storage storage_;
+	mutable record_data_store data_store_;
+	std::vector<data_id> upload_requests_;
 	comm_output* output_{};
 	test_sync_server* server_{};
 	sequence_number last_pushed_record_;
@@ -82,7 +96,7 @@ public:
 
 	event_system::single_thread_event_loop single_thread_event_loop;
 	database::connection_ptr database;
-	test_sync_server_client io{database};
+	test_sync_server_client io;
 	encryption_key_storage enc_keys{database};
 	crypto::public_key_cache pkeys;
 	crypto::private_data_cache pdata;
