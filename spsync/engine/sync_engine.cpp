@@ -58,6 +58,15 @@ public:
 		}
 	}
 
+	/// the data-role servers of the storage as the record server lists them (RD12),
+	/// persisted per storage like the cursor owner; an empty list teaches nothing
+	void learn_data_endpoints(std::vector<data_endpoint> const& reported) {
+		if(!reported.empty() && reported != records.data_endpoints()) {
+			LINFO("data servers of the storage learned [{} endpoints]", reported.size());
+			records.set_data_endpoints(reported);
+		}
+	}
+
 	/**
 	 * The storage's validity limits as the server reported them (RDS 8): an oversized
 	 * change is refused here instead of being rejected by every replica after the fact.
@@ -1164,6 +1173,7 @@ void sync_engine::on_sequence_number_response(request_handle req_handle, result<
 		impl_->check_cursor_owner(res.value().server_id);
 		impl_->update_server_seq(res.value().sequence);
 		impl_->learn_limits(res.value().limits);
+		impl_->learn_data_endpoints(res.value().data_endpoints);
 		if(!impl_->fetch_missing("behind the server")) {
 			//already up-to-date with server but perhaps we have some local pending commits
 			impl_->try_commit_pending();

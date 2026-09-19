@@ -18,7 +18,7 @@ namespace {
 /// the answer to a manifest: the holder's have octets, or an error and whether it was
 /// the transport that failed (try the next holder) or the holder that refused (final)
 using manifest_handler = std::move_only_function<void(util::result<octet_vector>, bool transport_failure)>;
-using chunk_handler = data_channel::chunk_callback;
+using chunk_handler = data_channel::piece_callback;
 
 std::string endpoint_name(data_endpoint const& e) {
 	return e.host + ":" + std::to_string(e.port);
@@ -57,9 +57,9 @@ public:
 			, [](manifest_handler& h, error const& err) { h(util::result<octet_vector>{err}, true); });
 	}
 
-	void send_chunk(octet_vector const& sid, data_id const& id, std::uint64_t chunk_no, octet_vector bytes, chunk_handler handler) {
+	void send_piece(octet_vector const& sid, data_id const& id, std::uint64_t chunk_no, std::uint64_t offset, octet_vector bytes, chunk_handler handler) {
 		auto const cid = ++call_id_;
-		post(cid, protocol::upload_data_chunk{cid, sid, id, chunk_no, std::move(bytes)}, chunks_, std::move(handler)
+		post(cid, protocol::upload_data_chunk{cid, sid, id, chunk_no, offset, std::move(bytes)}, chunks_, std::move(handler)
 			, [](chunk_handler& h, error const& err) { h(err); });
 	}
 
@@ -76,8 +76,9 @@ private:
 			fail(handler, err);
 		} else {
 			calls.emplace(cid, std::move(handler));
+			// sent with the lock held: the pieces of a chunk must leave in the order they
+			// were posted, also while the outbox is being flushed
 			if(ready_) {
-				lock.unlock();
 				encrypted_connection::send(bytes);
 			} else {
 				outbox_.push_back(std::move(bytes));
@@ -117,15 +118,12 @@ private:
 			encrypted_connection::close();
 			fail_all(protocol::to_error(p.error));
 		} else {
-			std::vector<octet_vector> outbox;
-			{
-				std::unique_lock lock{mutex_};
-				ready_ = true;
-				outbox.swap(outbox_);
-			}
-			for(auto const& bytes : outbox) {
+			std::unique_lock lock{mutex_};
+			ready_ = true;
+			for(auto const& bytes : outbox_) {
 				encrypted_connection::send(bytes);
 			}
+			outbox_.clear();
 		}
 	}
 
@@ -255,7 +253,7 @@ public:
 		}
 	}
 
-	void send_chunk(data_id const& id, std::uint64_t chunk_no, octet_vector encrypted, chunk_callback cb) {
+	void send_piece(data_id const& id, std::uint64_t chunk_no, std::uint64_t offset, octet_vector bytes, piece_callback cb) {
 		std::shared_ptr<data_link> link;
 		octet_vector sid;
 		{
@@ -267,7 +265,7 @@ public:
 			}
 		}
 		if(link) {
-			link->send_chunk(sid, id, chunk_no, std::move(encrypted), std::move(cb));
+			link->send_piece(sid, id, chunk_no, offset, std::move(bytes), std::move(cb));
 		} else {
 			cb(make_error(protocol::errc::no_such_upload, "no upload opened for the data"));
 		}
@@ -340,8 +338,8 @@ void net_data_channel::open_upload(data_descriptor const& descriptor, data_manif
 	impl_->open_upload(descriptor, manifest, std::move(cb));
 }
 
-void net_data_channel::send_chunk(data_id const& id, std::uint64_t chunk_no, octet_vector encrypted, chunk_callback cb) {
-	impl_->send_chunk(id, chunk_no, std::move(encrypted), std::move(cb));
+void net_data_channel::send_piece(data_id const& id, std::uint64_t chunk_no, std::uint64_t offset, octet_vector bytes, piece_callback cb) {
+	impl_->send_piece(id, chunk_no, offset, std::move(bytes), std::move(cb));
 }
 
 void net_data_channel::close() {

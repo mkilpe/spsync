@@ -11,6 +11,8 @@
 #include <spsync/test/test_progress.hpp>
 #include <spsync/test/test_server_runner.hpp>
 
+#include <securepath/crypto/private_data_access.hpp>
+
 #include <filesystem>
 
 namespace securepath::sync::client::test {
@@ -108,6 +110,16 @@ public:
 		u_changes.push_back(c);
 	}
 
+	void on_data_state_changed(data_id id, record_data_state state) override {
+		std::unique_lock l{mutex};
+		data_states.emplace_back(std::move(id), state);
+	}
+
+	std::size_t data_state_count() const {
+		std::unique_lock l{mutex};
+		return data_states.size();
+	}
+
 	void on_data_transfer_failed(data_id id, error) override {
 		std::unique_lock l{mutex};
 		failed_transfers.push_back(std::move(id));
@@ -134,6 +146,7 @@ public:
 	std::deque<record_handle> d_records;
 	std::deque<user_change> u_changes;
 	std::deque<data_id> failed_transfers;
+	std::deque<std::pair<data_id, record_data_state>> data_states;
 
 private:
 	std::promise<void> connected_;
@@ -275,9 +288,9 @@ TEST_CASE("client_sync", "[unit]") {
 	}
 }
 
-// (RDS 3) the record side of record data over the real server: the change commits with
-// its descriptor, the author holds the data (upload_pending until the data servers
-// exist, RDS 4/5), the other member sees what it would have to fetch
+// (RDS 3) the record side of record data over a real server that has no data servers:
+// the change commits with its descriptor, the author holds the data (upload_pending, the
+// ticket is refused), the other member sees what it would have to fetch
 TEST_CASE("client_sync data change with record data", "[unit]") {
 	event_system::single_thread_event_loop single_thread_event_loop;
 	sync::test::test_context net_context;
@@ -322,7 +335,7 @@ TEST_CASE("client_sync data change with record data", "[unit]") {
 	WAIT_CHECK(c2.data_changes().size() == 1, 2s);
 	CHECK(sent->state() == record_state::in_sync);
 
-	// the author: everything held, the upload refused for the lack of a data channel
+	// the author: everything held, the upload refused - the server names no data servers
 	WAIT_CHECK(c1.failed_transfer_count() == 1, 2s);
 	auto own = c1.object_data(sent);
 	REQUIRE(own);
@@ -346,6 +359,87 @@ TEST_CASE("client_sync data change with record data", "[unit]") {
 	CHECK(remote->available_size() == 0);
 	CHECK(remote->read(0, read_back.data(), read_back.size()) == 0);
 	CHECK(c2.failed_transfer_count() == 0);
+}
+
+// (RDS 5) record data end to end over an all-in-one server: the author's engine asks
+// for the upload once the record is confirmed, comm gets the ticket from the record role
+// and moves the chunks to the data role, the data becomes in_sync, the record role's
+// availability table knows the holder and both clients persist the data server list
+TEST_CASE("client_sync uploads record data", "[unit]") {
+	event_system::single_thread_event_loop single_thread_event_loop;
+	sync::test::test_context net_context;
+
+	net_context.add_client(2);
+	net_context.add_client_keys_for_server();
+	net_context.share_client_keys();
+
+	std::filesystem::remove_all("client_sync_upload_root");
+	auto const server_key = crypto::my_private_key(net_context.server_context().private_data());
+	data_endpoint const data_server{"127.0.0.1", default_data_server_port, server_key.id(), "test", {}};
+	spsync_server_params params;
+	params.storage_params.storage_root = "client_sync_upload_root";
+	params.storage_params.data_servers = {data_server};
+	params.data_params.enabled = true;
+	params.data_params.storage_root = "client_sync_upload_root";
+	sync::test::test_server server(net_context.server_context(), params);
+	server.run();
+	WAIT_REQUIRE(server.data().local_endpoint().has_value(), 10s);
+	std::this_thread::sleep_for(1s);
+
+	std::filesystem::remove_all("client_sync_upload_c1");
+	std::filesystem::remove_all("client_sync_upload_c2");
+	sync_engine_config config1;
+	config1.data_root = "client_sync_upload_c1";
+	sync_engine_config config2;
+	config2.data_root = "client_sync_upload_c2";
+	test_client c1(single_thread_event_loop, net_context.client_context(0), "client_sync_upload_c1.db", config1);
+	test_client c2(single_thread_event_loop, net_context.client_context(1), "client_sync_upload_c2.db", config2);
+
+	c1.connect();
+	c2.connect();
+	c1.wait_for_connection();
+	auto sid = c1.create_remote_storage();
+	c1.wait_for_storage_created();
+	c2.wait_for_connection();
+	c2.connect_to_storage(sid);
+
+	users us(users_change_mode::full);
+	us.add(util::user_access{net_context.key_id(0), util::access_type::user_management_access});
+	us.add(util::user_access{net_context.key_id(1), util::access_type::user_management_access});
+	c1.send_user_change(us);
+	WAIT_CHECK(c1.user_changes().size() == 1, 2s);
+	WAIT_CHECK(c2.user_changes().size() == 1, 2s);
+
+	auto const content = securepath::test::random_octet_vector(3 * 1024 * 1024);
+	auto sent = c1.send_data_change(util::create_object_id(), util::metadata{}, std::make_shared<memory_record_data>(content));
+	REQUIRE(sent);
+	WAIT_CHECK(c1.data_changes().size() == 1, 5s);
+	WAIT_CHECK(c2.data_changes().size() == 1, 5s);
+
+	// uploaded
+	WAIT_CHECK(c1.data_state_count() == 1, 20s);
+	REQUIRE(c1.data_states.size() == 1);
+	CHECK(c1.data_states[0].second == record_data_state::in_sync);
+	CHECK(c1.failed_transfer_count() == 0);
+	auto own = c1.object_data(sent);
+	REQUIRE(own);
+	CHECK(own->state() == record_data_state::in_sync);
+
+	// the data role holds it under the storage, the record role knows who does
+	auto const id = c1.data_states[0].first;
+	auto const held = server.data().find(sid, id);
+	REQUIRE(held);
+	CHECK(held->state == record_data_state::in_sync);
+	auto const holdings = server.storages().availability().holdings(sid, id);
+	REQUIRE(holdings.size() == 1);
+	CHECK(holdings[0].holder == server_key.id());
+	CHECK(holdings[0].complete);
+
+	// both learned the storage's data servers on attach
+	for(auto const* db : {"client_sync_upload_c1.db", "client_sync_upload_c2.db"}) {
+		record_storage records{sync::test::create_test_database(db, false)};
+		CHECK(records.data_endpoints() == std::vector<data_endpoint>{data_server});
+	}
 }
 
 }

@@ -2,9 +2,11 @@
 
 #include "data_uploader.hpp"
 #include "interface.hpp"
+#include "net_data_channel.hpp"
 #include <spsync/core/sync_mode.hpp>
 #include <spsync/protocol/server_protocol.hpp>
 
+#include <functional>
 #include <map>
 #include <memory>
 #include <mutex>
@@ -21,8 +23,10 @@ class network_connection_impl;
 class comm : public comm_input {
 public:
 	/**
-	 * data and channel are the storage's record data store and the way to its data
-	 * servers; without both the storage uploads nothing (upload_data answers not_supported)
+	 * data is the storage's record data store; without one the storage uploads nothing
+	 * (upload_data answers not_supported). channel is the way to the storage's data
+	 * servers: when none is given comm makes the real one (net_data_channel) with tickets
+	 * asked from the record server over this connection (record_data.txt RD12).
 	 */
 	comm(network_connection_impl* nc_impl, storage_id, record_storage&, sync::progress&, std::optional<storage_modes> expected_modes = {}
 		, record_data_store* data = nullptr, data_channel* channel = nullptr);
@@ -42,7 +46,11 @@ public:
 	void handle(protocol::response_records const& p);
 	void handle(protocol::response_commit const& p);
 	void handle(protocol::response_data const& p);
+	void handle(protocol::response_data_ticket const& p);
 	void handle(protocol::notify_record const& p);
+
+	/// asks the record server of this storage for data tickets; answers come through handle()
+	ticket_source tickets();
 
 protected:
 
@@ -58,6 +66,7 @@ protected:
 
 private:
 	void on_upload_done(data_id const&, std::optional<error>);
+	void fail_ticket_requests(error const&);
 
 private:
 	network_connection_impl* const nc_impl_{};
@@ -71,7 +80,11 @@ private:
 	std::mutex upload_mutex_;
 	/// the request handles of the uploads on their way
 	std::map<data_id, request_handle> uploads_;
-	/// set when the storage has a data store and a data channel
+	/// ticket requests without an answer yet
+	std::map<request_handle, std::move_only_function<void(util::result<data_grant>)>> ticket_requests_;
+	/// the real data channel, made here when the storage has a data store and no channel was given
+	std::unique_ptr<net_data_channel> own_channel_;
+	/// set when the storage has a data store; declared after the channel it uses
 	std::unique_ptr<data_uploader> uploader_;
 };
 

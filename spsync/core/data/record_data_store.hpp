@@ -40,6 +40,50 @@ private:
 };
 
 /**
+ * A chunk on its way in, piece by piece (a transfer never moves a whole chunk in one
+ * packet, see protocol/data_protocol.hpp): the pieces are appended to a staged file and
+ * hashed as they come, so nothing but the piece at hand is in memory. finish() checks the
+ * whole against the manifest and only then makes it a chunk of the data. Dropped before
+ * that - a lost connection - it leaves nothing behind: resuming is per chunk.
+ */
+class incoming_chunk {
+public:
+	incoming_chunk(std::shared_ptr<record_data_store_impl>, data_id, std::uint64_t chunk_no
+		, std::uint64_t expected_size, octet_vector expected_digest);
+	incoming_chunk(incoming_chunk&&) noexcept;
+	~incoming_chunk();
+
+	std::uint64_t chunk_no() const { return chunk_no_; }
+
+	/// octets so far: the offset the next piece must have
+	std::uint64_t received() const { return received_; }
+
+	/// every octet of the chunk arrived
+	bool complete() const { return received_ == expected_size_; }
+
+	/// the next piece; false when it is not the next one or overruns the chunk - the
+	/// chunk is lost then, it starts over with a new incoming_chunk
+	bool append(std::uint64_t offset, octet_span piece);
+
+	/// keep the chunk when it is complete and the one the manifest names; call once
+	bool finish();
+
+private:
+	void discard();
+
+private:
+	std::shared_ptr<record_data_store_impl> store_;
+	data_id id_;
+	std::uint64_t chunk_no_{};
+	std::uint64_t expected_size_{};
+	octet_vector expected_digest_;
+	std::string stage_;
+	crypto::hash_stream hash_;
+	std::uint64_t received_{};
+	bool open_{};
+};
+
+/**
  * Stream a whole source into a writer in pieces, never holding more than one piece
  * (RD7: "stream the source once"). Throws when the source ends before its size().
  */
@@ -117,8 +161,18 @@ public:
 	 */
 	bool store_chunk(data_id const&, std::uint64_t chunk_no, octet_span encrypted);
 
-	/// a held encrypted chunk (for the upload)
+	/**
+	 * Start receiving a chunk in pieces. Nullopt when the data has no manifest yet or the
+	 * manifest names no such chunk.
+	 */
+	std::optional<incoming_chunk> begin_chunk(data_id const&, std::uint64_t chunk_no);
+
+	/// a held encrypted chunk
 	std::optional<octet_vector> read_chunk(data_id const&, std::uint64_t chunk_no) const;
+
+	/// a piece of a held encrypted chunk (for the upload); nullopt when the chunk is not
+	/// held or the range is not inside it
+	std::optional<octet_vector> read_chunk_piece(data_id const&, std::uint64_t chunk_no, std::uint64_t offset, std::size_t size) const;
 
 private:
 	std::shared_ptr<record_data_store_impl> impl_;

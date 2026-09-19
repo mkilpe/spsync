@@ -130,6 +130,12 @@ struct network_connection_impl : network::encrypted_connection {
 		return h;
 	}
 
+	request_handle request_data_ticket(storage_id id, octet_vector data_id, data_right right) {
+		auto h = ++call_id;
+		send(protocol::request_data_ticket{h, std::move(id), std::move(data_id), static_cast<std::uint32_t>(right)});
+		return h;
+	}
+
 	request_handle commit_record(storage_id id, chain_block record) {
 		auto h = ++call_id;
 		send(protocol::request_commit{h, std::move(id), std::move(record)});

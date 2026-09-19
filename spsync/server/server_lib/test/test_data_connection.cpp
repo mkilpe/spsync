@@ -200,7 +200,7 @@ TEST_CASE("data connection upload", "[unit]") {
 		conn.replies.clear();
 
 		// a chunk before any manifest
-		conn.handle(protocol::upload_data_chunk{1, sid, id, 0, data.chunks.at(0)});
+		conn.handle(protocol::upload_data_chunk{1, sid, id, 0, 0, data.chunks.at(0)});
 		CHECK(is_error(conn.take<protocol::upload_data_chunk_reply>().error, protocol::errc::no_such_upload));
 
 		// a manifest that is not the ticket's
@@ -219,15 +219,15 @@ TEST_CASE("data connection upload", "[unit]") {
 		// junk
 		auto junk = data.chunks.at(0);
 		junk.back() ^= 0x01;
-		conn.handle(protocol::upload_data_chunk{4, sid, id, 0, junk});
+		conn.handle(protocol::upload_data_chunk{4, sid, id, 0, 0, junk});
 		CHECK(is_error(conn.take<protocol::upload_data_chunk_reply>().error, protocol::errc::invalid_data_chunk));
 
 		// the upload is of this storage: the same data id under another one was never opened
-		conn.handle(protocol::upload_data_chunk{5, securepath::test::random_octet_vector(16), id, 0, data.chunks.at(0)});
+		conn.handle(protocol::upload_data_chunk{5, securepath::test::random_octet_vector(16), id, 0, 0, data.chunks.at(0)});
 		CHECK(is_error(conn.take<protocol::upload_data_chunk_reply>().error, protocol::errc::no_such_upload));
 
 		for(std::uint64_t no : {0u, 2u}) {
-			conn.handle(protocol::upload_data_chunk{6, sid, id, no, data.chunks.at(no)});
+			conn.handle(protocol::upload_data_chunk{6, sid, id, no, 0, data.chunks.at(no)});
 			auto const reply = conn.take<protocol::upload_data_chunk_reply>();
 			CHECK(!reply.error);
 			CHECK(!reply.complete);
@@ -240,7 +240,7 @@ TEST_CASE("data connection upload", "[unit]") {
 	REQUIRE(!conn.on_connect(protocol::data_hello{}, member));
 	conn.replies.clear();
 
-	conn.handle(protocol::upload_data_chunk{1, sid, id, 1, data.chunks.at(1)});
+	conn.handle(protocol::upload_data_chunk{1, sid, id, 1, 0, data.chunks.at(1)});
 	CHECK(is_error(conn.take<protocol::upload_data_chunk_reply>().error, protocol::errc::no_such_upload));
 
 	conn.handle(protocol::upload_data_manifest{2, ticket, data.manifest});
@@ -252,7 +252,7 @@ TEST_CASE("data connection upload", "[unit]") {
 	CHECK(have.test(2));
 
 	for(std::uint64_t no : {1u, 3u, 4u}) {
-		conn.handle(protocol::upload_data_chunk{3, sid, id, no, data.chunks.at(no)});
+		conn.handle(protocol::upload_data_chunk{3, sid, id, no, 0, data.chunks.at(no)});
 		auto const reply = conn.take<protocol::upload_data_chunk_reply>();
 		CHECK(!reply.error);
 		CHECK(reply.complete == (no == 4));
@@ -262,6 +262,108 @@ TEST_CASE("data connection upload", "[unit]") {
 	REQUIRE(context.announced.size() == 1);
 	CHECK(context.announced[0] == std::pair{sid, id});
 	CHECK(context.stores.at(sid)->find(id)->state == record_data_state::in_sync);
+}
+
+// a chunk arrives in pieces: appended to a staged file, verified when the last piece is
+// in. Whatever breaks the order loses the chunk, and nothing of it is kept
+TEST_CASE("data connection takes chunks in pieces", "[unit]") {
+	test_data_context context;
+	auto const member = crypto::generate_private_key().id();
+	auto const sid = securepath::test::random_octet_vector(16);
+	auto const data = make_data(2500);
+	auto const& id = data.descriptor.manifest_digest;
+	REQUIRE(data.chunks.size() == 5);
+	auto const staging = test_root / to_hex(sid) / "data" / ".staging";
+
+	auto conn = std::make_unique<test_connection>(context);
+	REQUIRE(!conn->on_connect(protocol::data_hello{}, member));
+	conn->handle(protocol::upload_data_manifest{1, context.ticket(sid, data.descriptor, member), data.manifest});
+	conn->replies.clear();
+
+	/// send [from, to) of a chunk as one piece; the reply
+	auto const piece = [&](std::uint64_t chunk_no, std::size_t from, std::size_t to, octet_vector const* bytes = nullptr) {
+		auto const& chunk = bytes ? *bytes : data.chunks.at(chunk_no);
+		conn->handle(protocol::upload_data_chunk{9, sid, id, chunk_no, from, octet_vector(chunk.begin() + from, chunk.begin() + to)});
+		return conn->take<protocol::upload_data_chunk_reply>();
+	};
+	auto const chunk_size = data.chunks.at(0).size();
+	auto const held = [&] { return context.stores.at(sid)->find(id)->have.count(); };
+
+	// in order: nothing is held before the last piece
+	CHECK(!piece(0, 0, 400).error);
+	CHECK(!piece(0, 400, 800).error);
+	CHECK(held() == 0);
+	auto const last = piece(0, 800, chunk_size);
+	CHECK(!last.error);
+	CHECK(!last.complete);
+	CHECK(held() == 1);
+	CHECK(context.stores.at(sid)->read_chunk(id, 0) == data.chunks.at(0));
+	CHECK(std::filesystem::is_empty(staging));
+
+	// two chunks interleaved, as a window sends them
+	CHECK(!piece(1, 0, 500).error);
+	CHECK(!piece(2, 0, 500).error);
+	CHECK(!piece(1, 500, chunk_size).error);
+	CHECK(!piece(2, 500, chunk_size).error);
+	CHECK(held() == 3);
+
+	// a gap loses the chunk: also the piece that would have been next is refused
+	CHECK(!piece(3, 0, 300).error);
+	CHECK(is_error(piece(3, 600, 900).error, protocol::errc::invalid_data_chunk));
+	CHECK(is_error(piece(3, 300, 600).error, protocol::errc::invalid_data_chunk));
+	CHECK(std::filesystem::is_empty(staging));
+	// a piece in the middle of a chunk nobody started
+	CHECK(is_error(piece(4, 300, 600).error, protocol::errc::invalid_data_chunk));
+	// more octets than the chunk has
+	CHECK(!piece(3, 0, 300).error);
+	auto overlong = data.chunks.at(3);
+	overlong.resize(chunk_size + 10);
+	CHECK(is_error(piece(3, 300, chunk_size + 10, &overlong).error, protocol::errc::invalid_data_chunk));
+	// a chunk the manifest does not name
+	CHECK(is_error(piece(5, 0, 100, &data.chunks.at(0)).error, protocol::errc::invalid_data_chunk));
+	CHECK(held() == 3);
+
+	// the wrong bytes show when the last piece is in: nothing of the chunk is kept
+	auto junk = data.chunks.at(3);
+	junk[100] ^= 0x01;
+	CHECK(!piece(3, 0, 500, &junk).error);
+	CHECK(is_error(piece(3, 500, chunk_size, &junk).error, protocol::errc::invalid_data_chunk));
+	CHECK(held() == 3);
+	CHECK(std::filesystem::is_empty(staging));
+
+	// a piece at offset 0 starts the chunk over
+	CHECK(!piece(3, 0, 500).error);
+	CHECK(!piece(3, 0, 700).error);
+	CHECK(!piece(3, 700, chunk_size).error);
+	CHECK(held() == 4);
+
+	// a piece above what a packet may carry
+	octet_vector const huge(protocol::max_data_piece_size + 1);
+	conn->handle(protocol::upload_data_chunk{9, sid, id, 4, 0, huge});
+	CHECK(is_error(conn->take<protocol::upload_data_chunk_reply>().error, protocol::errc::invalid_data_chunk));
+
+	// the connection goes with a chunk half way: its pieces go with it, the chunks stay
+	// (chunk 4 is the short tail of the data)
+	REQUIRE(data.chunks.at(4).size() > 50);
+	CHECK(!piece(4, 0, 50).error);
+	CHECK(!std::filesystem::is_empty(staging));
+	conn.reset();
+	CHECK(std::filesystem::is_empty(staging));
+	CHECK(held() == 4);
+	CHECK(context.announced.empty());
+
+	// the next connection finishes the data
+	test_connection again{context};
+	REQUIRE(!again.on_connect(protocol::data_hello{}, member));
+	again.replies.clear();
+	again.handle(protocol::upload_data_manifest{1, context.ticket(sid, data.descriptor, member), data.manifest});
+	auto const resumed = again.take<protocol::upload_data_manifest_reply>();
+	CHECK(have_bitmap{5, resumed.have}.first_missing() == 4);
+	again.handle(protocol::upload_data_chunk{2, sid, id, 4, 0, data.chunks.at(4)});
+	auto const done = again.take<protocol::upload_data_chunk_reply>();
+	CHECK(!done.error);
+	CHECK(done.complete);
+	CHECK(context.announced.size() == 1);
 }
 
 // RD10: quota errors reach the client as such

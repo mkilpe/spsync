@@ -9,6 +9,7 @@
 #include <algorithm>
 #include <cstring>
 #include <mutex>
+#include <utility>
 
 namespace securepath::sync {
 
@@ -77,15 +78,50 @@ public:
 	void add_chunk(data_state_row row, std::uint64_t chunk_no, octet_span encrypted) {
 		if(!row.have.test(chunk_no)) {
 			files.write(row.descriptor.manifest_digest, chunk_no, encrypted);
-			row.have.set(chunk_no);
-			table.set_have(row.local_id, row.have);
-			if(row.have.complete() && row.state != record_data_state::upload_pending) {
-				table.set_state(row.local_id, record_data_state::in_sync);
-			}
+			mark_held(row, chunk_no);
 		}
 	}
 
+	/// a chunk received in pieces verified against the manifest: its staged file becomes the chunk
+	bool adopt_chunk(data_id const& id, std::uint64_t chunk_no, std::string const& stage) {
+		std::unique_lock lock{mutex};
+		auto row = table.find(id);
+		bool const known = row.has_value();
+		if(known && !row->have.test(chunk_no)) {
+			files.adopt_staged_chunk(stage, chunk_no, id);
+			mark_held(*row, chunk_no);
+		} else {
+			// held already, or the data went meanwhile
+			files.discard_staging(stage);
+		}
+		return known;
+	}
+
+	/// a piece of a held chunk; a chunk the bitmap promises but the disk lost is dropped
+	std::optional<octet_vector> read_piece(data_id const& id, std::uint64_t chunk_no, std::uint64_t offset, std::size_t size) {
+		std::unique_lock lock{mutex};
+		std::optional<octet_vector> ret;
+		auto row = table.find(id);
+		if(row && row->have.test(chunk_no) && offset + size <= row->descriptor.chunk_enc_size(chunk_no)) {
+			ret = files.read_piece(id, chunk_no, offset, size);
+			if(!ret) {
+				LOG_WARN("record data chunk lost [data_id={}, chunk={}]", to_hex(id), chunk_no);
+				drop_chunk(*row, chunk_no);
+			}
+		}
+		return ret;
+	}
+
 private:
+	// requires the mutex
+	void mark_held(data_state_row& row, std::uint64_t chunk_no) {
+		row.have.set(chunk_no);
+		table.set_have(row.local_id, row.have);
+		if(row.have.complete() && row.state != record_data_state::upload_pending) {
+			table.set_state(row.local_id, record_data_state::in_sync);
+		}
+	}
+
 	// requires the mutex
 	void drop_chunk(data_state_row& row, std::uint64_t chunk_no) {
 		if(row.state == record_data_state::upload_pending) {
@@ -302,6 +338,72 @@ encrypted_data_result data_writer::finish() {
 	return result;
 }
 
+// -- incoming_chunk --
+
+incoming_chunk::incoming_chunk(std::shared_ptr<record_data_store_impl> store, data_id id, std::uint64_t chunk_no
+	, std::uint64_t expected_size, octet_vector expected_digest)
+: store_(std::move(store))
+, id_(std::move(id))
+, chunk_no_(chunk_no)
+, expected_size_(expected_size)
+, expected_digest_(std::move(expected_digest))
+, stage_(store_->files.begin_staging())
+, open_(true)
+{
+}
+
+incoming_chunk::incoming_chunk(incoming_chunk&& other) noexcept
+: store_(std::move(other.store_))
+, id_(std::move(other.id_))
+, chunk_no_(other.chunk_no_)
+, expected_size_(other.expected_size_)
+, expected_digest_(std::move(other.expected_digest_))
+, stage_(std::move(other.stage_))
+, hash_(std::move(other.hash_))
+, received_(other.received_)
+, open_(std::exchange(other.open_, false))
+{
+}
+
+incoming_chunk::~incoming_chunk() {
+	discard();
+}
+
+void incoming_chunk::discard() {
+	if(open_) {
+		open_ = false;
+		try {
+			store_->files.discard_staging(stage_);
+		} catch(std::exception const& e) {
+			LOG_WARN("failed to discard an incoming chunk: {}", e.what());
+		}
+	}
+}
+
+bool incoming_chunk::append(std::uint64_t offset, octet_span piece) {
+	bool const ok = open_ && offset == received_ && !piece.empty() && piece.size() <= expected_size_ - received_;
+	if(ok) {
+		// the staging area is this chunk's alone: no lock
+		store_->files.append_staged(stage_, chunk_no_, piece);
+		hash_.update(piece);
+		received_ += piece.size();
+	} else {
+		discard();
+	}
+	return ok;
+}
+
+bool incoming_chunk::finish() {
+	bool ok = open_ && complete() && hash_.final() == expected_digest_;
+	if(ok) {
+		open_ = false;
+		ok = store_->adopt_chunk(id_, chunk_no_, stage_);
+	} else {
+		discard();
+	}
+	return ok;
+}
+
 void copy_record_data(record_data& source, data_writer& writer) {
 	std::uint64_t const size = source.size();
 	octet_vector piece(static_cast<std::size_t>(std::min<std::uint64_t>(size, 256 * 1024)));
@@ -427,8 +529,22 @@ bool record_data_store::store_chunk(data_id const& id, std::uint64_t chunk_no, o
 	return ok;
 }
 
+std::optional<incoming_chunk> record_data_store::begin_chunk(data_id const& id, std::uint64_t chunk_no) {
+	std::optional<incoming_chunk> ret;
+	auto const row = impl_->table.find(id);
+	auto const known = manifest(id);
+	if(row && known && chunk_no < known->chunk_digests.size() && chunk_no < row->descriptor.chunk_count()) {
+		ret.emplace(impl_, id, chunk_no, row->descriptor.chunk_enc_size(chunk_no), known->chunk_digests[chunk_no]);
+	}
+	return ret;
+}
+
 std::optional<octet_vector> record_data_store::read_chunk(data_id const& id, std::uint64_t chunk_no) const {
 	return impl_->read_chunk(id, chunk_no);
+}
+
+std::optional<octet_vector> record_data_store::read_chunk_piece(data_id const& id, std::uint64_t chunk_no, std::uint64_t offset, std::size_t size) const {
+	return impl_->read_piece(id, chunk_no, offset, size);
 }
 
 }

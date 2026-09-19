@@ -1,9 +1,11 @@
 #pragma once
 
 #include "peer_config.hpp"
+#include "ticket_issuer.hpp"
 
 #include <spsync/core/sync_mode.hpp>
 #include <spsync/protocol/protocol_base.hpp>
+#include <spsync/protocol/s2s_protocol.hpp>
 
 #include <memory>
 #include <optional>
@@ -72,6 +74,22 @@ public:
 
 	/// Ids of the open storages that replicate to peers (replication mode != none)
 	virtual std::vector<protocol::storage_id> replicated_storages() const = 0;
+
+	// -- record data (record_data.txt RD12/RD13) --
+
+	/// the ticket for a data of the storage, issued to the member, with the data servers to use it at
+	virtual util::result<issued_ticket> issue_data_ticket(storage const&, data_id const&,
+		crypto::public_key_id const& member, std::uint32_t right) = 0;
+
+	/// the data-role servers of the storages of this server: the endpoint list of the storage info
+	virtual std::vector<data_endpoint> data_endpoints() const = 0;
+
+	/// a peer announced what its data role holds
+	virtual void data_announced(protocol::announce_data const&) = 0;
+
+	/// what this server's own data role holds, as announcements for a peer whose link
+	/// just came up; empty without a data role
+	virtual std::vector<protocol::announce_data> own_data_announcements() = 0;
 };
 
 }

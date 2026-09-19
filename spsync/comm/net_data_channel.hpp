@@ -45,7 +45,7 @@ public:
 	~net_data_channel();
 
 	void open_upload(data_descriptor const&, data_manifest const&, open_callback) override;
-	void send_chunk(data_id const&, std::uint64_t chunk_no, octet_vector encrypted, chunk_callback) override;
+	void send_piece(data_id const&, std::uint64_t chunk_no, std::uint64_t offset, octet_vector bytes, piece_callback) override;
 
 	/// drop every data connection; the calls still out are answered with an error
 	void close();

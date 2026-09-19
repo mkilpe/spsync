@@ -54,6 +54,10 @@ public:
 	/// plan 4.4); a no-op until the hello exchange is done
 	void announce_heads();
 
+	/// tell the peer what our data role holds (record_data.txt RD13); a no-op until the
+	/// hello exchange is done
+	void announce(protocol::announce_data const&);
+
 protected:
 	void on_connected() override;
 	void on_disconnected(securepath::error const& error) override;
@@ -69,6 +73,7 @@ public:
 	void operator()(protocol::not_replicating const&);
 	void operator()(protocol::request_key const&);
 	void operator()(protocol::response_key const&);
+	void operator()(protocol::announce_data const&);
 
 private:
 	void terminate(securepath::error const&);

@@ -56,13 +56,25 @@ private:
 	/// protocol error of a ticket this connection does not accept, no error when it does
 	securepath::error check_ticket(data_ticket const&, data_right) const;
 
+	/// one upload a manifest opened on this connection and its chunks on their way in
+	struct upload {
+		std::shared_ptr<server_data_store> store;
+		/// by chunk number; dropped with the connection, the staged pieces with them
+		std::map<std::uint64_t, incoming_chunk> incoming;
+	};
+
+	/// take one piece; true when it completed the data
+	util::result<bool> take_piece(upload&, protocol::upload_data_chunk const&);
+
 private:
 	using upload_key = std::pair<protocol::storage_id, data_id>;
 
+	/// chunks of one upload on their way in at once: more than any sender's window needs
+	static constexpr std::size_t max_incoming_chunks{32};
+
 	data_server_context& context_;
 	crypto::public_key_id id_;
-	/// the uploads a manifest opened on this connection
-	std::map<upload_key, std::shared_ptr<server_data_store>> uploads_;
+	std::map<upload_key, upload> uploads_;
 };
 
 }

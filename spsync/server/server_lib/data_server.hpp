@@ -12,6 +12,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace securepath::sync {
@@ -81,6 +82,16 @@ public:
 
 	/// run the expiry of incomplete uploads now over the open stores; returns how many went
 	std::size_t expire_incomplete();
+
+	/// what one data of a storage looks like here; nullopt when it is not known
+	std::optional<data_state_row> find(protocol::storage_id const&, data_id const&);
+
+	/// every complete data of the open stores with its storage (RD13 announcements)
+	std::vector<std::pair<protocol::storage_id, data_state_row>> complete_holdings();
+
+	/// load signals (RD13): octets reserved by the known data, uploads in progress
+	std::uint64_t stored_bytes();
+	std::uint64_t uploads_in_progress();
 
 private:
 	class impl;

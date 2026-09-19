@@ -20,6 +20,7 @@ spsync_server::spsync_server(spsync_server_params params)
 {
 	// role dispatched: the same context accepts clients/peers and dials out to peers (plan 4.1)
 	network::enable_pk_handshake(*storage_context_store_);
+	attach_data_role();
 }
 
 spsync_server::spsync_server(network::context& context, spsync_server_params params)
@@ -28,6 +29,7 @@ spsync_server::spsync_server(network::context& context, spsync_server_params par
 , storage_server_(context, params_.storage_params)
 , data_server_(context, params_.data_params)
 {
+	attach_data_role();
 }
 
 spsync_server::~spsync_server() {
@@ -46,10 +48,11 @@ int spsync_server::run_and_wait() {
 	LOG_INFO("Starting spsync server ({}, {})", params_.key_params.create_endpoint(), params_.storage_params.create_endpoint());
 	int ret = key_server::server::run(4, 2);
 	if(!ret) {
-		storage_server_.start();
+		// the data role first: the record role reads what it holds when it starts
 		if(params_.data_params.enabled) {
 			data_server_.start();
 		}
+		storage_server_.start();
 		key_server::server::wait();
 	}
 	return ret;
@@ -60,6 +63,13 @@ void spsync_server::close() {
 	data_server_.close();
 	storage_server_.close();
 	key_server::server::close();
+}
+
+/// an all-in-one server (record_data.txt RD12): the record role hears what the data role completes
+void spsync_server::attach_data_role() {
+	if(params_.data_params.enabled) {
+		storage_server_.attach_data_role(data_server_);
+	}
 }
 
 void spsync_server::check_key() {

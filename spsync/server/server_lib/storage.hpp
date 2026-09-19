@@ -88,6 +88,13 @@ public:
 	void add_listener(std::shared_ptr<connection> const&);
 
 	/**
+	 * The descriptor of a data a record of this storage names, from the record data index
+	 * the record storage keeps (record_data.txt RDS 2); nullopt for a data no stored
+	 * record references. What a data ticket is issued from (RD12).
+	 */
+	std::optional<data_descriptor> committed_data(data_id const&) const;
+
+	/**
 	 * The heads anti-entropy exchanges for this storage (plan 3.4): the own live head
 	 * from the log (when the server has a signing key, term 0 until phase 6) followed by
 	 * the stored heads of the other origins.

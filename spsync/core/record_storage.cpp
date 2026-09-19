@@ -6,6 +6,8 @@
 #include <securepath/serialisation/util.hpp>
 #include <securepath/util/conversions.hpp>
 #include <spsync/core/data/data_state_table.hpp>
+#include <spsync/core/database_util.hpp>
+#include <securepath/serialisation/vector.hpp>
 #include <spsync/core/records/data_change_record.hpp>
 
 #include <spsync/core/records/user_change_record.hpp>
@@ -313,7 +315,11 @@ struct record_storage::impl {
 				"key INTEGER PRIMARY KEY CHECK(key = 1),"
 				"cursor_owner BLOB,"
 				"max_record_size INTEGER,"
-				"chunk_size INTEGER);").execute();
+				"chunk_size INTEGER,"
+				"data_endpoints BLOB);").execute();
+		} else if(!has_column(*db, "sync_state", "data_endpoints")) {
+			// a database from before RDS 5
+			db->prepare("ALTER TABLE sync_state ADD COLUMN data_endpoints BLOB;").execute();
 		}
 	}
 
@@ -884,6 +890,24 @@ void record_storage::set_limits(storage_limits const& l) {
 		" ON CONFLICT(key) DO UPDATE SET max_record_size = excluded.max_record_size, chunk_size = excluded.chunk_size;");
 	q.bind(":m", static_cast<std::int64_t>(l.max_record_size));
 	q.bind(":c", static_cast<std::int64_t>(l.chunk_size));
+	q.execute();
+}
+
+std::vector<data_endpoint> record_storage::data_endpoints() const {
+	auto q = impl_->db->prepare("SELECT data_endpoints FROM sync_state WHERE key = 1;");
+	std::vector<data_endpoint> ret;
+	auto res = q.execute();
+	if(res && res.value<octet_vector>(0)) {
+		ret = database::extract_column_type<std::vector<data_endpoint>>(res, 0);
+	}
+	return ret;
+}
+
+void record_storage::set_data_endpoints(std::vector<data_endpoint> const& endpoints) {
+	auto q = impl_->db->prepare(
+		"INSERT INTO sync_state(key, data_endpoints) VALUES(1, :e)"
+		" ON CONFLICT(key) DO UPDATE SET data_endpoints = excluded.data_endpoints;");
+	q.bind(":e", serialisation::asn_der_serialise(endpoints));
 	q.execute();
 }
 

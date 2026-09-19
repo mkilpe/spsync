@@ -916,4 +916,52 @@ TEST_CASE("record_storage upgrades the object table", "[unit]") {
 	CHECK(!db_conn->has_table("record_objects_old"));
 }
 
+// (RDS 5) the storage's data servers are persisted next to the cursor owner and the limits
+TEST_CASE("record_storage data endpoints persist", "[unit]") {
+	remove_database_test_db();
+	std::vector<data_endpoint> const endpoints{
+		data_endpoint{"data1.example.org", 18203, crypto::public_key_id{securepath::test::random_octet_vector(32)}, "eu", {}},
+		data_endpoint{"::1", 4711, crypto::public_key_id{securepath::test::random_octet_vector(32)}, {}, {}}};
+	{
+		record_storage storage(database::sqlite::create_sqlite_connection(db_name));
+		CHECK(storage.data_endpoints().empty());
+		storage.set_limits(storage_limits{16 * 1024, 512 * 1024});
+		storage.set_data_endpoints(endpoints);
+		CHECK(storage.data_endpoints() == endpoints);
+	}
+	record_storage storage(database::sqlite::create_sqlite_connection(db_name));
+	CHECK(storage.data_endpoints() == endpoints);
+	// neither setter clobbers the other's columns
+	CHECK(storage.limits() == storage_limits{16 * 1024, 512 * 1024});
+	storage.set_cursor_owner(octet_vector(32, 8));
+	CHECK(storage.data_endpoints() == endpoints);
+	storage.set_data_endpoints({});
+	CHECK(storage.data_endpoints().empty());
+	CHECK(storage.cursor_owner() == octet_vector(32, 8));
+}
+
+// (RDS 5) a client database from before the endpoint list gets the column
+TEST_CASE("record_storage upgrades the sync state table", "[unit]") {
+	remove_database_test_db();
+	auto db_conn = database::sqlite::create_sqlite_connection(db_name);
+	db_conn->prepare("CREATE TABLE sync_state("
+		"key INTEGER PRIMARY KEY CHECK(key = 1),"
+		"cursor_owner BLOB,"
+		"max_record_size INTEGER,"
+		"chunk_size INTEGER);").execute();
+	{
+		auto q = db_conn->prepare("INSERT INTO sync_state(key, cursor_owner, max_record_size, chunk_size) VALUES(1, :o, 4096, 262144);");
+		q.bind(":o", octet_vector(32, 5));
+		q.execute();
+	}
+
+	record_storage storage(db_conn);
+	CHECK(storage.cursor_owner() == octet_vector(32, 5));
+	CHECK(storage.limits() == storage_limits{4096, 262144});
+	CHECK(storage.data_endpoints().empty());
+	std::vector<data_endpoint> const endpoints{data_endpoint{"h", 1, crypto::public_key_id{securepath::test::random_octet_vector(32)}, {}, {}}};
+	storage.set_data_endpoints(endpoints);
+	CHECK(storage.data_endpoints() == endpoints);
+}
+
 }

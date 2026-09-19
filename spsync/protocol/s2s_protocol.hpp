@@ -182,6 +182,50 @@ struct not_replicating : storage_request_base {
 	}
 };
 
+/// what a data-role server holds of one data (record_data.txt RD13)
+struct data_holding_entry {
+	storage_id sid;
+	octet_vector data_id;
+	std::uint64_t have_chunks{};
+	std::uint64_t total_chunks{};
+	bool complete{};
+
+	bool operator==(data_holding_entry const&) const = default;
+
+	template<typename S>
+	void serialise(S& s) {
+		serialisation::sequence<S> seq(s);
+		seq & sid & data_id & have_chunks & total_chunks & complete;
+	}
+};
+
+/**
+ * Availability announcement (RD13): what the data role of the holder has, with its load
+ * signals. Sent to the peers when a data completes and as a whole when a link comes up;
+ * the receivers feed their availability table, from which ticket answers order holders.
+ */
+struct announce_data : protocol_base {
+	announce_data(crypto::public_key_id h = {}, std::vector<data_holding_entry> e = {}, std::uint64_t stored = 0, std::uint32_t uploads = 0)
+	: holder(std::move(h))
+	, entries(std::move(e))
+	, stored_bytes(stored)
+	, uploads_in_progress(uploads)
+	{}
+
+	/// key id of the data server the entries are about
+	crypto::public_key_id holder;
+	std::vector<data_holding_entry> entries;
+	/// load signals of the holder: what it stores and what is coming in
+	std::uint64_t stored_bytes{};
+	std::uint32_t uploads_in_progress{};
+
+	template<typename S>
+	void serialise(S& s) {
+		serialisation::sequence<S> seq(s);
+		seq & static_cast<protocol_base&>(*this) & holder & entries & stored_bytes & uploads_in_progress;
+	}
+};
+
 using s2s_types = typelist<
 			type_tag<peer_hello, 1>,
 			type_tag<peer_heads, 2>,
@@ -190,7 +234,8 @@ using s2s_types = typelist<
 			type_tag<push_records, 5>,
 			type_tag<not_replicating, 6>,
 			type_tag<request_key, 7>,
-			type_tag<response_key, 8> >;
+			type_tag<response_key, 8>,
+			type_tag<announce_data, 9> >;
 
 }
 }

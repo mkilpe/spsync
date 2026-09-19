@@ -580,4 +580,42 @@ TEST_CASE("chain_sync signature verification", "[unit]") {
 	CHECK(check_result_error(sync.commit_block(chain_block{transplanted}), protocol::errc::invalid_record));
 }
 
+// (RDS 5, RD10) the bounds of a data descriptor are a validity rule: judged the same on
+// the commit path and on the foreign path, and they say nothing about the data itself
+TEST_CASE("chain_sync data descriptor bounds", "[unit]") {
+	remove_database_test_db();
+	chain_sync sync(database::sqlite::create_sqlite_connection(db_name), chain_sync_config{sync_mode::allow_all});
+	test_block_creator creator;
+	REQUIRE(sync.commit_block(creator.test_user_change()));
+
+	auto const digest = securepath::test::random_octet_vector(64);
+	data_descriptor const good{3 * 1024 * 1024 + 48, 1024 * 1024, digest};
+	REQUIRE(valid_data_descriptor(good));
+	CHECK(valid_data_descriptor(data_descriptor{4112, min_chunk_size, digest}));
+	CHECK(valid_data_descriptor(data_descriptor{4112, max_chunk_size, digest}));
+
+	std::vector<data_descriptor> const bad{
+		data_descriptor{good.enc_size, min_chunk_size - 1, digest},
+		data_descriptor{good.enc_size, max_chunk_size + 1, digest},
+		data_descriptor{good.enc_size, 0, digest},
+		data_descriptor{0, good.chunk_size, digest},
+		data_descriptor{16, good.chunk_size, digest},
+		data_descriptor{good.enc_size, good.chunk_size, securepath::test::random_octet_vector(32)},
+		data_descriptor{good.enc_size, good.chunk_size, {}},
+		// more chunks than a manifest may name
+		data_descriptor{(std::uint64_t{min_chunk_size} + 16) * (max_data_chunks + 1), min_chunk_size, digest}};
+	for(auto const& d : bad) {
+		CHECK(!valid_data_descriptor(d));
+		auto creator_copy = creator;
+		CHECK(check_result_error(sync.commit_block(creator_copy.test_data_change_with_data(d)), protocol::errc::invalid_record));
+		auto foreign_creator = creator;
+		CHECK(check_result_error(sync.commit_foreign(foreign_creator.test_data_change_with_data(d)), protocol::errc::invalid_record));
+	}
+
+	CHECK(sync.commit_block(creator.test_data_change_with_data(good)));
+	auto foreign_creator = creator;
+	CHECK(sync.commit_foreign(foreign_creator.test_data_change_with_data(data_descriptor{4112, min_chunk_size
+		, securepath::test::random_octet_vector(64)})));
+}
+
 }

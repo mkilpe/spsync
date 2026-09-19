@@ -1,5 +1,6 @@
 #pragma once
 
+#include "data_availability.hpp"
 #include "peer_config.hpp"
 
 #include <spsync/core/origin_head.hpp>
@@ -19,6 +20,7 @@ using namespace std::chrono_literals;
 
 namespace securepath::sync {
 
+class data_server;
 class storage;
 
 struct storage_server_params {
@@ -59,6 +61,17 @@ struct storage_server_params {
 	std::chrono::seconds anti_entropy_interval{30s};
 
 	asio::ip::tcp::endpoint create_s2s_endpoint() const;
+
+	/**
+	 * The data-role servers of the storages of this server (record_data.txt RD12), cluster
+	 * configuration next to the peer list: where data tickets send the clients and what
+	 * the storage info lists. An all-in-one server lists itself with the address its
+	 * clients reach its data port at. Empty: the storages carry no record data.
+	 */
+	std::vector<data_endpoint> data_servers;
+
+	/// how long an issued data ticket is valid
+	std::chrono::seconds ticket_validity{600s};
 };
 
 class storage_server {
@@ -92,6 +105,16 @@ public:
 
 	/// ids of the peers with an authenticated live connection
 	std::vector<crypto::public_key_id> connected_peers() const;
+
+	/**
+	 * This server has the data role too (all-in-one, RD12): what its data server
+	 * completes goes into the availability table here and is announced to the peers
+	 * (RD13). Call before start(); the data server must outlive this server's run.
+	 */
+	void attach_data_role(data_server&);
+
+	/// the availability table the ticket answers are ordered from (tests and tooling)
+	data_availability const& availability() const;
 private:
 	class impl;
 	// encrypted_server requires this to be shared_ptr

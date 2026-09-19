@@ -1,5 +1,6 @@
 #pragma once
 
+#include <spsync/core/data/data_ticket.hpp>
 #include <spsync/core/error.hpp>
 #include <spsync/util/format.hpp>
 
@@ -31,6 +32,13 @@ struct peer_config {
 std::istream& operator>>(std::istream&, peer_config&);
 std::ostream& operator<<(std::ostream&, peer_config const&);
 std::string to_string(peer_config const&);
+
+/**
+ * A data-role server in the cluster configuration of a record server (record_data.txt
+ * RD12), parsed from "host:port/keyid-hex" with an optional "/region" label at the end
+ */
+std::istream& operator>>(std::istream&, data_endpoint&);
+std::ostream& operator<<(std::ostream&, data_endpoint const&);
 
 /// The resolved identity of this server: its signing key id and its replication peers.
 struct server_identity {

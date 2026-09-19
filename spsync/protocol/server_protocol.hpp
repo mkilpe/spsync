@@ -1,6 +1,7 @@
 #pragma once
 
 #include "protocol_base.hpp"
+#include <spsync/core/data/data_ticket.hpp>
 #include <spsync/core/records/block_envelope.hpp>
 
 namespace securepath::sync::protocol {
@@ -52,7 +53,7 @@ struct storage_management_reply : reply_base {
 struct response_sequence_number : reply_base {
 	using reply_base::reply_base;
 
-	response_sequence_number(storage_request_base const& p, sequence_number seq, wire_modes m = {})
+	response_sequence_number(storage_request_base const& p, sequence_number seq, wire_modes m = {}, std::vector<data_endpoint> endpoints = {})
 	: reply_base(p)
 	, sequence(seq)
 	, mode(m.mode)
@@ -60,6 +61,7 @@ struct response_sequence_number : reply_base {
 	, repl(m.repl)
 	, max_record_size(m.max_record_size)
 	, chunk_size(m.chunk_size)
+	, data_endpoints(std::move(endpoints))
 	{
 	}
 
@@ -73,11 +75,13 @@ struct response_sequence_number : reply_base {
 	/// oversized changes before committing
 	std::uint32_t max_record_size{0};
 	std::uint32_t chunk_size{0};
+	/// the data-role servers of the storage (record_data.txt RD12); empty when it carries no record data
+	std::vector<data_endpoint> data_endpoints;
 
 	template<typename S>
 	void serialise(S& s) {
 		serialisation::sequence<S> seq(s);
-		seq & static_cast<reply_base&>(*this) & sequence & mode & amode & repl & max_record_size & chunk_size;
+		seq & static_cast<reply_base&>(*this) & sequence & mode & amode & repl & max_record_size & chunk_size & data_endpoints;
 	}
 };
 
@@ -134,6 +138,26 @@ struct response_commit : reply_base {
 	}
 };
 
+/// the ticket and the data servers to use it at, in the order to try them (RD12/RD13)
+struct response_data_ticket : reply_base {
+	using reply_base::reply_base;
+
+	response_data_ticket(storage_request_base const& p, data_ticket t, std::vector<data_endpoint> h)
+	: reply_base(p)
+	, ticket(std::move(t))
+	, holders(std::move(h))
+	{}
+
+	data_ticket ticket;
+	std::vector<data_endpoint> holders;
+
+	template<typename S>
+	void serialise(S& s) {
+		serialisation::sequence<S> seq(s);
+		seq & static_cast<reply_base&>(*this) & ticket & holders;
+	}
+};
+
 struct notify_record {
 	notify_record(storage_id sid = {}, chain_block r = {}, std::optional<block_envelope> env = {})
 	: sid(std::move(sid))
@@ -163,7 +187,8 @@ using s2c_types =
 			type_tag<response_records, 6>,
 			type_tag<response_data, 7>,
 			type_tag<response_commit, 8>,
-			type_tag<notify_record, 9> >;
+			type_tag<notify_record, 9>,
+			type_tag<response_data_ticket, 10> >;
 
 }
 }

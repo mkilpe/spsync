@@ -38,6 +38,10 @@ enum class errc {
 	data_quota_exceeded,
 	/// the data is bigger than this data server takes (RD10)
 	data_too_big,
+	/// no committed record of the storage names the data: no ticket for it (RD12)
+	unknown_data,
+	/// the storage has no data-role servers configured: it carries no record data
+	no_data_servers,
 	end_of_list
 };
 

@@ -49,6 +49,15 @@ public:
 	 */
 	util::result<bool> store_chunk(data_id const&, std::uint64_t chunk_no, octet_span encrypted, time_point now);
 
+	/**
+	 * The same for a chunk that arrives in pieces: begin, append the pieces to what
+	 * begin_chunk gave, finish. Errors of begin: no_such_upload, invalid_data_chunk (the
+	 * manifest names no such chunk); of finish: invalid_data_chunk (incomplete, or not
+	 * the manifest's chunk - nothing of it is kept).
+	 */
+	util::result<incoming_chunk> begin_chunk(data_id const&, std::uint64_t chunk_no, time_point now);
+	util::result<bool> finish_chunk(data_id const&, incoming_chunk&, time_point now);
+
 	/// what is known of the data; in_sync = complete
 	std::optional<data_state_row> find(data_id const&) const;
 
@@ -58,6 +67,12 @@ public:
 	/// what the storage's data takes against the quota: the enc_size of every known data
 	std::uint64_t used_bytes() const;
 
+	/// every data held completely
+	std::vector<data_state_row> complete_data() const;
+
+	/// uploads that were opened and have not completed or expired
+	std::uint64_t uploads_in_progress() const;
+
 	/**
 	 * Drop the incomplete uploads nothing touched since the given time, rows and chunks:
 	 * their reservation is free again. Returns how many went.
@@ -65,6 +80,7 @@ public:
 	std::size_t expire_incomplete(time_point untouched_since);
 
 private:
+	util::result<bool> chunk_kept(data_id const&, time_point now);
 	void touch(data_id const&, time_point now);
 	void forget_activity(data_id const&);
 

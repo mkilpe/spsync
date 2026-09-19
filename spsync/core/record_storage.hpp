@@ -4,6 +4,7 @@
 #include "record_interface.hpp"
 #include "sync_mode.hpp"
 #include <spsync/core/data/data_descriptor.hpp>
+#include <spsync/core/data/data_ticket.hpp>
 #include <securepath/database/connection.hpp>
 
 #include <deque>
@@ -129,6 +130,14 @@ public:
 	 */
 	storage_limits limits() const;
 	void set_limits(storage_limits const&);
+
+	/**
+	 * The data-role servers of the storage as the record server listed them on attach
+	 * (record_data.txt RD12), persisted like the cursor owner. The holders a data ticket
+	 * names are what a transfer uses; this is the static list behind them.
+	 */
+	std::vector<data_endpoint> data_endpoints() const;
+	void set_data_endpoints(std::vector<data_endpoint> const&);
 
 
 	// -- truncation --

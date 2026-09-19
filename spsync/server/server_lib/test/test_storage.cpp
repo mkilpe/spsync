@@ -249,4 +249,27 @@ TEST_CASE("storage skips a permanently rejected foreign record", "[unit]") {
 	std::filesystem::remove_all(root_b);
 }
 
+// (RDS 5) what a data ticket is issued from: the descriptor of a data a committed record names
+TEST_CASE("storage committed data", "[unit]") {
+	std::string const root = "test-storage-root";
+	std::filesystem::remove_all(root);
+	protocol::storage_id sid = securepath::test::random_octet_vector(8);
+	storage s(sid, storage_config{root}, storage_modes{sync_mode::allow_all, auth_mode::only_tag});
+
+	test::test_block_creator creator;
+	REQUIRE(s.commit_block(creator.test_user_change()).block);
+
+	data_descriptor const committed{3 * 1024 * 1024 + 48, 1024 * 1024, securepath::test::random_octet_vector(64)};
+	CHECK(!s.committed_data(committed.manifest_digest));
+	REQUIRE(s.commit_block(creator.test_data_change_with_data(committed)).block);
+	CHECK(s.committed_data(committed.manifest_digest) == committed);
+
+	// a refused record names nothing
+	data_descriptor const refused{4112, 100, securepath::test::random_octet_vector(64)};
+	CHECK(!s.commit_block(creator.test_data_change_with_data(refused)).block);
+	CHECK(!s.committed_data(refused.manifest_digest));
+	CHECK(!s.committed_data(securepath::test::random_octet_vector(64)));
+	CHECK(!s.committed_data({}));
+}
+
 }

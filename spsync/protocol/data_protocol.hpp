@@ -4,6 +4,9 @@
 
 #include <spsync/core/data/data_manifest.hpp>
 #include <spsync/core/data/data_ticket.hpp>
+#include <spsync/core/sync_mode.hpp>
+
+#include <securepath/serialisation/codec/asn_der/types.hpp>
 
 namespace securepath::sync::protocol {
 inline namespace v1 {
@@ -49,23 +52,43 @@ struct upload_data_manifest : protocol_base {
 	}
 };
 
-/// one encrypted chunk of an upload opened on this connection
+/**
+ * A chunk - the unit at rest, up to max_chunk_size - never travels in one packet: it
+ * moves in pieces, so neither side holds more than a piece of it in memory and the size
+ * of a chunk is not bound by what a packet may carry. The sender picks the piece size
+ * (default below), the receiver takes pieces up to the maximum.
+ */
+std::uint32_t constexpr default_data_piece_size{128 * 1024};
+std::uint32_t constexpr max_data_piece_size{1024 * 1024};
+
+// the piece is one DER octet string: the codec refuses primitives above its limit
+static_assert(std::uint64_t{max_data_piece_size} + 64 <= serialisation::max_structure_size);
+
+/**
+ * One piece of an encrypted chunk of an upload opened on this connection: bytes of the
+ * chunk from offset. The pieces of a chunk come in order from offset 0 (a piece at 0
+ * starts the chunk over); the piece that completes the chunk gets it verified against
+ * the manifest, and its reply tells whether it was the manifest's chunk.
+ */
 struct upload_data_chunk : storage_request_base {
-	upload_data_chunk(call_id cid = 0, storage_id sid = {}, octet_vector data_id = {}, std::uint64_t chunk_no = 0, octet_vector bytes = {})
+	upload_data_chunk(call_id cid = 0, storage_id sid = {}, octet_vector data_id = {}, std::uint64_t chunk_no = 0
+		, std::uint64_t offset = 0, octet_vector bytes = {})
 	: storage_request_base(cid, std::move(sid))
 	, data_id(std::move(data_id))
 	, chunk_no(chunk_no)
+	, offset(offset)
 	, bytes(std::move(bytes))
 	{}
 
 	octet_vector data_id;
 	std::uint64_t chunk_no{};
+	std::uint64_t offset{};
 	octet_vector bytes;
 
 	template<typename S>
 	void serialise(S& s) {
 		serialisation::sequence<S> seq(s);
-		seq & static_cast<storage_request_base&>(*this) & data_id & chunk_no & bytes;
+		seq & static_cast<storage_request_base&>(*this) & data_id & chunk_no & offset & bytes;
 	}
 };
 
@@ -107,7 +130,7 @@ struct upload_data_chunk_reply : reply_base {
 	, complete(complete)
 	{}
 
-	/// true when this chunk completed the data
+	/// true when this piece completed the data
 	bool complete{};
 
 	template<typename S>

@@ -109,7 +109,7 @@ void connection::handle(protocol::request_sequence_number const& p) {
 	if(error) {
 		send_packet(protocol::response_sequence_number{p, error});
 	} else {
-		send_packet(protocol::response_sequence_number{p, seq, to_wire(std::optional<storage_modes>{smodes})});
+		send_packet(protocol::response_sequence_number{p, seq, to_wire(std::optional<storage_modes>{smodes}), context_.data_endpoints()});
 	}
 }
 
@@ -176,6 +176,34 @@ void connection::handle(protocol::request_commit const& p) {
 		send_packet(protocol::response_commit{p, server_max, std::move(result.value()), std::move(envelope)});
 	} else {
 		send_packet(protocol::response_commit{p, std::move(result.get_error())});
+	}
+}
+
+void connection::handle(protocol::request_data_ticket const& p) {
+	LOG_TRACE("request_data_ticket for user {} [data_id={}]", id_, to_hex(p.data_id));
+	util::result<issued_ticket> issued;
+	try {
+		auto handle = find_storage(p.sid);
+		if(handle && context_.is_syncing(p.sid)) {
+			// the record naming the data may not have arrived here yet
+			issued = make_error(protocol::errc::storage_syncing);
+		} else if(handle) {
+			issued = context_.issue_data_ticket(*handle, p.data_id, id_, p.right);
+		} else {
+			issued = make_error(protocol::errc::no_such_storage);
+		}
+	} catch(securepath::error const& err) {
+		LOG_WARN("exception while issuing a data ticket: {} (sid={})", err, to_hex(p.sid));
+		issued = err;
+	} catch(std::exception const& ex) {
+		LOG_WARN("exception while issuing a data ticket: {} (sid={})", ex.what(), to_hex(p.sid));
+		issued = make_error(securepath::errc::unknown_error);
+	}
+	if(issued) {
+		send_packet(protocol::response_data_ticket{p, std::move(issued->ticket), std::move(issued->holders)});
+	} else {
+		LOG_INFO("no data ticket for user {}: {}", id_, issued.get_error());
+		send_packet(protocol::response_data_ticket{p, issued.get_error()});
 	}
 }
 

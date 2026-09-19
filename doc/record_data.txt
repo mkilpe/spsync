@@ -101,6 +101,19 @@ RD4 Transfer protocol (flesh out the c2s stubs; all inside the encrypted
     Uploads happen after the record is acked (the tag exists server side);
     interrupted transfers resume by manifest. Fetch is pull-based and lazy by
     default (use case 1: fetch data for individual files only).
+    Wire pieces (2026-09-19): the chunk is the unit at rest - one file, one
+    AES-GCM pass, one manifest entry, the resume granularity - and must not be
+    bound by what a packet may carry (the DER codec takes one octet string of
+    2 MiB at most, and whole chunks in packets cost their size in memory per
+    packet in flight). A chunk therefore travels in pieces: {chunk no, offset,
+    bytes}, 128 KiB by default, at most 1 MiB, in order from offset 0. The
+    sender reads pieces from the chunk file, the receiver appends them to a
+    staged file and hashes as they come; the piece that completes the chunk
+    gets the whole checked against the manifest and only then it becomes a
+    chunk. A gap, an overrun or wrong bytes lose the chunk (it starts over at
+    offset 0), a lost connection loses the chunks that were half way. So
+    max_chunk_size stays 8 MiB and the memory a transfer takes is the window
+    of pieces, whatever the chunk size.
 
 RD5 Server data store. Chunks as files under the storage directory
     (record-storages/<sid>/data/<data_id>/...), sqlite is for the bookkeeping
@@ -508,10 +521,10 @@ Implementation steps
         region} for the endpoint/holder lists. The digest helpers of
         block_envelope moved to util/digest_buffer.hpp and are shared.
       + data protocol (protocol/data_protocol.hpp, own packet families c2d/d2c
-        on the data port 18202): data_hello / data_hello_reply (version),
+        on the data port 18203): data_hello / data_hello_reply (version),
         upload_data_manifest {ticket, manifest} -> reply {have octets} (open or
-        resume), upload_data_chunk {sid, data_id, chunk no, bytes} -> reply
-        {complete}. Download packets come with RDS 6. New protocol errors:
+        resume), upload_data_chunk {sid, data_id, chunk no, offset, bytes} ->
+        reply {complete} (a chunk goes in pieces since RDS 5, see RD4). Download packets come with RDS 6. New protocol errors:
         invalid_data_ticket, data_ticket_expired, invalid_data_manifest,
         invalid_data_chunk, no_such_upload, data_quota_exceeded, data_too_big.
       + server_data_store (server_lib/data_store): one per storage on top of the
@@ -574,27 +587,124 @@ Implementation steps
       public keys through the link RDS 5 adds (today they must be in its key
       store), the same link carries the announcements.
 
-- RDS 5  Record role: tickets, endpoints, availability table                   [1d]
++ RDS 5  Record role: tickets, endpoints, availability table -- done 2026-09-19 [1d]
       Ticket issue (upload placement, download holder ordering, quota
       accounting), data endpoints + limits in the storage info, the availability
       table fed by data servers and relayed between record servers with the
       heads, load fields. Tests: holder order by completeness/load, endpoint list
       persisted by the client, ticket for an unknown data refused.
-      From RDS 4: data_ticket, data_endpoint and the data server's trust in
-      issuers exist; open are request_data_ticket on the record connection (the
-      client's ticket_source), the holder ordering, the announcement packet from
-      data_server::set_complete_handler into the availability table, and
-      client_sync creating a net_data_channel for create_storage_connection.
-      From RDS 2: the record server already has a record_data row per data_id
-      its chain names (descriptor sizes included) and the references from the
-      object rows, so a ticket request can name the data_id alone and "unknown
-      data" is a lookup; the ticket step sits inside the client's data_channel.
+      With this step a real client uploads: comm gets tickets from the record
+      role and moves the chunks to the data role (test: two clients over an
+      all-in-one server, the data becomes in_sync).
+      + ticket request: c2s request_data_ticket {sid, data_id, right} ->
+        s2c response_data_ticket {ticket, holders}. The data is named by its
+        data_id alone: storage::committed_data looks the descriptor up in the
+        record data index the record storage keeps (RDS 2) and wants a stored
+        record referencing it, so a ticket for an unknown data is refused
+        (unknown_data); a syncing replica answers storage_syncing (the record
+        may not have arrived yet); no configured data servers ->
+        no_data_servers. The ticket is issued to the key of the connection
+        (membership checks are distributed phase 7, as for everything else) and
+        is valid --ticket_validity (10 min).
+      + ticket_issuer + data_availability (server_lib): upload holders =
+        placement order, rendezvous hashing of (data server key, data_id) - the
+        same on every record server without coordination, even over the set,
+        and a server joining or leaving moves only its own share; the first k
+        are the primary holders of a copy count k. Download holders = complete
+        ones first (fewer uploads in progress, then fewer stored bytes), partial
+        ones by how much they have, then the servers nothing is known of in
+        placement order (where an upload would have gone), so the table only
+        ever improves the answer and need not be complete; holders that are no
+        data server of the storage are left out.
+      + descriptor bounds are a validity rule now (RD10): valid_data_descriptor
+        - sha3-512 digest, chunk_size in [min_chunk_size, max_chunk_size], at
+        least one and at most max_data_chunks (200000, a manifest fits a frame)
+        chunks - checked by chain_sync on the commit AND the foreign path ->
+        invalid_record. chunk_size need not be the storage's (every data is
+        self-describing; a client that has not learned the limits yet uses the
+        default).
+      + storage info: response_sequence_number carries the data endpoint list
+        (--data_servers host:port/keyid[/region] on the record servers, an
+        all-in-one server lists itself); the engine persists it in the client
+        record storage (sync_state.data_endpoints, old tables get the column).
+        Transfers use the holders of the ticket answer; the list is the static
+        view behind them.
+      + availability (RD13): s2s announce_data {holder, entries[{sid, data_id,
+        have, total, complete}], stored_bytes, uploads_in_progress}. An
+        all-in-one server (storage_server::attach_data_role) puts what its data
+        role completes into its own table at once and pushes it to the connected
+        peers; a link that comes up gets the whole view in batches of 500, and a
+        starting server reads what its data role already holds - the table is
+        transient, nothing is persisted. A peer may only announce itself as the
+        holder.
+      + client: comm makes the net_data_channel itself when the storage has a
+        data store (an explicit channel is still taken, for tests); its
+        ticket_source sends request_data_ticket over the record connection,
+        answers are matched by call id, a disconnect fails the requests still
+        out. client_sync needed no change beyond RDS 3's data_root.
+      + found by the end to end test with real 1 MiB chunks, both fixed: (1) the
+        packet deserialiser caps a message at 1 MiB by default - the data
+        listener takes the transport frame limit now (securepath:
+        packet_deserialiser forwards the limit constructor); (2) the DER codec
+        refuses one octet string above 2 MiB (max_structure_size), so a chunk
+        above that could not travel in one packet - solved by the wire pieces
+        of RD4 (below), max_chunk_size stays 8 MiB. The same 1 MiB deserialiser default
+        sits on the record and s2s connections against 8 MiB record batches:
+        recorded in todos.txt, not fixed here. The default data port is 18203
+        (18202 is the packet server).
+      + tests: server_lib test_data_availability (table, placement: same order
+        from any configuration order, spread, minimal movement; download order
+        by completeness and load; issuer: unknown data / no servers / no key /
+        bad right refused, ticket fields and validity, upload vs download
+        holders; endpoint configuration parsing), test_chain_sync descriptor
+        bounds on both paths, test_storage committed_data, test_data_announce
+        (two all-in-one servers: own table at once, whole view on link up, push
+        on completion, load, restart), test_data_server full size chunks; core
+        endpoint persistence + sync_state upgrade; client test_client_sync
+        "uploads record data" (end to end, availability and both clients'
+        endpoint lists checked) and the no-data-servers variant.
+      + wire pieces (RD4, decided 2026-09-19 after (2) above): upload_data_chunk
+        carries {chunk no, offset, bytes}; protocol constants
+        default_data_piece_size 128 KiB and max_data_piece_size 1 MiB with a
+        static_assert against the codec limit. Store: chunk_files read_piece /
+        append_staged / adopt_staged_chunk, record_data_store::read_chunk_piece
+        and begin_chunk -> incoming_chunk (append(offset, piece) hashes and
+        stages, finish() verifies against the manifest entry and adopts the
+        file; dropped = nothing left behind), server_data_store begin_chunk /
+        finish_chunk. data_connection keeps the incoming chunks of an upload
+        (at most 32 at once), a piece at offset 0 starts a chunk over, anything
+        out of order, overrunning, above the piece maximum or wrong in the end
+        is invalid_data_chunk and nothing of the chunk is kept. Client:
+        data_channel::send_piece, the uploader walks each missing chunk in
+        pieces read from its file, window = 16 pieces (2 MiB on the way per
+        data with 128 KiB pieces), progress per piece; the data link sends with
+        its lock held so pieces leave in the order they were posted. Tests:
+        store pieces (read ranges, receive in pieces, gap, junk, dropped half
+        way, already held), connection pieces (interleaved chunks, gap,
+        overrun, unknown chunk, junk found at the last piece, restart at 0,
+        oversized piece, connection lost half way then finished by the next
+        one), uploader pieces (order, window in pieces, short last chunk,
+        progress per piece), 8 MiB chunks end to end over TLS.
+      Not done, with the reason:
+      - quota accounting at ticket issue: a ticket does not say how much will
+        move (a resume moves the rest only), counting by ticket overcharges.
+        Transfer quota goes where the octets are counted, with serving (RDS 6).
+      - the announcement link of a SEPARATE data server: it has to dial the
+        record servers' s2s listener, which accepts configured replication peers
+        only. Goes with the deployment shapes of RDS 7; until then downloads
+        from separate data servers are ordered by placement (where the upload
+        went), and their record servers' keys must be in their key store.
+      - locality: the region label travels, the ordering does not use it yet
+        (the record server does not know where a client is).
 
 - RDS 6  Download path                                                         [1d]
       Client data connections to the holders, request_data/response_data ranges
       with parallel ranges across holders, notify_data, lazy/auto fetch policy,
       verification on fetch, redirect handling and failover down the holder
-      list, transfer quota windows (RD10) on serving; the manifest is fetched
+      list - chunks come in the same wire pieces as they go up (RD4; the client
+      side receives with record_data_store::begin_chunk), transfer quota windows
+      (RD10) on serving (all of the transfer quota:
+      nothing is counted at ticket issue, see RDS 5); the manifest is fetched
       before the chunks (the store verifies every chunk against it, RDS 2); the
       skip of a download whose content_digest is already held (moved here from
       RDS 3). Tests: second client
@@ -606,7 +716,9 @@ Implementation steps
       System test: multi-hundred-MB object between two clients over the test
       server incl. kill/resume both directions; mobile-style lazy fetch of one
       object among many; the two deployment shapes of RD12 (record servers +
-      separate data server, all-in-one replicas).
+      separate data server, all-in-one replicas) - the separate shape needs the
+      data server's announcement link to the record servers (left by RDS 5) and
+      a retry of uploads whose data connection dropped (left by RDS 4).
 
 + RDS 8  Chain validity limits -- done 2026-09-07                          [0.5d]
       max_record_size and chunk_size as per-storage creation parameters (RD10
@@ -619,7 +731,8 @@ Implementation steps
       range of large records still fetchable.
       Implemented: storage_limits {max_record_size, chunk_size} inside
       storage_modes (sync_mode.hpp; defaults 256 KiB / 1 MiB, ranges 4 KiB..8 MiB
-      and 256 KiB..8 MiB, valid_storage_limits). 0 = not stated: the server
+      and 256 KiB..8 MiB, valid_storage_limits; a chunk above the codec's 2 MiB
+      octet string limit is no problem since chunks travel in pieces, RD4). 0 = not stated: the server
       defaults at creation (storage_config::default_limits, spsync_server
       --max_record_size / --chunk_size), "whatever the storage has" when a client
       states its expectation (modes_match, which also covers the unasserted
@@ -685,9 +798,10 @@ q: compression - a reserved flag in the encrypted header, client-side only,
    implementation deferred. If it comes: per chunk (random access survives),
    then pad, then encrypt; most large payloads are media and gain nothing.
 q: chunk_size - per storage, immutable creation parameter next to the modes and
-   the validity limits (RDS 8), range 256 KiB .. 8 MiB (headroom under the
-   16 MiB frame cap); the descriptor still carries it so every data is
-   self-describing.
+   the validity limits (RDS 8), range 256 KiB .. 8 MiB; the descriptor still
+   carries it so every data is self-describing. The chunk is the unit at rest
+   only: on the wire it moves in pieces (RD4), so neither the frame cap nor the
+   codec's 2 MiB octet string limit bound it.
 q: transfer scheduling - two datas in flight per connection, a window of 4-8
    chunks each; explicit fetches first, then auto-fetches newest first, uploads
    in commit order; no bandwidth caps in the engine (phase 7 rate limiting);

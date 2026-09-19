@@ -52,6 +52,8 @@ std::uint32_t constexpr min_max_record_size{4 * 1024};
 std::uint32_t constexpr max_max_record_size{8 * 1024 * 1024};
 std::uint32_t constexpr default_chunk_size{1024 * 1024};
 std::uint32_t constexpr min_chunk_size{256 * 1024};
+/// the chunk is the unit at rest (one file, one AES-GCM pass); on the wire it travels in
+/// pieces (protocol/data_protocol.hpp), so its size is not bound by a packet
 std::uint32_t constexpr max_chunk_size{8 * 1024 * 1024};
 
 /// stated limits must be within the ranges (the upper bounds keep a batch of records or a

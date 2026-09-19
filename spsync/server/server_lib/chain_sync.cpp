@@ -153,6 +153,14 @@ chain_sync::rule_result chain_sync::evaluate_foreign(chain_block const& block) c
 							return c.data.previous_oid_record_tag.empty();
 						});
 					fr.type = has_add ? rec_type::data_add_remove : rec_type::none;
+					// RD10: the descriptor bounds are a validity rule like the size limit,
+					// the origin judged by the same; a peer pushing this is misbehaving
+					bool const bad_descriptor = std::ranges::any_of(rec, [](auto const& c) {
+							return c.data.data && !valid_data_descriptor(*c.data.data);
+						});
+					if(bad_descriptor) {
+						fr.err = make_error(protocol::errc::invalid_record);
+					}
 				}
 				return fr;
 			});
@@ -224,6 +232,10 @@ chain_sync::rule_result chain_sync::check_rules(data_change_record const& rec) c
 	for(auto it = rec.begin(); it != rec.end() && !r.err; ++it) {
 		if(!it->data.id.is_valid()) {
 			LOG_TRACE("data id is invalid [id={}] (rsid={})", it->data.id, config_.log_id);
+			r.err = make_error(protocol::errc::invalid_record);
+		} else if(it->data.data && !valid_data_descriptor(*it->data.data)) {
+			LOG_TRACE("data descriptor out of bounds [oid={}, enc_size={}, chunk_size={}] (rsid={})"
+				, it->data.id, it->data.data->enc_size, it->data.data->chunk_size, config_.log_id);
 			r.err = make_error(protocol::errc::invalid_record);
 		} else {
 			auto handle = log_.records().find_last(it->data.id);

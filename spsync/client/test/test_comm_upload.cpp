@@ -14,6 +14,7 @@
 #include <atomic>
 #include <filesystem>
 #include <mutex>
+#include <thread>
 
 namespace securepath::sync::client::test {
 namespace {
@@ -26,7 +27,7 @@ struct accepting_channel : data_channel {
 		cb(util::result<have_bitmap>{have_bitmap{d.chunk_count()}});
 	}
 
-	void send_chunk(data_id const&, std::uint64_t, octet_vector, chunk_callback cb) override {
+	void send_piece(data_id const&, std::uint64_t, std::uint64_t, octet_vector, piece_callback cb) override {
 		++chunks;
 		cb(std::nullopt);
 	}
@@ -128,21 +129,28 @@ TEST_CASE("comm upload data", "[unit]") {
 		net.detach(octet_vector(16, 1));
 	}
 
-	SECTION("without one") {
-		auto sconn = net.create_storage_connection(octet_vector(16, 2), storage, progress, {}, &store);
+	SECTION("a storage without record data") {
+		auto sconn = net.create_storage_connection(octet_vector(16, 3), storage, progress);
 		sconn.attach(output);
+		CHECK(sconn.input().data() == nullptr);
 		sconn.input().upload_data(data.manifest_digest);
 		WAIT_CHECK(output.answered == 1, 2s);
 		REQUIRE(output.answers.size() == 1);
 		REQUIRE(output.answers[0].second);
 		CHECK(output.answers[0].second->code() == make_error_code(securepath::errc::not_supported));
-		net.detach(octet_vector(16, 2));
+		net.detach(octet_vector(16, 3));
 	}
 
-	SECTION("a storage without record data") {
-		auto sconn = net.create_storage_connection(octet_vector(16, 3), storage, progress);
-		CHECK(sconn.input().data() == nullptr);
-		net.detach(octet_vector(16, 3));
+	SECTION("the real channel is made when none is given") {
+		// (RDS 5) its tickets come over the record connection: not connected here, so the
+		// request waits - and is answered when the storage connection goes away
+		auto sconn = net.create_storage_connection(octet_vector(16, 2), storage, progress, {}, &store);
+		sconn.attach(output);
+		sconn.input().upload_data(data.manifest_digest);
+		std::this_thread::sleep_for(200ms);
+		CHECK(output.answered == 0);
+		CHECK(channel.chunks == 0);
+		net.detach(octet_vector(16, 2));
 	}
 }
 

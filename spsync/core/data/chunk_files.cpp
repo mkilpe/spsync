@@ -52,6 +52,22 @@ std::optional<octet_vector> read_file(std::filesystem::path const& path) {
 	return ret;
 }
 
+std::optional<octet_vector> read_file_piece(std::filesystem::path const& path, std::uint64_t offset, std::size_t size) {
+	std::optional<octet_vector> ret;
+	std::error_code ec;
+	auto const file_size = std::filesystem::file_size(path, ec);
+	if(!ec && offset <= file_size && size <= file_size - offset) {
+		std::ifstream in(path, std::ios::binary);
+		in.seekg(static_cast<std::streamoff>(offset));
+		octet_vector bytes(size);
+		in.read(reinterpret_cast<char*>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
+		if(in && static_cast<std::size_t>(in.gcount()) == size) {
+			ret = std::move(bytes);
+		}
+	}
+	return ret;
+}
+
 bool is_hex_name(std::string const& s) {
 	return !s.empty() && std::all_of(s.begin(), s.end(), [](unsigned char c) { return std::isxdigit(c) != 0; });
 }
@@ -86,6 +102,10 @@ std::optional<octet_vector> chunk_files::read(data_id const& id, std::uint64_t c
 	return read_file(data_dir(id) / chunk_name(chunk_no));
 }
 
+std::optional<octet_vector> chunk_files::read_piece(data_id const& id, std::uint64_t chunk_no, std::uint64_t offset, std::size_t size) const {
+	return read_file_piece(data_dir(id) / chunk_name(chunk_no), offset, size);
+}
+
 bool chunk_files::has(data_id const& id, std::uint64_t chunk_no) const {
 	std::error_code ec;
 	return std::filesystem::is_regular_file(data_dir(id) / chunk_name(chunk_no), ec);
@@ -108,6 +128,25 @@ std::string chunk_files::begin_staging() {
 
 void chunk_files::write_staged(std::string const& stage, std::uint64_t chunk_no, octet_span encrypted) {
 	write_file(stage_dir(stage), chunk_name(chunk_no), encrypted);
+}
+
+void chunk_files::append_staged(std::string const& stage, std::uint64_t chunk_no, octet_span piece) {
+	auto const dir = stage_dir(stage);
+	std::filesystem::create_directories(dir);
+	std::ofstream out(dir / chunk_name(chunk_no), std::ios::binary | std::ios::app);
+	out.write(reinterpret_cast<char const*>(piece.data()), static_cast<std::streamsize>(piece.size()));
+	out.flush();
+	if(!out) {
+		throw io_error("failed to append to a staged chunk in " + dir.string());
+	}
+}
+
+void chunk_files::adopt_staged_chunk(std::string const& stage, std::uint64_t chunk_no, data_id const& id) {
+	auto const target = data_dir(id);
+	auto const source = stage_dir(stage);
+	std::filesystem::create_directories(target);
+	std::filesystem::rename(source / chunk_name(chunk_no), target / chunk_name(chunk_no));
+	std::filesystem::remove_all(source);
 }
 
 void chunk_files::commit_staging(std::string const& stage, data_id const& id) {

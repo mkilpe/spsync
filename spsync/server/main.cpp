@@ -20,6 +20,7 @@ struct spsync_server_commands : sync::spsync_server_params, command_parser {
 	int timeout{};
 	int anti_entropy{};
 	int upload_expiry{};
+	int ticket_validity{};
 
 	spsync_server_commands() {
 		add(help, "help", "h", "show help");
@@ -35,6 +36,8 @@ struct spsync_server_commands : sync::spsync_server_params, command_parser {
 		add(anti_entropy, "anti_entropy", "", "seconds between replicated head announcements to the peers");
 		add(storage_params.default_limits.max_record_size, "max_record_size", "", "default record content limit (bytes) of new storages");
 		add(storage_params.default_limits.chunk_size, "chunk_size", "", "default data chunk size (bytes) of new storages");
+		add(storage_params.data_servers, "data_servers", "", "data-role servers of the storages as host:port/keyid-hex[/region]; an all-in-one server lists itself");
+		add(ticket_validity, "ticket_validity", "", "seconds an issued data ticket is valid");
 		add(data_params.enabled, "data_role", "", "serve record data: run the data listener");
 		add(data_params.data_port, "data_port", "", "data server listening port");
 		add(data_params.record_servers, "record_servers", "", "key ids (hex) of the record servers whose data tickets are accepted; the own key always is");
@@ -53,6 +56,9 @@ struct spsync_server_commands : sync::spsync_server_params, command_parser {
 		}
 		if(timeout) {
 			data_params.timeout = std::chrono::seconds(timeout);
+		}
+		if(ticket_validity) {
+			storage_params.ticket_validity = std::chrono::seconds(ticket_validity);
 		}
 		if(upload_expiry) {
 			data_params.incomplete_upload_expiry = std::chrono::seconds(upload_expiry);

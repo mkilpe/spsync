@@ -123,6 +123,53 @@ TEST_CASE("server data store upload and resume", "[unit]") {
 	CHECK(repeated.value());
 }
 
+// the same in pieces, as the wire brings a chunk
+TEST_CASE("server data store chunks in pieces", "[unit]") {
+	server_data_store store{fresh_database(), data_root};
+	auto const now = clock_type::now();
+	auto const data = make_data(1500);
+	auto const& id = data.descriptor.manifest_digest;
+	REQUIRE(data.chunks.size() == 5);
+
+	CHECK(is_error(store.begin_chunk(id, 0, now), protocol::errc::no_such_upload));
+	REQUIRE(store.open_upload(data.descriptor, data.manifest, now));
+	CHECK(is_error(store.begin_chunk(id, 5, now), protocol::errc::invalid_data_chunk));
+
+	// incomplete, then the wrong bytes: nothing is kept
+	{
+		auto incoming = store.begin_chunk(id, 0, now);
+		REQUIRE(incoming);
+		CHECK(incoming->append(0, octet_span{data.chunks.at(0)}.first(100)));
+		CHECK(is_error(store.finish_chunk(id, incoming.value(), now), protocol::errc::invalid_data_chunk));
+	}
+	{
+		auto junk = data.chunks.at(0);
+		junk[0] ^= 0x01;
+		auto incoming = store.begin_chunk(id, 0, now);
+		REQUIRE(incoming);
+		CHECK(incoming->append(0, junk));
+		CHECK(is_error(store.finish_chunk(id, incoming.value(), now), protocol::errc::invalid_data_chunk));
+	}
+	CHECK(store.find(id)->have.count() == 0);
+
+	for(auto const& [no, chunk] : data.chunks) {
+		octet_span const all{chunk};
+		auto incoming = store.begin_chunk(id, no, now);
+		REQUIRE(incoming);
+		auto const half = all.size() / 2;
+		CHECK(incoming->append(0, all.first(half)));
+		CHECK(incoming->append(half, all.subspan(half)));
+		auto const kept = store.finish_chunk(id, incoming.value(), now);
+		REQUIRE(kept);
+		CHECK(kept.value() == (no == 4));
+	}
+	CHECK(store.find(id)->state == record_data_state::in_sync);
+	CHECK(store.uploads_in_progress() == 0);
+	for(auto const& [no, chunk] : data.chunks) {
+		CHECK(store.read_chunk(id, no) == chunk);
+	}
+}
+
 // RD10: resource quota - refuses uploads, never says anything about validity
 TEST_CASE("server data store quota", "[unit]") {
 	auto const now = clock_type::now();

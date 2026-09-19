@@ -1,5 +1,7 @@
 #include "peer_config.hpp"
 
+#include <sstream>
+
 #include <securepath/log/log.hpp>
 
 #include <algorithm>
@@ -67,6 +69,31 @@ std::istream& operator>>(std::istream& in, peer_config& p) {
 		}
 	}
 	return in;
+}
+
+std::istream& operator>>(std::istream& in, data_endpoint& e) {
+	std::string s;
+	if(in >> s) {
+		// everything up to the second slash is a peer: host:port/key
+		auto const first = s.find('/');
+		auto const second = first == std::string::npos ? std::string::npos : s.find('/', first + 1);
+		peer_config peer;
+		std::istringstream peer_part{s.substr(0, second)};
+		if(peer_part >> peer) {
+			e = data_endpoint{peer.host, peer.port, peer.key, second == std::string::npos ? std::string{} : s.substr(second + 1), {}};
+		} else {
+			in.setstate(std::ios::failbit);
+		}
+	}
+	return in;
+}
+
+std::ostream& operator<<(std::ostream& out, data_endpoint const& e) {
+	out << to_string(peer_config{e.host, e.port, e.key});
+	if(!e.region.empty()) {
+		out << '/' << e.region;
+	}
+	return out;
 }
 
 std::string to_string(peer_config const& p) {

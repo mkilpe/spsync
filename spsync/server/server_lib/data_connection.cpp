@@ -62,7 +62,9 @@ void data_connection::handle(protocol::upload_data_manifest const& p) {
 			auto store = context_.acquire_store(sid);
 			have = store->open_upload(p.ticket.descriptor(), p.manifest, context_.now());
 			if(have) {
-				uploads_[upload_key{sid, id}] = std::move(store);
+				// a manifest again starts the upload over on this connection: partial chunks go
+				uploads_.erase(upload_key{sid, id});
+				uploads_[upload_key{sid, id}].store = std::move(store);
 			}
 		}
 	} catch(securepath::error const& err) {
@@ -79,12 +81,46 @@ void data_connection::handle(protocol::upload_data_manifest const& p) {
 	}
 }
 
+/**
+ * The pieces of a chunk come in order from offset 0 and are appended to a staged file as
+ * they come; the piece that completes the chunk gets the whole verified against the
+ * manifest. Whatever breaks that - a gap, an overrun, a piece above the limit, the wrong
+ * bytes in the end - loses the chunk: invalid_data_chunk, the sender starts it over.
+ */
+util::result<bool> data_connection::take_piece(upload& up, protocol::upload_data_chunk const& p) {
+	util::result<bool> ret{make_error(protocol::errc::invalid_data_chunk)};
+	if(p.offset == 0) {
+		up.incoming.erase(p.chunk_no);
+		if(up.incoming.size() < max_incoming_chunks) {
+			auto begun = up.store->begin_chunk(p.data_id, p.chunk_no, context_.now());
+			if(begun) {
+				up.incoming.emplace(p.chunk_no, std::move(begun.value()));
+			} else {
+				ret = begun.get_error();
+			}
+		}
+	}
+	auto it = up.incoming.find(p.chunk_no);
+	if(it != up.incoming.end()) {
+		bool const fits = p.bytes.size() <= protocol::max_data_piece_size;
+		if(!fits || !it->second.append(p.offset, p.bytes)) {
+			up.incoming.erase(it);
+		} else if(it->second.complete()) {
+			ret = up.store->finish_chunk(p.data_id, it->second, context_.now());
+			up.incoming.erase(it);
+		} else {
+			ret = false;
+		}
+	}
+	return ret;
+}
+
 void data_connection::handle(protocol::upload_data_chunk const& p) {
 	util::result<bool> complete{make_error(protocol::errc::no_such_upload)};
 	try {
 		auto it = uploads_.find(upload_key{p.sid, p.data_id});
 		if(it != uploads_.end()) {
-			complete = it->second->store_chunk(p.data_id, p.chunk_no, p.bytes, context_.now());
+			complete = take_piece(it->second, p);
 			if(complete && complete.value()) {
 				LOG_INFO("data complete [sid={}, data_id={}]", to_hex(p.sid), to_hex(p.data_id));
 				uploads_.erase(it);

@@ -159,6 +159,29 @@ struct request_commit : storage_request_base {
 	}
 };
 
+/**
+ * Ask for the ticket to move a data of the storage to or from its data servers
+ * (record_data.txt RD12). The data is named by its data_id: the record server finds the
+ * descriptor in the committed record that names it, the ticket is issued to the key of
+ * this connection. right is a data_right value.
+ */
+struct request_data_ticket : storage_request_base {
+	request_data_ticket(call_id cid = 0, storage_id sid = {}, octet_vector data_id = {}, std::uint32_t right = 0)
+	: storage_request_base(cid, std::move(sid))
+	, data_id(std::move(data_id))
+	, right(right)
+	{}
+
+	octet_vector data_id;
+	std::uint32_t right{};
+
+	template<typename S>
+	void serialise(S& s) {
+		serialisation::sequence<S> seq(s);
+		seq & static_cast<storage_request_base&>(*this) & data_id & right;
+	}
+};
+
 using serialisation::type_tag;
 using c2s_types =
 	typelist<type_tag<client_hello, 1>,
@@ -168,7 +191,8 @@ using c2s_types =
 			type_tag<request_sequence_number, 5>,
 			type_tag<request_records, 6>,
 			type_tag<request_data, 7>,
-			type_tag<request_commit, 8> >;
+			type_tag<request_commit, 8>,
+			type_tag<request_data_ticket, 9> >;
 
 }
 }

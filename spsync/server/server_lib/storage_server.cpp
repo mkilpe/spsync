@@ -3,6 +3,7 @@
 
 #include <flat_map>
 #include "connection.hpp"
+#include "data_server.hpp"
 #include "peer_connection.hpp"
 #include "storage.hpp"
 
@@ -200,6 +201,7 @@ public:
 	, context_(context)
 	, handshake_data_(network::handshake_tag::public_key)
 	, default_storage_config_(make_storage_config(params_))
+	, issuer_(params_.data_servers, availability_, params_.ticket_validity)
 	{
 		LOG_TRACE("constructing storage_server::impl {}", static_cast<void const*>(this));
 	}
@@ -388,6 +390,82 @@ public:
 		return ret;
 	}
 
+	// -- record data (record_data.txt RD12/RD13) --
+
+	util::result<issued_ticket> issue_data_ticket(storage const& st, data_id const& id,
+		crypto::public_key_id const& member, std::uint32_t right) override {
+		return issuer_.issue(st.id(), st.committed_data(id), member, right
+			, context_.private_data().my_private_key(), clock_type::now());
+	}
+
+	std::vector<data_endpoint> data_endpoints() const override {
+		return issuer_.data_servers();
+	}
+
+	void data_announced(protocol::announce_data const& p) override {
+		LOG_TRACE("data announcement of holder {} [{} entries]", p.holder, p.entries.size());
+		availability_.set_load(p.holder, holder_load{p.stored_bytes, p.uploads_in_progress});
+		for(auto const& e : p.entries) {
+			availability_.announce(e.sid, e.data_id, data_holding{p.holder, e.have_chunks, e.total_chunks, e.complete});
+		}
+	}
+
+	/// an announcement of the own data role with its current load
+	protocol::announce_data make_announcement(std::vector<protocol::data_holding_entry> entries) const {
+		return protocol::announce_data{identity_.server_id, std::move(entries), data_role_->stored_bytes()
+			, static_cast<std::uint32_t>(data_role_->uploads_in_progress())};
+	}
+
+	std::vector<protocol::announce_data> own_data_announcements() override {
+		std::vector<protocol::announce_data> ret;
+		if(data_role_ && identity_.server_id.is_valid()) {
+			// in batches: a packet stays well under a transport frame
+			std::size_t const batch = 500;
+			std::vector<protocol::data_holding_entry> entries;
+			for(auto const& [sid, row] : data_role_->complete_holdings()) {
+				entries.push_back({sid, row.descriptor.manifest_digest, row.have.count(), row.have.size(), true});
+				if(entries.size() == batch) {
+					ret.push_back(make_announcement(std::move(entries)));
+					entries.clear();
+				}
+			}
+			if(!entries.empty() || ret.empty()) {
+				// an empty one still carries the load
+				ret.push_back(make_announcement(std::move(entries)));
+			}
+		}
+		return ret;
+	}
+
+	/// the own data role completed a data: into the table here, and to the peers (RD13)
+	void on_data_complete(protocol::storage_id const& sid, data_id const& id) {
+		auto const row = data_role_->find(sid, id);
+		if(row && identity_.server_id.is_valid()) {
+			auto const announcement = make_announcement({{sid, id, row->have.count(), row->have.size()
+				, row->state == record_data_state::in_sync}});
+			data_announced(announcement);
+			for(auto const& conn : peer_connections()) {
+				conn->announce(announcement);
+			}
+		}
+	}
+
+	void attach_data_role(data_server& role) {
+		data_role_ = &role;
+		role.set_complete_handler([weak = weak_self()](protocol::storage_id const& sid, data_id const& id) {
+			if(auto self = weak.lock()) {
+				self->on_data_complete(sid, id);
+			}
+		});
+	}
+
+	/// what the own data role held before this start goes into the table as well
+	void announce_own_data() {
+		for(auto const& announcement : own_data_announcements()) {
+			data_announced(announcement);
+		}
+	}
+
 	/// start the s2s side when peers are configured (plan 4.1)
 	void start_s2s() {
 		if(identity_.peers.empty()) {
@@ -539,6 +617,12 @@ public:
 	storage_config default_storage_config_;
 	server_identity identity_;
 
+	// -- record data (record_data.txt RD12/RD13) --
+	data_availability availability_;
+	ticket_issuer issuer_;
+	/// the data role of this server when it has one (all-in-one)
+	data_server* data_role_{};
+
 	// -- the s2s side (plan 4.1) --
 	std::shared_ptr<s2s_listener> s2s_;
 	/// shared so the timer and connection handlers can hold them weakly
@@ -565,7 +649,16 @@ void storage_server::start() {
 	if(!impl_->identity_.peers.empty()) {
 		impl_->open_replicated_storages();
 	}
+	impl_->announce_own_data();
 	impl_->start_s2s();
+}
+
+void storage_server::attach_data_role(data_server& role) {
+	impl_->attach_data_role(role);
+}
+
+data_availability const& storage_server::availability() const {
+	return impl_->availability_;
 }
 
 bool storage_server::has_storage(protocol::storage_id const& sid) const {

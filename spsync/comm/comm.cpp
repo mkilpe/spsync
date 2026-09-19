@@ -15,7 +15,11 @@ comm::comm(network_connection_impl* nc_impl, storage_id sid, record_storage& s, 
 , progress_(p)
 , data_(data)
 {
-	if(data && channel) {
+	if(data && !channel) {
+		own_channel_ = std::make_unique<net_data_channel>(nc_impl_->context(), tickets());
+		channel = own_channel_.get();
+	}
+	if(data) {
 		uploader_ = std::make_unique<data_uploader>(*data, *channel, data_upload_config{}
 			, [this](data_id const& id, std::optional<error> err) { on_upload_done(id, std::move(err)); }
 			, [this](data_id const& id, std::uint64_t transferred, std::uint64_t total) {
@@ -26,6 +30,10 @@ comm::comm(network_connection_impl* nc_impl, storage_id sid, record_storage& s, 
 
 comm::~comm()
 {
+	// the uploader first, then the channel whose ticket source is this object
+	uploader_.reset();
+	own_channel_.reset();
+	fail_ticket_requests(make_error(securepath::errc::invalid_state, "storage connection closed"));
 }
 
 void comm::set_output(event_system::event_handler& handler) {
@@ -47,6 +55,7 @@ void comm::on_disconnected(error const& err) {
 		std::unique_lock lock{upload_mutex_};
 		uploads_.clear();
 	}
+	fail_ticket_requests(err ? err : make_error(securepath::errc::invalid_state, "disconnected from the record server"));
 	std::optional<error> opt_err;
 	if(err) {
 		opt_err = err;
@@ -64,7 +73,7 @@ void comm::handle(protocol::response_sequence_number const& p) {
 		// so it needs no packet field (plan 4.5)
 		arg = result<sequence_info>{sequence_info{p.sequence
 			, nc_impl_->remote_key_id().value_or(crypto::public_key_id{})
-			, storage_limits{p.max_record_size, p.chunk_size}}};
+			, storage_limits{p.max_record_size, p.chunk_size}, p.data_endpoints}};
 	}
 	output_->emit<comm_events::on_sequence_number_response>(p.cid, std::move(arg));
 	if(p.error && protocol::to_error(p.error).code() == make_error_code(protocol::errc::storage_syncing)) {
@@ -110,6 +119,43 @@ void comm::handle(protocol::response_commit const& p) {
 
 void comm::handle(protocol::response_data const& p) {
 	assert(output_);
+}
+
+void comm::handle(protocol::response_data_ticket const& p) {
+	std::move_only_function<void(util::result<data_grant>)> callback;
+	{
+		std::unique_lock lock{upload_mutex_};
+		auto it = ticket_requests_.find(p.cid);
+		if(it != ticket_requests_.end()) {
+			callback = std::move(it->second);
+			ticket_requests_.erase(it);
+		}
+	}
+	if(callback && p.error) {
+		callback(util::result<data_grant>{protocol::to_error(p.error)});
+	} else if(callback) {
+		callback(util::result<data_grant>{data_grant{p.ticket, p.holders}});
+	}
+}
+
+ticket_source comm::tickets() {
+	return [this](data_descriptor const& d, data_right right, std::move_only_function<void(util::result<data_grant>)> cb) {
+		// registered before the request leaves: the answer may be quicker than this thread
+		std::unique_lock lock{upload_mutex_};
+		auto const handle = nc_impl_->request_data_ticket(sid_, d.manifest_digest, right);
+		ticket_requests_.emplace(handle, std::move(cb));
+	};
+}
+
+void comm::fail_ticket_requests(error const& err) {
+	std::map<request_handle, std::move_only_function<void(util::result<data_grant>)>> requests;
+	{
+		std::unique_lock lock{upload_mutex_};
+		requests.swap(ticket_requests_);
+	}
+	for(auto& [handle, callback] : requests) {
+		callback(util::result<data_grant>{err});
+	}
 }
 
 void comm::handle(protocol::notify_record const& p) {

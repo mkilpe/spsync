@@ -26,6 +26,8 @@ namespace {
 		, "no such upload"
 		, "data quota exceeded"
 		, "data too big"
+		, "unknown data"
+		, "no data servers"
 		};
 
 	using category_type = def_error_category<errc>;

@@ -4,6 +4,7 @@
 #include <spsync/server/server_lib/data_server.hpp>
 #include <spsync/comm/data_uploader.hpp>
 #include <spsync/comm/net_data_channel.hpp>
+#include <spsync/protocol/data_protocol.hpp>
 #include <spsync/protocol/error.hpp>
 #include <spsync/test/test_context.hpp>
 #include <spsync/test/test_server_runner.hpp>
@@ -158,6 +159,32 @@ TEST_CASE("data server upload end to end", "[unit]") {
 	CHECK(f.completed_count() == 2);
 }
 
+// chunks of the biggest size the limits allow go through: a chunk travels in pieces, so
+// neither the packet deserialiser's cap nor the DER codec's 2 MiB limit for one octet
+// string (both found with real chunk sizes in RDS 5) bound what a chunk may be
+TEST_CASE("data server takes full size chunks", "[unit]") {
+	data_server_fixture f;
+	encryption_key const key{sequence_number{1}, securepath::test::random_octet_vector(crypto::aes_gcm_key_size())};
+	auto writer = f.store.create(key, max_chunk_size);
+	writer.write(securepath::test::random_octet_vector(max_chunk_size + 1000));
+	auto const data = writer.finish().descriptor;
+	REQUIRE(data.chunk_count() == 2);
+	REQUIRE(data.chunk_enc_size(0) > max_chunk_size);
+	REQUIRE(data.chunk_enc_size(0) > protocol::max_data_piece_size);
+
+	net_data_channel channel{f.net.client_context(0), f.tickets({f.endpoint()})};
+	upload_log log;
+	data_uploader uploader{f.store, channel, data_upload_config{}, log.done()};
+	CHECK(uploader.enqueue(data.manifest_digest));
+	WAIT_CHECK(log.count == 1, 60s);
+	REQUIRE(log.finished.size() == 1);
+	CHECK(!log.finished[0].second);
+	auto const server_store = f.server->open_store(f.sid);
+	CHECK(server_store->find(data.manifest_digest)->state == record_data_state::in_sync);
+	CHECK(server_store->read_chunk(data.manifest_digest, 0) == f.store.read_chunk(data.manifest_digest, 0));
+	CHECK(server_store->read_chunk(data.manifest_digest, 1) == f.store.read_chunk(data.manifest_digest, 1));
+}
+
 // RD4: an interrupted upload resumes from what the server holds
 TEST_CASE("data server upload resume", "[unit]") {
 	data_server_fixture f;
@@ -175,7 +202,8 @@ TEST_CASE("data server upload resume", "[unit]") {
 
 		std::atomic<std::uint64_t> acked{0};
 		for(std::uint64_t no = 0; no != first_part; ++no) {
-			channel.send_chunk(id, no, f.store.read_chunk(id, no).value(), [&](std::optional<error> err) { acked += err ? 0 : 1; });
+			// a chunk of 4 KiB fits one piece
+			channel.send_piece(id, no, 0, f.store.read_chunk(id, no).value(), [&](std::optional<error> err) { acked += err ? 0 : 1; });
 		}
 		WAIT_CHECK(acked == first_part, 10s);
 		channel.close();
@@ -302,7 +330,7 @@ TEST_CASE("data server refusals over the wire", "[unit]") {
 	SECTION("a chunk without an opened upload") {
 		net_data_channel channel{f.net.client_context(0), f.tickets({f.endpoint()})};
 		std::promise<std::optional<error>> answer;
-		channel.send_chunk(data.manifest_digest, 0, f.store.read_chunk(data.manifest_digest, 0).value()
+		channel.send_piece(data.manifest_digest, 0, 0, f.store.read_chunk(data.manifest_digest, 0).value()
 			, [&](std::optional<error> err) { answer.set_value(std::move(err)); });
 		auto const err = answer.get_future().get();
 		REQUIRE(err);

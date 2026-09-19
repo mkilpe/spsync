@@ -15,11 +15,14 @@ namespace {
 /// one data on its way
 struct upload {
 	data_descriptor descriptor;
-	/// chunks the holder lacks and nobody sent yet
+	/// chunks the holder lacks and no piece of which was sent yet
 	std::deque<std::uint64_t> missing;
+	/// the chunk being sent and how far: its pieces go in order
+	std::optional<std::uint64_t> current;
+	std::uint64_t offset{};
 	/// the first error; nothing more is sent, the upload ends when the answers are in
 	std::optional<error> failure;
-	/// chunks sent without an answer yet
+	/// pieces sent without an answer yet
 	std::size_t outstanding{};
 	/// encrypted octets known to be at the holder
 	std::uint64_t transferred{};
@@ -151,13 +154,31 @@ private:
 		}
 	}
 
+	/// nothing of the data is left to send (pieces may still be out)
+	static bool all_sent(upload const& up) {
+		return up.missing.empty() && !up.current;
+	}
+
 	void fill_window(data_id const& id, upload& up, std::vector<action>& actions) {
-		while(up.opened && !up.failure && up.outstanding < config_.window && !up.missing.empty()) {
-			std::uint64_t const chunk_no = up.missing.front();
-			up.missing.pop_front();
+		while(up.opened && !up.failure && up.outstanding < config_.window && !all_sent(up)) {
+			if(!up.current) {
+				up.current = up.missing.front();
+				up.missing.pop_front();
+				up.offset = 0;
+			}
+			std::uint64_t const chunk_size = up.descriptor.chunk_enc_size(*up.current);
+			auto const size = static_cast<std::size_t>(std::min<std::uint64_t>(piece_size(), chunk_size - up.offset));
 			++up.outstanding;
-			actions.push_back(send_action(id, chunk_no));
+			actions.push_back(send_action(id, *up.current, up.offset, size));
+			up.offset += size;
+			if(up.offset >= chunk_size) {
+				up.current.reset();
+			}
 		}
+	}
+
+	std::uint32_t piece_size() const {
+		return std::max<std::uint32_t>(config_.piece_size, 1);
 	}
 
 	action open_action(data_descriptor descriptor, data_manifest manifest) {
@@ -176,21 +197,22 @@ private:
 		};
 	}
 
-	action send_action(data_id id, std::uint64_t chunk_no) {
-		return [self = shared_from_this(), generation = generation_, id = std::move(id), chunk_no] {
+	/// read one piece from the chunk file and send it: only the piece is ever in memory
+	action send_action(data_id id, std::uint64_t chunk_no, std::uint64_t offset, std::size_t size) {
+		return [self = shared_from_this(), generation = generation_, id = std::move(id), chunk_no, offset, size] {
 			std::weak_ptr<impl> weak = self;
 			try {
-				auto chunk = self->store_.read_chunk(id, chunk_no);
-				if(!chunk) {
+				auto piece = self->store_.read_chunk_piece(id, chunk_no, offset, size);
+				if(!piece) {
 					throw make_error(securepath::errc::no_such_data, "record data chunk not held");
 				}
-				self->channel_.send_chunk(id, chunk_no, std::move(*chunk), [weak, generation, id, chunk_no](std::optional<error> err) {
+				self->channel_.send_piece(id, chunk_no, offset, std::move(*piece), [weak, generation, id, chunk_no, size](std::optional<error> err) {
 					if(auto s = weak.lock()) {
-						s->on_chunk_sent(generation, id, chunk_no, std::move(err));
+						s->on_piece_sent(generation, id, chunk_no, size, std::move(err));
 					}
 				});
 			} catch(...) {
-				self->on_chunk_sent(generation, id, chunk_no, current_error());
+				self->on_piece_sent(generation, id, chunk_no, size, current_error());
 			}
 		};
 	}
@@ -213,7 +235,7 @@ private:
 
 	/// the upload ends when nothing is left to send and every answer is in
 	void finish_if_done(data_id const& id, upload const& up) {
-		if(up.outstanding == 0 && (up.failure || (up.opened && up.missing.empty()))) {
+		if(up.outstanding == 0 && (up.failure || (up.opened && all_sent(up)))) {
 			notify_done(id, up.failure);
 			active_.erase(id);
 		}
@@ -246,7 +268,7 @@ private:
 		pump();
 	}
 
-	void on_chunk_sent(std::uint64_t generation, data_id const& id, std::uint64_t chunk_no, std::optional<error> err) {
+	void on_piece_sent(std::uint64_t generation, data_id const& id, std::uint64_t chunk_no, std::size_t size, std::optional<error> err) {
 		{
 			std::unique_lock lock{mutex_};
 			auto it = active_.find(id);
@@ -259,7 +281,7 @@ private:
 						up.failure = std::move(err);
 					}
 				} else {
-					up.transferred += up.descriptor.chunk_enc_size(chunk_no);
+					up.transferred += size;
 					notify_progress(id, up);
 				}
 				finish_if_done(id, up);

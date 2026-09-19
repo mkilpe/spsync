@@ -657,4 +657,113 @@ TEST_CASE("record data store copy from a source", "[unit]") {
 	CHECK(empty.finish().header.plain_size == 0);
 }
 
+// a chunk never travels whole: pieces are read from the chunk file on the way out and
+// appended to a staged file, hashed as they come, on the way in
+TEST_CASE("record data store chunk pieces", "[unit]") {
+	auto db = fresh_database();
+	record_data_store origin{db, data_root};
+	auto const key = test_group_key();
+	auto const data = write_pattern(origin, key, 4500, 1000, 4500);
+	auto const& id = data.descriptor.manifest_digest;
+	auto const remote = copy_of(origin, data);
+	auto const chunk_size = remote.chunks.at(0).size();
+
+	SECTION("reading") {
+		auto const& chunk = remote.chunks.at(1);
+		CHECK(origin.read_chunk_piece(id, 1, 0, chunk_size) == chunk);
+		CHECK(origin.read_chunk_piece(id, 1, 0, 300) == octet_vector(chunk.begin(), chunk.begin() + 300));
+		CHECK(origin.read_chunk_piece(id, 1, 900, chunk_size - 900) == octet_vector(chunk.begin() + 900, chunk.end()));
+		CHECK(origin.read_chunk_piece(id, 1, chunk_size, 0) == octet_vector{});
+		// outside the chunk, a chunk that is not there
+		CHECK(!origin.read_chunk_piece(id, 1, 900, chunk_size));
+		CHECK(!origin.read_chunk_piece(id, 1, chunk_size + 1, 0));
+		CHECK(!origin.read_chunk_piece(id, 99, 0, 10));
+		CHECK(!origin.read_chunk_piece(securepath::test::random_octet_vector(64), 0, 0, 10));
+	}
+
+	SECTION("receiving") {
+		std::string const other_db = "record_data_store_test_b.db";
+		std::filesystem::path const other_root = "record_data_store_test_b";
+		record_data_store store{fresh_database(other_db, other_root), other_root};
+		auto const staging = other_root / ".staging";
+
+		// nothing to receive before the data and its manifest are known
+		CHECK(!store.begin_chunk(id, 0));
+		REQUIRE(store.register_data(data.descriptor, data.manifest));
+		CHECK(!store.begin_chunk(id, remote.chunks.size()));
+
+		auto const& chunk = remote.chunks.at(0);
+		octet_span const bytes{chunk};
+		{
+			auto incoming = store.begin_chunk(id, 0);
+			REQUIRE(incoming);
+			CHECK(incoming->chunk_no() == 0);
+			CHECK(incoming->append(0, bytes.first(400)));
+			CHECK(incoming->received() == 400);
+			CHECK(!incoming->complete());
+			// not done: finishing now keeps nothing
+			CHECK(!incoming->finish());
+			CHECK(store.find(id)->have.count() == 0);
+		}
+		{
+			auto incoming = store.begin_chunk(id, 0);
+			REQUIRE(incoming);
+			CHECK(incoming->append(0, bytes.first(400)));
+			// not the next piece: the chunk is lost
+			CHECK(!incoming->append(500, bytes.subspan(500, 100)));
+			CHECK(!incoming->append(400, bytes.subspan(400, 100)));
+			CHECK(!incoming->finish());
+		}
+		{
+			// dropped half way
+			auto incoming = store.begin_chunk(id, 0);
+			REQUIRE(incoming);
+			CHECK(incoming->append(0, bytes.first(400)));
+			CHECK(!std::filesystem::is_empty(staging));
+		}
+		CHECK(std::filesystem::is_empty(staging));
+		{
+			// the right size, the wrong bytes
+			auto junk = chunk;
+			junk[3] ^= 0x01;
+			auto incoming = store.begin_chunk(id, 0);
+			REQUIRE(incoming);
+			CHECK(incoming->append(0, junk));
+			CHECK(incoming->complete());
+			CHECK(!incoming->finish());
+			CHECK(store.find(id)->have.count() == 0);
+			CHECK(std::filesystem::is_empty(staging));
+		}
+
+		// every chunk in three pieces, moved around as a caller keeps them
+		for(auto const& [no, c] : remote.chunks) {
+			octet_span const all{c};
+			auto begun = store.begin_chunk(id, no);
+			REQUIRE(begun);
+			incoming_chunk incoming{std::move(*begun)};
+			CHECK(incoming.append(0, all.first(100)));
+			CHECK(incoming.append(100, all.subspan(100, 500)));
+			// more octets than the chunk has
+			CHECK(!incoming.append(600, octet_vector(c.size(), 0)));
+			incoming_chunk again{std::move(*store.begin_chunk(id, no))};
+			CHECK(again.append(0, all.first(600)));
+			CHECK(again.append(600, all.subspan(600)));
+			CHECK(again.complete());
+			CHECK(again.finish());
+		}
+		CHECK(std::filesystem::is_empty(staging));
+		CHECK(store.find(id)->state == record_data_state::in_sync);
+		auto handle = store.open({key}, data.descriptor, data.header);
+		REQUIRE(handle);
+		CHECK(read_bytes(*handle, 0, 4500) == pattern_bytes(0, 4500));
+
+		// a chunk that is held already: received fine, the held one stays
+		auto incoming = store.begin_chunk(id, 2);
+		REQUIRE(incoming);
+		CHECK(incoming->append(0, remote.chunks.at(2)));
+		CHECK(incoming->finish());
+		CHECK(std::filesystem::is_empty(staging));
+	}
+}
+
 }

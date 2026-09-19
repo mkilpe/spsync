@@ -7,6 +7,7 @@
 #include <securepath/crypto/private_data_access.hpp>
 #include <securepath/database/sqlite/connection.hpp>
 #include <securepath/network/encryption/encrypted_server.hpp>
+#include <securepath/network/encryption/framing.hpp>
 #include <securepath/serialisation/util.hpp>
 #include <securepath/util/conversions.hpp>
 
@@ -102,7 +103,9 @@ public:
 	}
 
 private:
-	serialisation::packet_deserialiser<protocol::c2d_types> deser_;
+	// a chunk packet is up to max_chunk_size and a manifest up to max_data_chunks digests:
+	// the transport frame is the bound, not the deserialiser's 1 MiB default
+	serialisation::packet_deserialiser<protocol::c2d_types> deser_{network::max_frame_size};
 	bool connection_good_{};
 };
 
@@ -203,6 +206,11 @@ public:
 			removed += store->expire_incomplete(untouched_since);
 		}
 		return removed;
+	}
+
+	std::vector<std::pair<protocol::storage_id, std::shared_ptr<server_data_store>>> open_stores() const {
+		std::unique_lock lock{mutex_};
+		return {stores_.begin(), stores_.end()};
 	}
 
 	/// the stores found under the storage root are opened so their leftovers expire too
@@ -317,6 +325,42 @@ std::shared_ptr<server_data_store> data_server::open_store(protocol::storage_id 
 
 std::size_t data_server::expire_incomplete() {
 	return impl_->expire_incomplete();
+}
+
+std::optional<data_state_row> data_server::find(protocol::storage_id const& sid, data_id const& id) {
+	std::optional<data_state_row> ret;
+	for(auto const& [store_sid, store] : impl_->open_stores()) {
+		if(!ret && store_sid == sid) {
+			ret = store->find(id);
+		}
+	}
+	return ret;
+}
+
+std::vector<std::pair<protocol::storage_id, data_state_row>> data_server::complete_holdings() {
+	std::vector<std::pair<protocol::storage_id, data_state_row>> ret;
+	for(auto const& [sid, store] : impl_->open_stores()) {
+		for(auto& row : store->complete_data()) {
+			ret.emplace_back(sid, std::move(row));
+		}
+	}
+	return ret;
+}
+
+std::uint64_t data_server::stored_bytes() {
+	std::uint64_t ret = 0;
+	for(auto const& [sid, store] : impl_->open_stores()) {
+		ret += store->used_bytes();
+	}
+	return ret;
+}
+
+std::uint64_t data_server::uploads_in_progress() {
+	std::uint64_t ret = 0;
+	for(auto const& [sid, store] : impl_->open_stores()) {
+		ret += store->uploads_in_progress();
+	}
+	return ret;
 }
 
 }

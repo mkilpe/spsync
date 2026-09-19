@@ -48,29 +48,41 @@ public:
 			throw make_error(securepath::errc::invalid_state, "no connection");
 		}
 		bool const ok = m.matches(d) && !open_error;
+		descriptors[d.manifest_digest] = d;
 		auto& have = held.try_emplace(d.manifest_digest, have_bitmap{d.chunk_count()}).first->second;
 		util::result<have_bitmap> res = ok ? util::result<have_bitmap>{have}
 			: util::result<have_bitmap>{open_error.value_or(make_error(securepath::errc::invalid_data))};
 		answer(lock, [cb = std::move(cb), res = std::move(res)]() mutable { cb(std::move(res)); });
 	}
 
-	void send_chunk(data_id const& id, std::uint64_t chunk_no, octet_vector encrypted, chunk_callback cb) override {
+	void send_piece(data_id const& id, std::uint64_t chunk_no, std::uint64_t offset, octet_vector bytes, piece_callback cb) override {
 		std::unique_lock lock{mutex_};
-		sent.emplace_back(id, chunk_no);
+		if(offset == 0) {
+			sent.emplace_back(id, chunk_no);
+		}
+		pieces.push_back(piece{id, chunk_no, offset, bytes.size()});
 		auto& out = outstanding[id];
 		++out;
 		max_outstanding = std::max(max_outstanding, out);
 		std::optional<error> err;
 		if(fail_chunk && *fail_chunk == chunk_no) {
 			err = make_error(securepath::errc::invalid_data, "refused");
-		} else if(encrypted.empty()) {
-			err = make_error(securepath::errc::invalid_data, "empty chunk");
+		} else {
+			// as the data server takes them: a piece at offset 0 starts the chunk over
+			auto& arrived = arriving[id][chunk_no];
+			arrived = offset == 0 ? 0 : arrived;
+			if(bytes.empty() || offset != arrived) {
+				err = make_error(securepath::errc::invalid_data, "not the next piece of the chunk");
+			} else {
+				arrived += bytes.size();
+			}
 		}
 		answer(lock, [this, id, chunk_no, err, cb = std::move(cb)]() mutable {
 			{
 				std::unique_lock l{mutex_};
 				--outstanding[id];
-				if(!err) {
+				// the chunk is held when its last piece was taken
+				if(!err && arriving[id][chunk_no] == descriptors.at(id).chunk_enc_size(chunk_no)) {
 					held.at(id).set(chunk_no);
 				}
 			}
@@ -129,9 +141,21 @@ public:
 	std::optional<error> open_error;
 	std::optional<std::uint64_t> fail_chunk;
 
+	struct piece {
+		data_id id;
+		std::uint64_t chunk_no{};
+		std::uint64_t offset{};
+		std::size_t size{};
+	};
+
 	std::map<data_id, have_bitmap> held;
+	std::map<data_id, data_descriptor> descriptors;
+	/// octets taken of a chunk so far
+	std::map<data_id, std::map<std::uint64_t, std::uint64_t>> arriving;
 	std::vector<data_id> opened;
+	/// the chunks that were started, in order (a piece at offset 0)
 	std::vector<std::pair<data_id, std::uint64_t>> sent;
+	std::vector<piece> pieces;
 	std::map<data_id, std::size_t> outstanding;
 	std::size_t max_outstanding{};
 
@@ -356,6 +380,64 @@ TEST_CASE("data uploader errors", "[unit]") {
 		REQUIRE(log.finished[1].second);
 		CHECK(log.finished[1].second->code() == make_error_code(securepath::errc::no_such_data));
 	}
+}
+
+// a chunk travels in pieces read from its file: in order, a window of pieces out at once,
+// so what is in memory and on the way does not grow with the chunk size
+TEST_CASE("data uploader sends chunks in pieces", "[unit]") {
+	record_data_store store{fresh_database(), data_root};
+	auto const a = create_data(store, 4500);
+	auto const& id = a.manifest_digest;
+	REQUIRE(a.chunk_count() == 5);
+
+	fake_channel channel;
+	channel.hold = true;
+	upload_log log;
+	// a chunk of 1016 octets in pieces of 300: 300, 300, 300, 116
+	data_uploader uploader{store, channel, data_upload_config{2, 3, 300}, log.done(), log.progress()};
+	CHECK(uploader.enqueue(id));
+	CHECK(channel.release(1) == 1);
+
+	// the window counts pieces, not chunks
+	REQUIRE(channel.pieces.size() == 3);
+	CHECK(channel.max_outstanding == 3);
+	for(std::size_t i = 0; i != 3; ++i) {
+		CHECK(channel.pieces[i].chunk_no == 0);
+		CHECK(channel.pieces[i].offset == i * 300);
+		CHECK(channel.pieces[i].size == 300);
+	}
+	CHECK(channel.held.at(id).count() == 0);
+
+	channel.release();
+	REQUIRE(log.finished.size() == 1);
+	CHECK(!log.finished[0].second);
+	CHECK(channel.max_outstanding == 3);
+	CHECK(channel.held.at(id).complete());
+
+	// every chunk in order from offset 0 in pieces of 300, the last piece of a chunk is
+	// what is left of it (the last chunk of the data is a short one)
+	std::vector<fake_channel::piece> expected;
+	for(std::uint64_t no = 0; no != a.chunk_count(); ++no) {
+		for(std::uint64_t offset = 0; offset < a.chunk_enc_size(no); offset += 300) {
+			expected.push_back({id, no, offset, static_cast<std::size_t>(std::min<std::uint64_t>(300, a.chunk_enc_size(no) - offset))});
+		}
+	}
+	REQUIRE(channel.pieces.size() == expected.size());
+	std::uint64_t total = 0;
+	for(std::size_t i = 0; i != expected.size(); ++i) {
+		auto const& p = channel.pieces[i];
+		CHECK(p.chunk_no == expected[i].chunk_no);
+		CHECK(p.offset == expected[i].offset);
+		CHECK(p.size == expected[i].size);
+		total += p.size;
+	}
+	CHECK(total == a.enc_size);
+
+	// progress moves with every piece
+	auto const& reports = log.reports[id];
+	REQUIRE(reports.size() == 1 + expected.size());
+	CHECK(reports[1].first == 300);
+	CHECK(reports.back().first == a.enc_size);
 }
 
 // a channel answering inside the call must not nest rounds without end

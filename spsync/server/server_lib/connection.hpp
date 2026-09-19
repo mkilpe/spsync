@@ -30,6 +30,7 @@ public:
 	void handle(protocol::request_records const&);
 	void handle(protocol::request_data const&);
 	void handle(protocol::request_commit const&);
+	void handle(protocol::request_data_ticket const&);
 
 	void notify(protocol::storage_id const& sid, chain_block const&, std::optional<block_envelope> const&);
 

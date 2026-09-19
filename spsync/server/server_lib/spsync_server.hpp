@@ -32,6 +32,7 @@ public:
 private:
 	bool init() override;
 	void check_key();
+	void attach_data_role();
 
 private:
 	spsync_server_params params_;

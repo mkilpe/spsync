@@ -1,5 +1,8 @@
 #include "storage.hpp"
 
+#include <spsync/core/data/data_state_table.hpp>
+#include <spsync/core/database_util.hpp>
+
 #include <utility>
 #include "connection.hpp"
 
@@ -16,17 +19,6 @@
 
 namespace securepath::sync {
 namespace {
-
-/// true when the table has the column (older storage databases lack the limit columns)
-bool has_column(database::connection& db, std::string const& table, std::string const& column) {
-	auto q = db.prepare("PRAGMA table_info(" + table + ");");
-	for(auto res = q.execute(); res; res.next()) {
-		if(res.value<std::string>(1).value_or("") == column) {
-			return true;
-		}
-	}
-	return false;
-}
 
 void create_or_upgrade_config_table(database::connection& db) {
 	if(!db.has_table("storage_config")) {
@@ -327,6 +319,16 @@ void storage::set_bootstrapping(bool on) {
 void storage::set_peer_push(peer_push_hook hook) {
 	std::unique_lock l{mutex_};
 	peer_push_ = std::move(hook);
+}
+
+std::optional<data_descriptor> storage::committed_data(data_id const& id) const {
+	std::unique_lock l{mutex_};
+	std::optional<data_descriptor> ret;
+	auto const row = data_state_table{db_}.find(id);
+	if(row && sync_->records().data_reference_count(row->local_id) != 0) {
+		ret = row->descriptor;
+	}
+	return ret;
 }
 
 void storage::add_listener(std::shared_ptr<connection> const& p) {

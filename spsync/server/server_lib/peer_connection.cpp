@@ -82,6 +82,17 @@ void peer_connection::announce_heads() {
 	}
 }
 
+void peer_connection::announce(protocol::announce_data const& p) {
+	bool ready{};
+	{
+		std::unique_lock lock{mutex_};
+		ready = peer_id_.has_value();
+	}
+	if(ready) {
+		send_packet(p);
+	}
+}
+
 void peer_connection::terminate(securepath::error const& err) {
 	encrypted_connection::close();
 	on_disconnected(err);
@@ -193,6 +204,21 @@ void peer_connection::operator()(protocol::peer_hello const& p) {
 			sctx_.trust_peer_key(*key);
 		}
 		send_our_heads();
+		// RD13: the availability tables are transient, a link that comes up gets the whole view
+		for(auto const& announcement : sctx_.own_data_announcements()) {
+			send_packet(announcement);
+		}
+	}
+}
+
+void peer_connection::operator()(protocol::announce_data const& p) {
+	if(check_ready("data announcement")) {
+		// a record server announces its own data role only: nobody speaks for another holder
+		if(p.holder == peer_id().value_or(crypto::public_key_id{})) {
+			sctx_.data_announced(p);
+		} else {
+			LOG_WARN("data announcement for holder {} from another peer, ignored", p.holder);
+		}
 	}
 }
 

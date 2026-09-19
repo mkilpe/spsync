@@ -2,6 +2,7 @@
 
 #include <spsync/core/sync_mode.hpp>
 #include <spsync/core/data/data_descriptor.hpp>
+#include <spsync/core/data/data_ticket.hpp>
 #include <spsync/core/record_interface.hpp>
 #include <spsync/core/records/block_envelope.hpp>
 #include <spsync/util/result.hpp>
@@ -9,6 +10,7 @@
 #include <securepath/crypto/public_key_id.hpp>
 
 #include <cstdint>
+#include <vector>
 
 namespace securepath::sync {
 
@@ -30,6 +32,8 @@ struct sequence_info {
 	crypto::public_key_id server_id;
 	/// the storage's validity limits (0 = unknown, e.g. an old server)
 	storage_limits limits;
+	/// the data-role servers of the storage (record_data.txt RD12); empty when it carries no record data
+	std::vector<data_endpoint> data_endpoints;
 };
 
 struct record_response {

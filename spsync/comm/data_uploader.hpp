@@ -14,16 +14,23 @@ struct data_upload_config {
 	/// datas uploading at the same time, the rest wait in the order they were queued
 	std::size_t max_datas{2};
 
-	/// chunks of one data sent without an answer yet
-	std::size_t window{6};
+	/// pieces of one data sent without an answer yet; with the piece size this is what a
+	/// data has in memory and on its way at once, whatever its chunk size
+	std::size_t window{16};
+
+	/// octets of a chunk per packet: a chunk travels in pieces (at most the protocol's
+	/// max_data_piece_size)
+	std::uint32_t piece_size{128 * 1024};
 };
 
 /**
  * The upload queue of a storage (RD4/RD7): datas are uploaded in the order they were
  * queued - the commit order of their records - a few at a time, each as manifest first,
- * then the chunks the holder does not have yet, a window of them on the way at once.
- * Resuming an interrupted upload is the same flow: the holder's answer to the manifest
- * says what is left.
+ * then the chunks the holder does not have yet. A chunk goes in pieces read straight
+ * from its file, the pieces of a chunk in order, a window of pieces on the way at once,
+ * so the memory an upload takes does not grow with the chunk size. Resuming an
+ * interrupted upload is the same flow: the holder's answer to the manifest says which
+ * chunks are left (a chunk that was on its way starts over).
  *
  * The uploader moves ciphertext from the data store to a data_channel and nothing else:
  * it does not touch the data's state, the owner does when told the data is done.

@@ -29,6 +29,10 @@ public:
 	/// the encrypted chunk, nullopt when it is not held
 	std::optional<octet_vector> read(data_id const&, std::uint64_t chunk_no) const;
 
+	/// size octets of a held chunk from offset (a transfer moves a chunk in pieces);
+	/// nullopt when the chunk is not held or the range is not inside it
+	std::optional<octet_vector> read_piece(data_id const&, std::uint64_t chunk_no, std::uint64_t offset, std::size_t size) const;
+
 	bool has(data_id const&, std::uint64_t chunk_no) const;
 
 	/// drop one chunk; fine when it is not held
@@ -44,6 +48,12 @@ public:
 	std::string begin_staging();
 
 	void write_staged(std::string const& stage, std::uint64_t chunk_no, octet_span encrypted);
+
+	/// append to a staged chunk that arrives in pieces
+	void append_staged(std::string const& stage, std::uint64_t chunk_no, octet_span piece);
+
+	/// one staged chunk becomes a chunk of the data, replacing a previous one; the staging area goes
+	void adopt_staged_chunk(std::string const& stage, std::uint64_t chunk_no, data_id const&);
 
 	/// the staged chunks become the chunks of the data; a data already held keeps its chunks
 	void commit_staging(std::string const& stage, data_id const&);

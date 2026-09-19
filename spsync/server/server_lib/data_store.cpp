@@ -69,17 +69,48 @@ util::result<bool> server_data_store::store_chunk(data_id const& id, std::uint64
 		LOG_INFO("refused a chunk that is not the manifest's [data_id={}, chunk={}]", to_hex(id), chunk_no);
 		ret = make_error(protocol::errc::invalid_data_chunk);
 	} else {
-		auto const row = store_.find(id);
-		bool const complete = row && row->state == record_data_state::in_sync;
-		std::unique_lock lock{mutex_};
-		if(complete) {
-			forget_activity(id);
-		} else {
-			touch(id, now);
-		}
-		ret = complete;
+		ret = chunk_kept(id, now);
 	}
 	return ret;
+}
+
+util::result<incoming_chunk> server_data_store::begin_chunk(data_id const& id, std::uint64_t chunk_no, time_point now) {
+	// an incoming chunk moves but is not assigned: every outcome is returned where it is known
+	if(!store_.manifest(id)) {
+		return make_error(protocol::errc::no_such_upload);
+	}
+	auto incoming = store_.begin_chunk(id, chunk_no);
+	if(!incoming) {
+		return make_error(protocol::errc::invalid_data_chunk);
+	}
+	std::unique_lock lock{mutex_};
+	touch(id, now);
+	return std::move(*incoming);
+}
+
+util::result<bool> server_data_store::finish_chunk(data_id const& id, incoming_chunk& incoming, time_point now) {
+	util::result<bool> ret;
+	auto const chunk_no = incoming.chunk_no();
+	if(incoming.finish()) {
+		ret = chunk_kept(id, now);
+	} else {
+		LOG_INFO("refused a chunk that is not the manifest's [data_id={}, chunk={}]", to_hex(id), chunk_no);
+		ret = make_error(protocol::errc::invalid_data_chunk);
+	}
+	return ret;
+}
+
+/// a chunk was kept: the upload goes on, or the data is complete now (true)
+util::result<bool> server_data_store::chunk_kept(data_id const& id, time_point now) {
+	auto const row = store_.find(id);
+	bool const complete = row && row->state == record_data_state::in_sync;
+	std::unique_lock lock{mutex_};
+	if(complete) {
+		forget_activity(id);
+	} else {
+		touch(id, now);
+	}
+	return complete;
 }
 
 std::optional<data_state_row> server_data_store::find(data_id const& id) const {
@@ -92,6 +123,23 @@ std::optional<octet_vector> server_data_store::read_chunk(data_id const& id, std
 
 std::uint64_t server_data_store::used_bytes() const {
 	return table_.total_enc_size();
+}
+
+std::vector<data_state_row> server_data_store::complete_data() const {
+	std::vector<data_state_row> ret;
+	for(auto const local_id : table_.all_ids()) {
+		auto row = table_.find(local_id);
+		if(row && row->state == record_data_state::in_sync) {
+			ret.push_back(std::move(*row));
+		}
+	}
+	return ret;
+}
+
+std::uint64_t server_data_store::uploads_in_progress() const {
+	auto q = db_->prepare("SELECT count(*) FROM data_activity;");
+	// a count is a plain integer
+	return static_cast<std::uint64_t>(q.execute().value<std::int64_t>(0).value_or(0));
 }
 
 std::size_t server_data_store::expire_incomplete(time_point untouched_since) {
