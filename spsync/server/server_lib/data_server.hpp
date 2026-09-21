@@ -1,5 +1,6 @@
 #pragma once
 
+#include "data_replicator.hpp"
 #include "data_store.hpp"
 #include "peer_config.hpp"
 
@@ -56,6 +57,9 @@ struct data_server_params {
 	 */
 	std::vector<peer_config> record_servers;
 
+	/// the pulls of copies this server is to hold (RD13 replication): queue sizes as for a client
+	data_download_config replication;
+
 	/// an upload nothing touched for this long is dropped and its reservation freed
 	std::chrono::seconds incomplete_upload_expiry{24h};
 
@@ -98,6 +102,24 @@ public:
 	 * over its link. Returns how many were held here.
 	 */
 	std::size_t release(protocol::storage_id const&, std::vector<data_id> const&);
+
+	/// how the pulls this server's own record role asked for get their tickets (an
+	/// all-in-one server, storage_server::attach_data_role); answered once, from any thread
+	using replica_ticket_source = std::function<void(protocol::storage_id const&, data_descriptor const&
+		, std::move_only_function<void(util::result<data_grant>)>)>;
+	void set_replica_ticket_source(replica_ticket_source);
+
+	/**
+	 * Hold copies of these data of a storage (RD8/RD13 replication, RDS 10): called by
+	 * the record role of an all-in-one server, and for a replicate_data a configured
+	 * record server sent over its link. The copies are pulled from the data servers that
+	 * hold them, with a ticket of the record server that asked, and announced when
+	 * complete. Returns how many pulls were queued by this call.
+	 */
+	std::size_t replicate(protocol::storage_id const&, std::vector<data_descriptor> const&);
+
+	/// pulls queued or on their way
+	std::size_t pending_replications() const;
 
 	/// what one data of a storage looks like here; nullopt when it is not known
 	std::optional<data_state_row> find(protocol::storage_id const&, data_id const&);

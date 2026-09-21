@@ -588,6 +588,15 @@ std::optional<data_state_row> record_data_store::register_data(data_descriptor c
 	return ret;
 }
 
+std::optional<data_state_row> record_data_store::register_data(data_descriptor const& descriptor) {
+	std::unique_lock lock{impl_->mutex};
+	auto row = impl_->table.find(impl_->table.ensure(descriptor));
+	if(row && row->descriptor != descriptor) {
+		row.reset();
+	}
+	return row;
+}
+
 std::optional<data_manifest> record_data_store::manifest(data_id const& id) const {
 	std::optional<data_manifest> ret;
 	auto const row = impl_->table.find(id);

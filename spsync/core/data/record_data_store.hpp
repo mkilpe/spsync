@@ -183,6 +183,11 @@ public:
 	 */
 	std::optional<data_state_row> register_data(data_descriptor const&, data_manifest const&);
 
+	/// the same by the descriptor alone: the manifest comes with the download (a data
+	/// server that is to hold a copy, RD13). Nullopt when the descriptor contradicts what
+	/// is known of the data id.
+	std::optional<data_state_row> register_data(data_descriptor const&);
+
 	std::optional<data_manifest> manifest(data_id const&) const;
 
 	/**

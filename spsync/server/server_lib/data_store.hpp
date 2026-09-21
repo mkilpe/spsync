@@ -3,6 +3,7 @@
 #include "transfer_budget.hpp"
 
 #include <spsync/core/data/record_data_store.hpp>
+#include <spsync/core/sync_mode.hpp>
 #include <spsync/util/result.hpp>
 
 #include <filesystem>
@@ -33,6 +34,12 @@ struct data_quota {
  *
  * Thread safe.
  */
+/// what a data server takes at all, whatever a record server signed or asked for: a data
+/// id and chunks that fit a transport frame
+[[nodiscard]] inline bool storable_descriptor(data_descriptor const& d) {
+	return !d.manifest_digest.empty() && d.chunk_size != 0 && d.chunk_size <= chunk_size_range.highest;
+}
+
 /// what a download is opened with: the manifest to verify against and the chunks held here
 struct served_data {
 	data_manifest manifest;
@@ -66,6 +73,26 @@ public:
 	util::result<incoming_chunk> begin_chunk(data_id const&, std::uint64_t chunk_no, time_point now);
 	util::result<bool> finish_chunk(data_id const&, incoming_chunk&, time_point now);
 
+	// -- holding a copy (RD8/RD13 replication, RDS 10) --
+
+	/**
+	 * Make room for the copy of a data another data server holds: the data becomes known
+	 * by its descriptor - the manifest comes with the pull - and reserves its size like
+	 * an upload. What is held of it already comes back, all of it when the copy is
+	 * complete. Errors: data_too_big, data_quota_exceeded, invalid_data_manifest (the
+	 * descriptor contradicts the known data).
+	 */
+	util::result<have_bitmap> open_replica(data_descriptor const&, time_point now);
+
+	/**
+	 * The chunk store a pull writes into, with the verification of a client download
+	 * (comm/data_downloader works on it). The pull reports its progress through
+	 * replica_progress, which keeps the expiry off a copy on its way; true when the data
+	 * is complete now.
+	 */
+	record_data_store& chunks() { return store_; }
+	bool replica_progress(data_id const&, time_point now);
+
 	// -- serving (RD4, RDS 6) --
 
 	/**
@@ -76,11 +103,13 @@ public:
 	util::result<served_data> open_download(data_descriptor const&) const;
 
 	/**
-	 * A piece of a held chunk, counted against the transfer quota of the window. Errors:
+	 * A piece of a held chunk, counted against the transfer quota of the window unless it
+	 * is for a data server's copy (that quota is about what members move). Errors:
 	 * data_not_held (the chunk is not held, the range is not inside it or above a
 	 * piece), data_transfer_quota_exceeded (see retry_after).
 	 */
-	util::result<octet_vector> serve_piece(data_id const&, std::uint64_t chunk_no, std::uint64_t offset, std::uint32_t size, time_point now);
+	util::result<octet_vector> serve_piece(data_id const&, std::uint64_t chunk_no, std::uint64_t offset, std::uint32_t size, time_point now
+		, bool charged = true);
 
 	/// seconds until the transfer quota window of the time ends
 	std::uint32_t retry_after(time_point now) const { return budget_.retry_after(now); }

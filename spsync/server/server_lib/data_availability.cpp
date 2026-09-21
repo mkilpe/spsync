@@ -25,6 +25,14 @@ void data_availability::forget(protocol::storage_id const& sid, data_id const& i
 	holdings_.erase(data_key{sid, id});
 }
 
+void data_availability::forget_holder(crypto::public_key_id const& holder) {
+	std::unique_lock lock{mutex_};
+	for(auto it = holdings_.begin(); it != holdings_.end();) {
+		std::erase_if(it->second, [&](data_holding const& h) { return h.holder == holder; });
+		it = it->second.empty() ? holdings_.erase(it) : std::next(it);
+	}
+}
+
 void data_availability::set_load(crypto::public_key_id const& holder, holder_load const& load) {
 	std::unique_lock lock{mutex_};
 	loads_[holder] = load;
@@ -50,7 +58,22 @@ holder_load data_availability::load(crypto::public_key_id const& holder) const {
 	return ret;
 }
 
+std::vector<std::pair<protocol::storage_id, data_id>> data_availability::known_data() const {
+	std::unique_lock lock{mutex_};
+	std::vector<std::pair<protocol::storage_id, data_id>> ret;
+	ret.reserve(holdings_.size());
+	for(auto const& [key, list] : holdings_) {
+		ret.push_back(key);
+	}
+	return ret;
+}
+
 namespace {
+
+bool holds_completely(std::vector<data_holding> const& holdings, crypto::public_key_id const& holder) {
+	auto const it = std::ranges::find(holdings, holder, &data_holding::holder);
+	return it != holdings.end() && it->complete;
+}
 
 /// the rendezvous weight of a server for a data
 octet_vector placement_weight(data_endpoint const& endpoint, data_id const& id) {
@@ -99,6 +122,33 @@ std::vector<data_endpoint> download_order(std::vector<data_endpoint> const& endp
 	std::vector<data_endpoint> ret;
 	for(auto& r : ranking) {
 		ret.push_back(std::move(r.endpoint));
+	}
+	return ret;
+}
+
+std::vector<data_endpoint> missing_copies(std::vector<data_endpoint> const& endpoints, data_id const& id
+	, std::vector<data_holding> const& holdings, std::size_t copies) {
+	std::vector<data_endpoint> ret;
+	bool const held = std::ranges::any_of(endpoints, [&](data_endpoint const& e) { return holds_completely(holdings, e.key); });
+	if(held) {
+		auto primaries = upload_order(endpoints, id);
+		primaries.resize(std::min(copies, primaries.size()));
+		for(auto& primary : primaries) {
+			if(!holds_completely(holdings, primary.key)) {
+				ret.push_back(std::move(primary));
+			}
+		}
+	}
+	return ret;
+}
+
+std::vector<data_endpoint> replica_sources(std::vector<data_endpoint> const& endpoints, data_id const& id
+	, std::vector<data_holding> const& holdings, data_availability const& loads, crypto::public_key_id const& target) {
+	std::vector<data_endpoint> ret;
+	for(auto& endpoint : download_order(endpoints, id, holdings, loads)) {
+		if(endpoint.key != target && holds_completely(holdings, endpoint.key)) {
+			ret.push_back(std::move(endpoint));
+		}
 	}
 	return ret;
 }

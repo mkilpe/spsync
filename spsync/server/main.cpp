@@ -21,6 +21,7 @@ struct spsync_server_commands : sync::spsync_server_params, command_parser {
 	int anti_entropy{};
 	int upload_expiry{};
 	int ticket_validity{};
+	int data_replication_interval{};
 	int transfer_window{};
 
 	spsync_server_commands() {
@@ -41,6 +42,8 @@ struct spsync_server_commands : sync::spsync_server_params, command_parser {
 			, "newest data versions of an object that keep their data at a history cut, new storages (4294967295 = all)");
 		add(storage_params.data_servers, "data_servers", "", "data-role servers of the storages as host:port/keyid-hex[/region]; an all-in-one server lists itself");
 		add(ticket_validity, "ticket_validity", "", "seconds an issued data ticket is valid");
+		add(storage_params.data_copies, "data_copies", "", "data servers that are to hold a copy of every data (1 = no replication among data servers)");
+		add(data_replication_interval, "data_replication_interval", "", "seconds between the sweeps that look for missing data copies");
 		add(data_params.enabled, "data_role", "", "serve record data: run the data listener");
 		add(data_params.data_port, "data_port", "", "data server listening port");
 		add(data_params.record_servers, "record_servers", "", "record servers of the data role as host:s2s_port/keyid-hex: their data tickets are accepted and they are told what is held; the own key always is accepted");
@@ -61,6 +64,9 @@ struct spsync_server_commands : sync::spsync_server_params, command_parser {
 		}
 		if(timeout) {
 			data_params.timeout = std::chrono::seconds(timeout);
+		}
+		if(data_replication_interval) {
+			storage_params.replication_interval = std::chrono::seconds(data_replication_interval);
 		}
 		if(ticket_validity) {
 			storage_params.ticket_validity = std::chrono::seconds(ticket_validity);

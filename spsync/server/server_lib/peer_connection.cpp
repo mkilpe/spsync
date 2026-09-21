@@ -111,6 +111,51 @@ void peer_connection::operator()(protocol::release_data const& p) {
 	LOG_WARN("release_data for storage {} on a record server, ignored", to_hex(p.sid));
 }
 
+bool peer_connection::is_data_server_link() const {
+	std::unique_lock lock{mutex_};
+	return peer_id_.has_value() && data_server_link_;
+}
+
+bool peer_connection::replicate(protocol::replicate_data const& p) {
+	bool const ready = is_data_server_link();
+	if(ready) {
+		send_packet(p);
+	}
+	return ready;
+}
+
+void peer_connection::operator()(protocol::replicate_data const& p) {
+	LOG_WARN("replicate_data for storage {} on a record server, ignored", to_hex(p.sid));
+}
+
+void peer_connection::operator()(protocol::response_replica_ticket const& p) {
+	LOG_WARN("response_replica_ticket for storage {} on a record server, ignored", to_hex(p.sid));
+}
+
+/// a data server asks for the ticket of a pull this server told it to make (RD13): the
+/// ticket is issued to the key the link authenticated with, and to a data server only
+void peer_connection::operator()(protocol::request_replica_ticket const& p) {
+	if(!is_data_server_link()) {
+		LOG_WARN("request_replica_ticket for storage {} from a peer that is no data server, ignored", to_hex(p.sid));
+	} else {
+		util::result<issued_ticket> issued{make_error(securepath::errc::unknown_error)};
+		try {
+			issued = sctx_.issue_replica_ticket(p.sid, p.data_id, peer_id().value_or(crypto::public_key_id{}));
+		} catch(securepath::error const& err) {
+			issued = err;
+		} catch(std::exception const& ex) {
+			LOG_WARN("exception while issuing a replica ticket: {} (sid={})", ex.what(), to_hex(p.sid));
+		}
+		if(issued) {
+			send_packet(protocol::response_replica_ticket{p, std::move(issued.value().ticket), std::move(issued.value().holders)});
+		} else {
+			LOG_INFO("no replica ticket for {} [data_id={}]: {} (sid={})", peer_id().value_or(crypto::public_key_id{})
+				, to_hex(p.data_id), issued.get_error(), to_hex(p.sid));
+			send_packet(protocol::response_replica_ticket{p, issued.get_error()});
+		}
+	}
+}
+
 void peer_connection::terminate(securepath::error const& err) {
 	encrypted_connection::close();
 	on_disconnected(err);

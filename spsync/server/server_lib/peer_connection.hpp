@@ -64,6 +64,13 @@ public:
 	/// server link takes it, a no-op on a replication peer's connection
 	void release(protocol::release_data const&);
 
+	/// true for the link of a separate data server whose hello went through (RD12)
+	bool is_data_server_link() const;
+
+	/// tell a data server to hold copies of these data (RD13 replication); only a data
+	/// server link takes it. True when it was sent
+	bool replicate(protocol::replicate_data const&);
+
 protected:
 	void on_connected() override;
 	void on_disconnected(securepath::error const& error) override;
@@ -81,6 +88,9 @@ public:
 	void operator()(protocol::response_key const&);
 	void operator()(protocol::announce_data const&);
 	void operator()(protocol::release_data const&);
+	void operator()(protocol::replicate_data const&);
+	void operator()(protocol::request_replica_ticket const&);
+	void operator()(protocol::response_replica_ticket const&);
 
 private:
 	void terminate(securepath::error const&);

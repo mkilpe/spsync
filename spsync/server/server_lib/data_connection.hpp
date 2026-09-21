@@ -58,6 +58,8 @@ private:
 
 	/// protocol error of a ticket this connection does not accept, no error when it does
 	securepath::error check_ticket(data_ticket const&, data_right) const;
+	/// the same for a download, which a member's ticket opens and a data server's
+	securepath::error check_download_ticket(data_ticket const&) const;
 
 	/// one upload a manifest opened on this connection and its chunks on their way in
 	struct upload {
@@ -79,7 +81,13 @@ private:
 	crypto::public_key_id id_;
 	std::map<upload_key, upload> uploads_;
 	/// the downloads a ticket opened on this connection
-	std::map<upload_key, std::shared_ptr<server_data_store>> downloads_;
+	/// an opened download: where it is served from, and whether it counts against the
+	/// storage's transfer quota (a data server's copy does not)
+	struct download {
+		std::shared_ptr<server_data_store> store;
+		bool charged{true};
+	};
+	std::map<upload_key, download> downloads_;
 };
 
 }

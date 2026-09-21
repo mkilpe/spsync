@@ -43,6 +43,21 @@ public:
 		, crypto::public_key_id const& member, std::uint32_t right
 		, std::optional<crypto::private_key> const& server_key, time_point now) const;
 
+	/**
+	 * The ticket of a replication pull (RD8/RD13): right replicate - which no member gets
+	 * through issue() - for a data server of the storages of this server, with the
+	 * complete holders to pull from in download order. Errors as issue(), and invalid_state
+	 * for a key that is no data server here, data_not_held when no other server is known
+	 * to hold the data completely.
+	 */
+	util::result<issued_ticket> issue_replica(protocol::storage_id const&, util::result<data_descriptor> const& committed
+		, crypto::public_key_id const& data_server
+		, std::optional<crypto::private_key> const& server_key, time_point now) const;
+
+private:
+	/// what stands in the way of any ticket, no error when nothing does
+	error refusal(util::result<data_descriptor> const& committed, std::optional<crypto::private_key> const& server_key) const;
+
 private:
 	std::vector<data_endpoint> const data_servers_;
 	data_availability const& availability_;

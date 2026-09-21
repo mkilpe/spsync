@@ -72,6 +72,19 @@ struct storage_server_params {
 
 	/// how long an issued data ticket is valid
 	std::chrono::seconds ticket_validity{600s};
+
+	/**
+	 * Copy count k (record_data.txt RD13): how many data servers are to hold a data - its
+	 * primary holders, the first k of the placement order. 1 = a single copy, no traffic
+	 * between data servers; with fewer data servers than k every one holds everything.
+	 * Server side policy, not a storage mode: the record servers of a cluster should be
+	 * given the same number, with different ones the biggest is what happens.
+	 */
+	std::uint32_t data_copies{2};
+
+	/// how often every known data is checked for missing copies (what an announcement or
+	/// a data server link coming up did not already trigger, and pulls that ended early)
+	std::chrono::seconds replication_interval{300s};
 };
 
 class storage_server {

@@ -94,6 +94,11 @@ public:
 	 */
 	virtual bool is_data_server(crypto::public_key_id const&) const = 0;
 
+	/// the ticket of a replication pull (RD13 copy count) for a data server of this server:
+	/// right replicate, with the complete holders to pull from
+	virtual util::result<issued_ticket> issue_replica_ticket(protocol::storage_id const&, data_id const&,
+		crypto::public_key_id const& data_server) = 0;
+
 	/// what this server's own data role holds, as announcements for a peer whose link
 	/// just came up; empty without a data role
 	virtual std::vector<protocol::announce_data> own_data_announcements() = 0;

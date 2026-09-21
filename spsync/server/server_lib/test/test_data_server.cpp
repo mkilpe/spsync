@@ -188,6 +188,20 @@ TEST_CASE("data server upload end to end", "[unit]") {
 	WAIT_CHECK(log.count == 3, 10s);
 	CHECK(!log.finished.back().second);
 	CHECK(f.completed_count() == 2);
+
+	// (RDS 10) everything held as the whole view a link gets: bracketed, so the receiver
+	// replaces what it knew of this holder and knows when it has heard all of it
+	auto const holder = crypto::generate_private_key().id();
+	auto const view = f.server->announcements(holder);
+	REQUIRE(view.size() == 1);
+	CHECK(view[0].view_begin);
+	CHECK(view[0].view_end);
+	CHECK(view[0].entries.size() == 2);
+	// the news of one data is not a view
+	auto const news = f.server->announcement(holder, f.sid, big.manifest_digest);
+	REQUIRE(news);
+	CHECK(!news->view_begin);
+	CHECK(!news->view_end);
 }
 
 // chunks of the biggest size the limits allow go through: a chunk travels in pieces, so

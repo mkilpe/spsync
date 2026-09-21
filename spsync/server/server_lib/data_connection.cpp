@@ -45,11 +45,17 @@ securepath::error data_connection::check_ticket(data_ticket const& ticket, data_
 	} else if(ticket.member() != id_ || ticket.right() != right) {
 		LOG_WARN("data ticket presented by user {} is for {} / another right", id_, ticket.member());
 		ret = make_error(protocol::errc::invalid_data_ticket);
-	} else if(ticket.storage_id().empty() || d.manifest_digest.empty() || d.chunk_size == 0 || d.chunk_size > chunk_size_range.highest) {
+	} else if(ticket.storage_id().empty() || !storable_descriptor(d)) {
 		// a chunk must fit a transport frame whatever the record server signed
 		ret = make_error(protocol::errc::invalid_data_ticket);
 	}
 	return ret;
+}
+
+securepath::error data_connection::check_download_ticket(data_ticket const& ticket) const {
+	// RD13 replication: a data server that is to hold a copy pulls like a member, with
+	// a ticket of its own right
+	return check_ticket(ticket, ticket.right() == data_right::replicate ? data_right::replicate : data_right::download);
 }
 
 void data_connection::handle(protocol::upload_data_manifest const& p) {
@@ -145,13 +151,13 @@ void data_connection::handle(protocol::download_data_open const& p) {
 	auto const& sid = p.ticket.storage_id();
 	auto const& id = p.ticket.data();
 	LOG_TRACE("download_data_open of user {} [sid={}, data_id={}]", id_, to_hex(sid), to_hex(id));
-	util::result<served_data> served{check_ticket(p.ticket, data_right::download)};
+	util::result<served_data> served{check_download_ticket(p.ticket)};
 	try {
 		if(!served.get_error()) {
 			auto store = context_.acquire_store(sid);
 			served = store->open_download(p.ticket.descriptor());
 			if(served) {
-				downloads_[upload_key{sid, id}] = std::move(store);
+				downloads_[upload_key{sid, id}] = download{std::move(store), p.ticket.right() != data_right::replicate};
 			}
 		}
 	} catch(securepath::error const& err) {
@@ -174,9 +180,10 @@ void data_connection::handle(protocol::download_data_piece const& p) {
 	try {
 		auto it = downloads_.find(upload_key{p.sid, p.data_id});
 		if(it != downloads_.end()) {
-			piece = it->second->serve_piece(p.data_id, p.chunk_no, p.offset, p.size, context_.now());
+			auto const& [store, charged] = it->second;
+			piece = store->serve_piece(p.data_id, p.chunk_no, p.offset, p.size, context_.now(), charged);
 			if(piece.get_error().code() == make_error_code(protocol::errc::data_transfer_quota_exceeded)) {
-				retry_after = it->second->retry_after(context_.now());
+				retry_after = store->retry_after(context_.now());
 			}
 		}
 	} catch(securepath::error const& err) {

@@ -9,7 +9,10 @@
 #include <securepath/network/encryption/framing.hpp>
 #include <securepath/serialisation/util.hpp>
 
+#include <spsync/comm/net_data_channel.hpp>
+
 #include <functional>
+#include <map>
 #include <mutex>
 #include <vector>
 
@@ -33,6 +36,8 @@ public:
 		std::function<void(crypto::public_key const&)> trust;
 		/// the record server says no record names these data any more (RD9)
 		std::function<void(protocol::storage_id const&, std::vector<data_id> const&)> release;
+		/// the record server says this data server is to hold a copy of these data (RD13)
+		std::function<void(protocol::storage_id const&, std::vector<data_descriptor> const&)> replicate;
 		/// the link went down (reconnect)
 		std::function<void()> disconnected;
 		/// the hello exchange succeeded
@@ -47,6 +52,15 @@ public:
 	/// send when the link is up; dropped otherwise (the whole view follows the next connect)
 	void announce(protocol::announce_data const&);
 
+	using ticket_callback = std::move_only_function<void(util::result<data_grant>)>;
+
+	/**
+	 * Ask the record server for the ticket of a pull it told this data server to make
+	 * (RD13 replication). Answered once: with what the record server says, or with an
+	 * error when the link is or goes down before that.
+	 */
+	void request_ticket(protocol::storage_id const&, data_id const&, ticket_callback);
+
 	bool ready() const;
 
 protected:
@@ -58,6 +72,8 @@ public:
 	// s2s packet handlers (public for the deserialiser dispatch)
 	void operator()(protocol::peer_hello const&);
 	void operator()(protocol::release_data const&);
+	void operator()(protocol::replicate_data const&);
+	void operator()(protocol::response_replica_ticket const&);
 
 	/// whatever else a record server says on this link is not for a data server
 	template<typename Packet>
@@ -65,6 +81,8 @@ public:
 
 private:
 	void send_packet(auto const& packet);
+	/// answer the ticket requests still out: the link is gone
+	void fail_requests(securepath::error const&);
 
 private:
 	peer_config const record_server_;
@@ -76,6 +94,8 @@ private:
 
 	mutable std::mutex mutex_;
 	bool ready_{};
+	protocol::call_id next_call_{1};
+	std::map<protocol::call_id, ticket_callback> requests_;
 };
 
 }

@@ -4,6 +4,7 @@
 #include <flat_map>
 #include "connection.hpp"
 #include "data_release.hpp"
+#include "data_replication_plan.hpp"
 #include "data_server.hpp"
 #include "peer_connection.hpp"
 #include "storage.hpp"
@@ -415,6 +416,10 @@ public:
 	void data_announced(protocol::announce_data const& p) override {
 		LOG_TRACE("data announcement of holder {} [{} entries]", p.holder, p.entries.size());
 		availability_.set_load(p.holder, holder_load{p.stored_bytes, p.uploads_in_progress});
+		if(p.view_begin) {
+			availability_.forget_holder(p.holder);
+		}
+		std::vector<std::pair<protocol::storage_id, data_id>> complete;
 		for(auto const& e : p.entries) {
 			bool const news = availability_.announce(e.sid, e.data_id, data_holding{p.holder, e.have_chunks, e.total_chunks, e.complete});
 			auto const handle = news ? find_open_sync(e.sid) : nullptr;
@@ -422,7 +427,118 @@ public:
 				// RD4: clients waiting for the data fetch without polling
 				handle->notify_data(e.data_id, true);
 			}
+			if(e.complete) {
+				complete.emplace_back(e.sid, e.data_id);
+			}
 		}
+		// RD13 copy count: a complete copy is where the other primary holders get theirs,
+		// and after a whole view it is known what that holder lacks
+		look_after_copies(p.view_end ? availability_.known_data() : complete);
+	}
+
+	// -- copies of the data (record_data.txt RD13 copy count, RDS 10) --
+
+	/// run f with the storage when it exists here, opened for the time of the call if need be
+	void with_storage(protocol::storage_id const& sid, std::function<void(storage&)> const& f) {
+		try {
+			auto handle = find_open_sync(sid);
+			if(!handle && exists_on_disk(sid)) {
+				handle = acquire_sync(sid, std::optional<storage_modes>{});
+			}
+			if(handle) {
+				f(*handle);
+				release_sync(std::move(handle));
+			}
+		} catch(std::exception const& ex) {
+			LOG_WARN("cannot look at storage {}: {}", to_hex(sid), ex.what());
+		}
+	}
+
+	data_standing standing_of(protocol::storage_id const& sid, data_id const& id) {
+		data_standing ret;
+		with_storage(sid, [&](storage& st) {
+			auto const committed = st.committed_data(id);
+			if(committed) {
+				ret.descriptor = committed.value();
+			} else {
+				auto const code = committed.get_error().code();
+				// unknown here may be a record that has not arrived yet when other record
+				// servers have the storage as well
+				ret.dead = code == make_error_code(protocol::errc::data_pruned)
+					|| (code == make_error_code(protocol::errc::unknown_data) && st.modes().replication == replication_mode::none);
+			}
+		});
+		return ret;
+	}
+
+	std::shared_ptr<peer_connection> data_server_link(crypto::public_key_id const& key) {
+		std::shared_ptr<peer_connection> ret;
+		for(auto const& conn : peer_connections()) {
+			if(!ret && conn->is_data_server_link() && conn->peer_id() == key) {
+				ret = conn;
+			}
+		}
+		return ret;
+	}
+
+	/**
+	 * The primary holders of these data that lack a copy are told to get one - the own
+	 * data role directly, a separate data server over its link; the data role of another
+	 * all-in-one replica is looked after by its own record role, which hears of the same
+	 * copies - and data that are held though the storage let them go are released.
+	 */
+	void look_after_copies(std::vector<std::pair<protocol::storage_id, data_id>> const& data) {
+		if(data.empty() || issuer_.data_servers().empty()) {
+			return;
+		}
+		replication_view const view{issuer_.data_servers(), availability_, params_.data_copies
+			, [this](crypto::public_key_id const& key) {
+				return (key == identity_.server_id && data_role_ != nullptr) || data_server_link(key) != nullptr;
+			}
+			, [this](protocol::storage_id const& sid, data_id const& id) { return standing_of(sid, id); }};
+		auto const plan = plan_replication(view, data);
+		for(auto const& [target, storages] : plan.copies) {
+			for(auto const& [sid, descriptors] : storages) {
+				tell_to_replicate(target, sid, descriptors);
+			}
+		}
+		for(auto const& [sid, ids] : plan.stale) {
+			LOG_INFO("{} record data held by data servers though the storage let them go: released (sid={})", ids.size(), to_hex(sid));
+			release_data(sid, ids);
+		}
+	}
+
+	void tell_to_replicate(crypto::public_key_id const& target, protocol::storage_id const& sid, std::vector<data_descriptor> const& descriptors) {
+		LOG_INFO("data server {} is to hold copies of {} record data (sid={})", target, descriptors.size(), to_hex(sid));
+		if(target == identity_.server_id && data_role_) {
+			data_role_->replicate(sid, descriptors);
+		} else if(auto const link = data_server_link(target)) {
+			for(auto const& packet : replicate_packets(sid, descriptors)) {
+				link->replicate(packet);
+			}
+		}
+	}
+
+	util::result<issued_ticket> issue_replica_ticket(protocol::storage_id const& sid, data_id const& id,
+		crypto::public_key_id const& data_server) override {
+		util::result<data_descriptor> committed{make_error(protocol::errc::no_such_storage)};
+		with_storage(sid, [&](storage& st) { committed = st.committed_data(id); });
+		return issuer_.issue_replica(sid, committed, data_server, context_.private_data().my_private_key(), clock_type::now());
+	}
+
+	void schedule_copy_sweep() {
+		std::unique_lock lock{mutex_};
+		if(closing_ || !copy_timer_) {
+			return;
+		}
+		copy_timer_->expires_after(params_.replication_interval);
+		copy_timer_->async_wait([weak = weak_self()](std::error_code const& ec) {
+			auto self = weak.lock();
+			if(self && !ec) {
+				self->look_after_copies(self->availability_.known_data());
+				self->schedule_copy_sweep();
+			}
+		});
 	}
 
 	bool is_data_server(crypto::public_key_id const& key) const override {
@@ -483,6 +599,18 @@ public:
 				self->on_data_complete(sid, id);
 			}
 		});
+		// the pulls this record role asks its own data role to make get their tickets here
+		role.set_replica_ticket_source([weak = weak_self()](protocol::storage_id const& sid, data_descriptor const& descriptor
+			, std::move_only_function<void(util::result<data_grant>)> answer) {
+			auto self = weak.lock();
+			auto issued = self ? self->issue_replica_ticket(sid, descriptor.manifest_digest, self->identity_.server_id)
+				: util::result<issued_ticket>{make_error(securepath::errc::invalid_state, "the record role is gone")};
+			if(issued) {
+				answer(data_grant{std::move(issued.value().ticket), std::move(issued.value().holders)});
+			} else {
+				answer(issued.get_error());
+			}
+		});
 	}
 
 	/// what the own data role held before this start goes into the table as well
@@ -507,6 +635,8 @@ public:
 		}
 		ae_timer_.emplace(context_.io_context());
 		schedule_anti_entropy();
+		copy_timer_.emplace(context_.io_context());
+		schedule_copy_sweep();
 	}
 
 	/**
@@ -601,6 +731,9 @@ public:
 			if(ae_timer_) {
 				ae_timer_->cancel();
 			}
+			if(copy_timer_) {
+				copy_timer_->cancel();
+			}
 			links.swap(links_);
 			listener.swap(s2s_);
 		}
@@ -655,6 +788,8 @@ public:
 	/// shared so the timer and connection handlers can hold them weakly
 	std::vector<std::shared_ptr<peer_link>> links_;
 	std::optional<asio::steady_timer> ae_timer_;
+	/// the replication sweep (RD13 copy count)
+	std::optional<asio::steady_timer> copy_timer_;
 	bool closing_{};
 };
 

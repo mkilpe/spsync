@@ -38,6 +38,33 @@ void record_server_link::announce(protocol::announce_data const& p) {
 	}
 }
 
+void record_server_link::request_ticket(protocol::storage_id const& sid, data_id const& id, ticket_callback answer) {
+	protocol::call_id cid = 0;
+	{
+		std::unique_lock lock{mutex_};
+		if(ready_) {
+			cid = next_call_++;
+			requests_.emplace(cid, std::move(answer));
+		}
+	}
+	if(cid != 0) {
+		send_packet(protocol::request_replica_ticket{cid, sid, id});
+	} else {
+		answer(make_error(securepath::errc::invalid_state, "no link to the record server"));
+	}
+}
+
+void record_server_link::fail_requests(securepath::error const& err) {
+	std::map<protocol::call_id, ticket_callback> requests;
+	{
+		std::unique_lock lock{mutex_};
+		requests.swap(requests_);
+	}
+	for(auto& [cid, answer] : requests) {
+		answer(err);
+	}
+}
+
 void record_server_link::on_connected() {
 	if(remote_key_id() != record_server_.key) {
 		LOG_WARN("record server {} authenticated with another key than configured", record_server_);
@@ -55,6 +82,7 @@ void record_server_link::on_disconnected(securepath::error const& err) {
 		std::unique_lock lock{mutex_};
 		ready_ = false;
 	}
+	fail_requests(make_error(securepath::errc::invalid_state, "the link to the record server went down"));
 	if(hooks_.disconnected) {
 		hooks_.disconnected();
 	}
@@ -97,6 +125,29 @@ void record_server_link::operator()(protocol::release_data const& p) {
 	// the link is to a configured record server whose key the handshake verified
 	if(ready() && hooks_.release) {
 		hooks_.release(p.sid, p.data_ids);
+	}
+}
+
+void record_server_link::operator()(protocol::replicate_data const& p) {
+	if(ready() && hooks_.replicate) {
+		hooks_.replicate(p.sid, p.descriptors);
+	}
+}
+
+void record_server_link::operator()(protocol::response_replica_ticket const& p) {
+	ticket_callback answer;
+	{
+		std::unique_lock lock{mutex_};
+		auto it = requests_.find(p.cid);
+		if(it != requests_.end()) {
+			answer = std::move(it->second);
+			requests_.erase(it);
+		}
+	}
+	if(answer && p.error) {
+		answer(protocol::to_error(p.error));
+	} else if(answer) {
+		answer(data_grant{p.ticket, p.holders});
 	}
 }
 

@@ -171,7 +171,8 @@ public:
 		}
 	}
 
-	void connect_link(std::shared_ptr<link_state> const& state) {
+	/// what a link tells this server; everything holds the server and the link state weakly
+	record_server_link::hooks link_hooks(std::shared_ptr<link_state> const& state) {
 		record_server_link::hooks hooks;
 		hooks.whole_view = [weak = weak_self()] {
 			auto self = weak.lock();
@@ -190,6 +191,12 @@ public:
 				self->owner_->release(sid, ids);
 			}
 		};
+		hooks.replicate = [weak = weak_self(), asked_by = state->server.key](protocol::storage_id const& sid
+			, std::vector<data_descriptor> const& descriptors) {
+			if(auto self = weak.lock()) {
+				self->replicate(sid, descriptors, asked_by);
+			}
+		};
 		hooks.connected = [wstate = std::weak_ptr<link_state>(state), weak = weak_self()] {
 			auto self = weak.lock();
 			auto st = wstate.lock();
@@ -205,7 +212,11 @@ public:
 				self->schedule_reconnect(st);
 			}
 		};
-		auto link = std::make_shared<record_server_link>(context_, state->server, own_id_, std::move(hooks));
+		return hooks;
+	}
+
+	void connect_link(std::shared_ptr<link_state> const& state) {
+		auto link = std::make_shared<record_server_link>(context_, state->server, own_id_, link_hooks(state));
 		{
 			std::unique_lock lock{mutex_};
 			if(closing_) {
@@ -257,6 +268,108 @@ public:
 			}
 		}
 		return ret;
+	}
+
+	std::shared_ptr<record_server_link> link_to(crypto::public_key_id const& record_server) const {
+		std::unique_lock lock{mutex_};
+		std::shared_ptr<record_server_link> ret;
+		for(auto const& state : links_) {
+			if(state->server.key == record_server && state->link) {
+				ret = state->link;
+			}
+		}
+		return ret;
+	}
+
+	// -- copies of data held elsewhere (RD8/RD13 replication) --
+
+	void start_replicator() {
+		data_replicator_hooks hooks;
+		hooks.store = [weak = weak_self()](protocol::storage_id const& sid) {
+			auto self = weak.lock();
+			if(!self) {
+				throw make_error(securepath::errc::invalid_state, "the data server is gone");
+			}
+			return self->acquire_store(sid);
+		};
+		hooks.ticket = [weak = weak_self()](protocol::storage_id const& sid, data_descriptor const& descriptor
+			, std::move_only_function<void(util::result<data_grant>)> answer) {
+			if(auto self = weak.lock()) {
+				self->replica_ticket(sid, descriptor, std::move(answer));
+			} else {
+				answer(make_error(securepath::errc::invalid_state, "the data server is gone"));
+			}
+		};
+		hooks.complete = [weak = weak_self()](protocol::storage_id const& sid, data_id const& id) {
+			if(auto self = weak.lock()) {
+				self->forget_asker(id);
+				self->announce_complete(sid, id);
+			}
+		};
+		hooks.now = [] { return clock_type::now(); };
+		auto replicator = std::make_shared<data_replicator>(context_, std::move(hooks), params_.replication, params_.timeout);
+		std::unique_lock lock{mutex_};
+		replicator_ = std::move(replicator);
+	}
+
+	void stop_replicator() {
+		std::shared_ptr<data_replicator> replicator;
+		{
+			std::unique_lock lock{mutex_};
+			replicator.swap(replicator_);
+			asked_by_.clear();
+		}
+		if(replicator) {
+			replicator->close();
+		}
+	}
+
+	/// asked_by: the record server that wants the copies, nullopt for the own record role
+	std::size_t replicate(protocol::storage_id const& sid, std::vector<data_descriptor> const& descriptors
+		, std::optional<crypto::public_key_id> const& asked_by) {
+		std::shared_ptr<data_replicator> replicator;
+		{
+			std::unique_lock lock{mutex_};
+			replicator = replicator_;
+			for(auto const& descriptor : descriptors) {
+				asked_by_[descriptor.manifest_digest] = asked_by;
+			}
+		}
+		return replicator ? replicator->replicate(sid, descriptors) : 0;
+	}
+
+	void forget_asker(data_id const& id) {
+		std::unique_lock lock{mutex_};
+		asked_by_.erase(id);
+	}
+
+	/// the ticket of a pull comes from the record server that asked for the copy: it
+	/// knows the data is committed and who holds it
+	void replica_ticket(protocol::storage_id const& sid, data_descriptor const& descriptor
+		, std::move_only_function<void(util::result<data_grant>)> answer) {
+		bool known{};
+		std::optional<crypto::public_key_id> asked_by;
+		data_server::replica_ticket_source own;
+		{
+			std::unique_lock lock{mutex_};
+			auto it = asked_by_.find(descriptor.manifest_digest);
+			known = it != asked_by_.end();
+			asked_by = known ? it->second : std::nullopt;
+			own = own_tickets_;
+		}
+		auto const link = asked_by ? link_to(*asked_by) : nullptr;
+		if(known && link) {
+			link->request_ticket(sid, descriptor.manifest_digest, std::move(answer));
+		} else if(known && !asked_by && own) {
+			own(sid, descriptor, std::move(answer));
+		} else {
+			answer(make_error(securepath::errc::invalid_state, "nobody to ask for the ticket of the copy"));
+		}
+	}
+
+	std::size_t pending_replications() const {
+		std::unique_lock lock{mutex_};
+		return replicator_ ? replicator_->pending() : 0;
 	}
 
 	std::vector<protocol::announce_data> whole_view() {
@@ -400,6 +513,10 @@ public:
 	/// the data_server this is the inside of: the announcements are built from its view
 	data_server* owner_{};
 	std::vector<std::shared_ptr<link_state>> links_;
+	std::shared_ptr<data_replicator> replicator_;
+	/// who asked for the copy of a data: a record server's key, nullopt for the own record role
+	std::map<data_id, std::optional<crypto::public_key_id>> asked_by_;
+	data_server::replica_ticket_source own_tickets_;
 	complete_handler on_complete_;
 	std::optional<asio::steady_timer> timer_;
 	bool closing_{};
@@ -423,11 +540,13 @@ void data_server::start() {
 	impl_->start(impl_->params_.create_endpoint(), impl_->params_.timeout);
 	impl_->running_ = true;
 	impl_->start_expiry();
+	impl_->start_replicator();
 	impl_->start_links();
 	LOG_INFO("data server listening on port {}", impl_->local_endpoint().port());
 }
 
 void data_server::close() {
+	impl_->stop_replicator();
 	impl_->close_links();
 	impl_->stop_expiry();
 	if(impl_->running_) {
@@ -468,7 +587,23 @@ std::size_t data_server::release(protocol::storage_id const& sid, std::vector<da
 	if(released != 0) {
 		LOG_INFO("released {} record data no record names any more (sid={})", released, to_hex(sid));
 	}
+	for(auto const& id : ids) {
+		impl_->forget_asker(id);
+	}
 	return released;
+}
+
+void data_server::set_replica_ticket_source(replica_ticket_source source) {
+	std::unique_lock lock{impl_->mutex_};
+	impl_->own_tickets_ = std::move(source);
+}
+
+std::size_t data_server::replicate(protocol::storage_id const& sid, std::vector<data_descriptor> const& descriptors) {
+	return impl_->replicate(sid, descriptors, std::nullopt);
+}
+
+std::size_t data_server::pending_replications() const {
+	return impl_->pending_replications();
 }
 
 std::optional<data_state_row> data_server::find(protocol::storage_id const& sid, data_id const& id) {
@@ -507,6 +642,9 @@ std::vector<protocol::announce_data> data_server::announcements(crypto::public_k
 	if(!entries.empty() || ret.empty()) {
 		ret.emplace_back(holder, std::move(entries), stored, uploads);
 	}
+	// everything held: what the receiver knew of this holder before is replaced
+	ret.front().view_begin = true;
+	ret.back().view_end = true;
 	return ret;
 }
 

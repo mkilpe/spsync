@@ -2,6 +2,8 @@
 
 #include "protocol_base.hpp"
 
+#include <spsync/core/data/data_descriptor.hpp>
+#include <spsync/core/data/data_ticket.hpp>
 #include <spsync/core/origin_head.hpp>
 #include <spsync/core/records/block_envelope.hpp>
 #include <spsync/core/sync_mode.hpp>
@@ -218,11 +220,19 @@ struct announce_data : protocol_base {
 	/// load signals of the holder: what it stores and what is coming in
 	std::uint64_t stored_bytes{};
 	std::uint32_t uploads_in_progress{};
+	/**
+	 * The whole view a link that came up gets is bracketed: its first packet replaces
+	 * everything the receiver knew of the holder (a data server may come back with less
+	 * than it had), after its last one the receiver knows what the holder lacks (RD13
+	 * copy count). Both unset for the news of a single data.
+	 */
+	bool view_begin{};
+	bool view_end{};
 
 	template<typename S>
 	void serialise(S& s) {
 		serialisation::sequence<S> seq(s);
-		seq & static_cast<protocol_base&>(*this) & holder & entries & stored_bytes & uploads_in_progress;
+		seq & static_cast<protocol_base&>(*this) & holder & entries & stored_bytes & uploads_in_progress & view_begin & view_end;
 	}
 };
 
@@ -247,6 +257,70 @@ struct release_data : storage_request_base {
 	}
 };
 
+/**
+ * From a record server to a data server (record_data.txt RD8/RD13 replication): these
+ * data of the storage are held completely elsewhere and this server is one of their
+ * primary holders - the first k of the placement order - without a copy. What to get,
+ * not how: the data server asks for a ticket when it starts the pull
+ * (request_replica_ticket), so a long queue holds no tickets that expire. Sent on the link
+ * a data server keeps to the record server, again with every replication sweep until the
+ * copy is announced.
+ */
+struct replicate_data : storage_request_base {
+	replicate_data(storage_id sid = {}, std::vector<data_descriptor> d = {})
+	: storage_request_base(0, std::move(sid))
+	, descriptors(std::move(d))
+	{}
+
+	std::vector<data_descriptor> descriptors;
+
+	template<typename S>
+	void serialise(S& s) {
+		serialisation::sequence<S> seq(s);
+		seq & static_cast<storage_request_base&>(*this) & descriptors;
+	}
+};
+
+/// a data server asks the record server for the ticket of a pull it was told to make
+struct request_replica_ticket : storage_request_base {
+	request_replica_ticket(call_id cid = 0, storage_id sid = {}, octet_vector id = {})
+	: storage_request_base(cid, std::move(sid))
+	, data_id(std::move(id))
+	{}
+
+	octet_vector data_id;
+
+	template<typename S>
+	void serialise(S& s) {
+		serialisation::sequence<S> seq(s);
+		seq & static_cast<storage_request_base&>(*this) & data_id;
+	}
+};
+
+/**
+ * The ticket - right replicate, issued to the asking data server's key - and the complete
+ * holders to use it at, in the order to try them; or why there is none (protocol errc:
+ * unknown_data, data_pruned, data_not_held when no complete copy is known any more).
+ */
+struct response_replica_ticket : reply_base {
+	using reply_base::reply_base;
+
+	response_replica_ticket(storage_request_base const& p, data_ticket t, std::vector<data_endpoint> h)
+	: reply_base(p)
+	, ticket(std::move(t))
+	, holders(std::move(h))
+	{}
+
+	data_ticket ticket;
+	std::vector<data_endpoint> holders;
+
+	template<typename S>
+	void serialise(S& s) {
+		serialisation::sequence<S> seq(s);
+		seq & static_cast<reply_base&>(*this) & ticket & holders;
+	}
+};
+
 using s2s_types = typelist<
 			type_tag<peer_hello, 1>,
 			type_tag<peer_heads, 2>,
@@ -257,7 +331,10 @@ using s2s_types = typelist<
 			type_tag<request_key, 7>,
 			type_tag<response_key, 8>,
 			type_tag<announce_data, 9>,
-			type_tag<release_data, 10> >;
+			type_tag<release_data, 10>,
+			type_tag<replicate_data, 11>,
+			type_tag<request_replica_ticket, 12>,
+			type_tag<response_replica_ticket, 13> >;
 
 }
 }

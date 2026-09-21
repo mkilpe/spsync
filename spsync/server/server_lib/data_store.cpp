@@ -63,6 +63,33 @@ util::result<have_bitmap> server_data_store::open_upload(data_descriptor const& 
 	return ret;
 }
 
+util::result<have_bitmap> server_data_store::open_replica(data_descriptor const& descriptor, time_point now) {
+	std::unique_lock lock{mutex_};
+	util::result<have_bitmap> ret;
+	bool const known = store_.find(descriptor.manifest_digest).has_value();
+	if(quota_.max_data_size != 0 && descriptor.enc_size > quota_.max_data_size) {
+		ret = make_error(protocol::errc::data_too_big);
+	} else if(!known && quota_.max_storage_bytes != 0
+		&& table_.total_enc_size() + descriptor.enc_size > quota_.max_storage_bytes) {
+		ret = make_error(protocol::errc::data_quota_exceeded);
+	} else {
+		auto row = store_.register_data(descriptor);
+		if(row) {
+			if(row->state != record_data_state::in_sync) {
+				touch(descriptor.manifest_digest, now);
+			}
+			ret = std::move(row->have);
+		} else {
+			ret = make_error(protocol::errc::invalid_data_manifest);
+		}
+	}
+	return ret;
+}
+
+bool server_data_store::replica_progress(data_id const& id, time_point now) {
+	return chunk_kept(id, now).value();
+}
+
 util::result<bool> server_data_store::store_chunk(data_id const& id, std::uint64_t chunk_no, octet_span encrypted, time_point now) {
 	util::result<bool> ret;
 	if(!store_.manifest(id)) {
@@ -125,12 +152,13 @@ util::result<served_data> server_data_store::open_download(data_descriptor const
 	return ret;
 }
 
-util::result<octet_vector> server_data_store::serve_piece(data_id const& id, std::uint64_t chunk_no, std::uint64_t offset, std::uint32_t size, time_point now) {
+util::result<octet_vector> server_data_store::serve_piece(data_id const& id, std::uint64_t chunk_no, std::uint64_t offset, std::uint32_t size, time_point now
+	, bool charged) {
 	util::result<octet_vector> ret{make_error(protocol::errc::data_not_held)};
 	auto const row = store_.find(id);
 	bool const held = row && row->have.test(chunk_no) && size != 0 && size <= protocol::max_data_piece_size
 		&& offset + size <= row->descriptor.chunk_enc_size(chunk_no);
-	if(held && !budget_.charge(size, now)) {
+	if(held && charged && !budget_.charge(size, now)) {
 		ret = make_error(protocol::errc::data_transfer_quota_exceeded);
 	} else if(held) {
 		auto piece = store_.read_chunk_piece(id, chunk_no, offset, size);

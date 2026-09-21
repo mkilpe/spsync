@@ -301,6 +301,54 @@ TEST_CASE("server data store release", "[unit]") {
 }
 
 // RD10: served octets per window, windows fixed to the clock
+// (RDS 10) the copy of a data another data server holds: known by its descriptor first,
+// reserved like an upload, filled through the chunk store with a client's verification
+TEST_CASE("server data store replica", "[unit]") {
+	auto const db = fresh_database();
+	auto const now = clock_type::now();
+	auto const data = make_data(2500, 1000);
+	auto const& id = data.descriptor.manifest_digest;
+	auto const limit = data.descriptor.enc_size + 100;
+	CHECK(is_error(server_data_store{db, data_root, data_quota{1000, 0}}.open_replica(data.descriptor, now), protocol::errc::data_too_big));
+	server_data_store store{db, data_root, data_quota{0, limit}};
+
+	auto const opened = store.open_replica(data.descriptor, now);
+	REQUIRE(opened);
+	CHECK(opened.value().count() == 0);
+	CHECK(opened.value().size() == data.descriptor.chunk_count());
+	CHECK(store.used_bytes() == data.descriptor.enc_size);
+	CHECK(store.uploads_in_progress() == 1);
+	// nothing to serve yet: no manifest
+	CHECK(is_error(store.open_download(data.descriptor), protocol::errc::data_not_held));
+	// again is the same reservation; another data does not fit, a contradiction is refused
+	CHECK(store.open_replica(data.descriptor, now));
+	CHECK(store.used_bytes() == data.descriptor.enc_size);
+	CHECK(is_error(store.open_replica(make_data(2500, 1000).descriptor, now), protocol::errc::data_quota_exceeded));
+	auto contradicting = data.descriptor;
+	contradicting.enc_size += 1000;
+	CHECK(is_error(store.open_replica(contradicting, now), protocol::errc::invalid_data_manifest));
+
+	// the pull: manifest, then chunks, each checked against it
+	auto& chunks = store.chunks();
+	REQUIRE(chunks.set_manifest(id, data.manifest));
+	auto tampered = data.chunks.at(0);
+	tampered[5] ^= 0x01;
+	CHECK(!chunks.store_chunk(id, 0, tampered));
+	CHECK(chunks.store_chunk(id, 0, data.chunks.at(0)));
+	CHECK(!store.replica_progress(id, now));
+	CHECK(store.open_replica(data.descriptor, now).value().count() == 1);
+	for(std::uint64_t no = 1; no != data.descriptor.chunk_count(); ++no) {
+		CHECK(chunks.store_chunk(id, no, data.chunks.at(no)));
+	}
+	CHECK(store.replica_progress(id, now));
+	CHECK(store.uploads_in_progress() == 0);
+	CHECK(store.find(id)->state == record_data_state::in_sync);
+	CHECK(store.open_replica(data.descriptor, now).value().complete());
+	CHECK(store.complete_data().size() == 1);
+	// and it is served like any other
+	CHECK(store.open_download(data.descriptor));
+}
+
 TEST_CASE("transfer budget", "[unit]") {
 	auto const t0 = time_point{std::chrono::seconds{1000000}};
 

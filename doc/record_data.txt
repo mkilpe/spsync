@@ -927,8 +927,8 @@ Implementation steps
       fictional 8 MiB to the 2 MiB the codec carries for one record
       (static_assert in chain_block.hpp; the bounds are
       max_record_size_range / chunk_size_range in sync_mode.hpp, lowest and
-      highest - they were min_max_record_size ... max_chunk_size). Beyond that: doc/user_changes.txt
-      "Scaling". Tests: server_lib "records above a mebibyte" (real server:
+      highest - they were min_max_record_size ... max_chunk_size). Beyond
+      that: doc/user_changes.txt "Scaling". Tests: server_lib "records above a mebibyte" (real server:
       1.5 MiB commit, notification, a run of 300 KiB records, a 900 member key
       rotation of 1.2 MiB, a late joiner fetching all of it), "s2s records above
       a mebibyte" (push and pull), chain_sync "batches get past the record a
@@ -1029,7 +1029,8 @@ Implementation steps
       the older chain of all but the first walked object was NOT retained and
       went with the cut. Every object is walked on its own now
       (record_storage impl object_versions).
-      Known gap: a release is sent once and not remembered. A separate data
+      Known gap (mostly closed by RDS 10, see there): a release is sent once
+      and not remembered. A separate data
       server that is down or disconnected at that moment keeps the chunks for
       good: they cost disk and the storage's quota there, nothing else (no
       ticket is issued for them), but nothing collects them either -
@@ -1044,8 +1045,8 @@ Implementation steps
       "releases the data of removed records" (rollback and cut, shared data
       kept, hook outside the mutex), "release packets", data announce "all in
       one server releases the data of removed records" and "separate data
-      server" (release over the link, files gone), engine "fetches record data / the server cut the
-      record away", "engine prune keeps the data of retained records".
+      server" (release over the link, files gone), engine "fetches record
+      data / the server cut the record away".
       Tests (retention): record_storage "superseded data below a cut" (kept
       1/2/3/all/unknown, below the cut only, metadata-only version, record of
       two objects, shared and pending references, index marks pruned once,
@@ -1058,15 +1059,105 @@ Implementation steps
       with data_pruned), "engine learns the retention policy", "fetches record
       data / the server pruned the version".
 
-- RDS 10 Replication among data servers                                        [2d]
++ RDS 10 Replication among data servers -- done 2026-09-21                     [2d]
       Copy count k with hash placement, availability exchange between data
       servers over the s2s link (reduced packet set, no heads), pulls by
       manifest, the all-in-one setup where every replica has both roles
       (distributed phase 4 done 2026-09-04, so this is unblocked).
+      Done, with one change to the plan: data servers do not talk s2s to each
+      other. The RECORD server looks after the copies - it alone knows what is
+      committed (and not pruned), it has the availability table and it signs
+      the tickets - and a data server pulls a copy from another one with the
+      data protocol, the way a member downloads: a record server's ticket, the
+      manifest checked against the descriptor, every chunk against the
+      manifest. A data server trusts another one no more than a member, needs
+      no list of the others (the ticket answer names the holders), and the
+      link of RDS 7 (data server -> record server s2s listener, the reduced
+      packet set) carries what is new.
+      + copy count: storage_server_params::data_copies (--data_copies,
+        default 2; 1 = single copy, no traffic between data servers; more than
+        there are data servers = everybody). Server policy, not a storage mode
+        (RD13); record servers of a cluster should get the same number.
+        data_availability: missing_copies() = the primary holders (first k of
+        the placement order) without a complete copy, nothing while nobody
+        holds the data completely; a complete copy on a non-primary (the
+        uploader's fallback) does not count, the primaries still get theirs.
+      + server_lib/data_replication_plan (pure, unit tested): for data
+        somebody holds completely the storage is asked for its standing
+        (storage::committed_data) -> copies per (data server, storage) for the
+        missing primaries that can be told now, and "stale" for data the
+        storage certainly let go. storage_server::look_after_copies runs it
+        when a complete copy is announced (that data), when a holder's whole
+        view ended (everything known), and every --data_replication_interval
+        (300 s: pulls that ended early, anything missed). Told are: the own
+        data role directly (all-in-one), a separate data server over its link
+        with s2s replicate_data {sid, descriptors} (tag 11, 500 a packet). The
+        data role of another all-in-one replica is left to its own record
+        role, which hears of the same copies over the peer link.
+      + what to get, not how: replicate_data carries no tickets - a data server
+        coming back to a long backlog would hold thousands of expired ones. It
+        asks when a pull starts: s2s request_replica_ticket {sid, data_id} ->
+        response_replica_ticket {ticket, holders} (tags 12/13) on the link of
+        the record server that asked for the copy (own record role: direct
+        call, data_server::set_replica_ticket_source). This is exactly the
+        ticket_source callback of comm/net_data_channel.
+      + the ticket: new data_right::replicate, issued by
+        ticket_issuer::issue_replica to keys of the configured data servers
+        only - issue(), the members' path, refuses the right - member = the
+        data server's key, holders = the complete holders in download order
+        without the asker (replica_sources), data_not_held when there is none.
+        The serving data connection takes it for download_data_open like a
+        download ticket, and does NOT charge the storage's transfer quota for
+        it (that quota is about what members move); the test cluster runs with
+        1000 B/h of member quota.
+      + server_lib/data_replicator on the data server: comm/net_data_channel +
+        one comm/data_downloader per storage (spsync_server_lib links
+        spsync_comm now) working on the store's chunk store -
+        server_data_store::open_replica (known by descriptor first:
+        record_data_store::register_data(descriptor); reserves its size like
+        an upload; data_too_big / data_quota_exceeded / contradiction refused)
+        and chunks() / replica_progress(). A copy that is complete already is
+        announced again, a finished pull is announced like a finished upload.
+        A pull that ends early keeps its whole chunks; the next sweep goes on.
+      + the whole view is bracketed: announce_data got view_begin / view_end.
+        The first packet of a whole view replaces what the receiver knew of
+        the holder (data_availability::forget_holder - a data server may come
+        back with less than it had, e.g. a lost disk), after the last one the
+        receiver knows what that holder lacks and sweeps.
+      + RDS 9's gap, mostly closed: a release_data a data server missed is made
+        up for - when it announces a data the storage certainly let go
+        (data_pruned: the tombstone says so; unknown_data in a storage that
+        does not replicate: no other record server could know better) the plan
+        lists it as stale and it is released again. Still open: unknown_data in
+        a REPLICATED storage (could be a record that has not arrived yet) -
+        rollbacks and cut away records there; needs a statement all record
+        servers agree on (todos.txt).
+      Not done, with the reason:
+      - parallel ranges of one data from several holders (left from RDS 6):
+        now there are deployments with several complete holders, but it is a
+        per-holder piece scheduler in the downloader - an optimisation of its
+        own.
+      - "a data server at its quota behaves as if not on the ring" (RD13): a
+        full primary refuses the copy locally (cheap, no ticket, no traffic)
+        and is asked again with every sweep; the next server of the placement
+        order does not step in. Needs the data server's answer in the plan.
+      - "held by k replicas" as a data state for clients (RD13 "later").
+      - record servers do not relay third party holdings to each other: every
+        data server links to every record server (separate shape), every
+        all-in-one announces its own data role to its peers.
+      Tests: "data copy count" (missing_copies, replica_sources, known_data,
+      forget_holder), "replica ticket issuer", "replication plan", "replicate
+      packets", server data store "replica", data connection "serves a replica
+      pull" (ticket for another key, no upload with it, uncharged while the
+      members' budget is used up), data server whole view flags; integration
+      "data copies among separate data servers" (copy after an upload with
+      byte comparison, a data server that was away, one that lost its disk, a
+      missed release made up for) and "data copies among all in one replicas"
+      (each record role has its own data role pull, with its own ticket).
 
 Ordering: RDS 8 first (done). RDS 1-7 are single-server work with the data role
 split in from the start; they unblock file sync (use case 1) and groupchat
-attachments. RDS 9 done 2026-09-21, RDS 10 follows.
+attachments. RDS 9 and RDS 10 done 2026-09-21: the plan is through.
 
 
 Resolved questions (2026-09-07)

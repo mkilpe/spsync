@@ -3,6 +3,7 @@
 
 #include <spsync/server/server_lib/data_availability.hpp>
 #include <spsync/server/server_lib/data_release.hpp>
+#include <spsync/server/server_lib/data_replication_plan.hpp>
 #include <spsync/server/server_lib/peer_config.hpp>
 #include <spsync/server/server_lib/ticket_issuer.hpp>
 #include <spsync/protocol/error.hpp>
@@ -11,6 +12,8 @@
 #include <securepath/crypto/public_key_cache.hpp>
 
 #include <algorithm>
+#include <map>
+#include <set>
 #include <map>
 #include <sstream>
 
@@ -274,6 +277,175 @@ TEST_CASE("release packets", "[unit]") {
 	// an exact multiple has no empty tail, a batch of nothing is a batch of one
 	CHECK(release_packets(sid, std::vector<data_id>(ids.begin(), ids.begin() + 1000)).size() == 2);
 	CHECK(release_packets(sid, std::vector<data_id>(ids.begin(), ids.begin() + 3), 0).size() == 3);
+}
+
+// (RDS 10) the same batching for the copies a data server is told to get
+TEST_CASE("replicate packets", "[unit]") {
+	auto const sid = securepath::test::random_octet_vector(16);
+	std::vector<data_descriptor> descriptors;
+	for(int i = 0; i != 501; ++i) {
+		descriptors.push_back(test_descriptor());
+	}
+	CHECK(replicate_packets(sid, {}).empty());
+	auto const packets = replicate_packets(sid, descriptors);
+	REQUIRE(packets.size() == 2);
+	CHECK(packets[0].sid == sid);
+	CHECK(packets[0].descriptors.size() == release_batch_size);
+	CHECK(packets[1].descriptors == std::vector<data_descriptor>{descriptors.back()});
+	CHECK(in_batches(std::vector<int>{1, 2, 3, 4, 5}, 2) == std::vector<std::vector<int>>{{1, 2}, {3, 4}, {5}});
+}
+
+// RD13 copy count: the first k servers of the placement order are to hold the data
+TEST_CASE("data copy count", "[unit]") {
+	auto const endpoints = make_endpoints(4);
+	auto const id = securepath::test::random_octet_vector(64);
+	auto const sid = securepath::test::random_octet_vector(16);
+	auto const placement = upload_order(endpoints, id);
+	auto const complete = [](data_endpoint const& e) { return data_holding{e.key, 10, 10, true}; };
+	auto const partial = [](data_endpoint const& e) { return data_holding{e.key, 4, 10, false}; };
+
+	// nobody holds it completely: nowhere to get it from yet
+	CHECK(missing_copies(endpoints, id, {}, 2).empty());
+	CHECK(missing_copies(endpoints, id, {partial(placement[0])}, 2).empty());
+
+	// the uploader's first choice has it: the second primary is missing
+	CHECK(missing_copies(endpoints, id, {complete(placement[0])}, 1).empty());
+	CHECK(missing_copies(endpoints, id, {complete(placement[0])}, 2) == std::vector<data_endpoint>{placement[1]});
+	CHECK(missing_copies(endpoints, id, {complete(placement[0])}, 3) == std::vector<data_endpoint>{placement[1], placement[2]});
+	// a part is no copy
+	CHECK(missing_copies(endpoints, id, {complete(placement[0]), partial(placement[1])}, 2) == std::vector<data_endpoint>{placement[1]});
+	CHECK(missing_copies(endpoints, id, {complete(placement[0]), complete(placement[1])}, 2).empty());
+	// the upload fell back to a server that is no primary: the primaries still get theirs
+	CHECK(missing_copies(endpoints, id, {complete(placement[3])}, 2) == std::vector<data_endpoint>{placement[0], placement[1]});
+	// more copies than servers: everybody
+	CHECK(missing_copies(endpoints, id, {complete(placement[2])}, 9) == std::vector<data_endpoint>{placement[0], placement[1], placement[3]});
+	// a holder that is no data server of the storage is nowhere to get it from
+	CHECK(missing_copies(endpoints, id, {data_holding{crypto::public_key_id{securepath::test::random_octet_vector(32)}, 10, 10, true}}, 2).empty());
+
+	// where a copy comes from: the complete holders in download order, not the asker
+	data_availability table;
+	table.set_load(placement[0].key, holder_load{100, 5});
+	table.set_load(placement[2].key, holder_load{100, 0});
+	std::vector<data_holding> const holdings{complete(placement[0]), partial(placement[1]), complete(placement[2])};
+	CHECK(replica_sources(endpoints, id, holdings, table, placement[1].key) == std::vector<data_endpoint>{placement[2], placement[0]});
+	CHECK(replica_sources(endpoints, id, holdings, table, placement[2].key) == std::vector<data_endpoint>{placement[0]});
+	CHECK(replica_sources(endpoints, id, {partial(placement[0])}, table, placement[1].key).empty());
+
+	// the sweep goes over what somebody announced
+	CHECK(table.known_data().empty());
+	table.announce(sid, id, complete(placement[0]));
+	table.announce(sid, id, complete(placement[1]));
+	CHECK(table.known_data() == std::vector<std::pair<protocol::storage_id, data_id>>{{sid, id}});
+	table.forget(sid, id);
+	CHECK(table.known_data().empty());
+
+	// a holder that tells everything anew: what it said before is void
+	auto const other = securepath::test::random_octet_vector(64);
+	table.announce(sid, id, complete(placement[0]));
+	table.announce(sid, id, complete(placement[1]));
+	table.announce(sid, other, complete(placement[0]));
+	table.forget_holder(placement[0].key);
+	CHECK(table.holdings(sid, id) == std::vector<data_holding>{complete(placement[1])});
+	CHECK(table.holdings(sid, other).empty());
+	CHECK(table.known_data() == std::vector<std::pair<protocol::storage_id, data_id>>{{sid, id}});
+}
+
+// (RDS 10) the ticket of a pull: for data servers only, never for the asking
+TEST_CASE("replica ticket issuer", "[unit]") {
+	auto const server_key = crypto::generate_private_key();
+	crypto::public_key_cache keys;
+	keys.insert(server_key.public_key());
+	auto const sid = securepath::test::random_octet_vector(16);
+	auto const descriptor = test_descriptor();
+	auto const& id = descriptor.manifest_digest;
+	auto const now = clock_type::now();
+	auto const endpoints = make_endpoints(3);
+	auto const placement = upload_order(endpoints, id);
+	data_availability table;
+	ticket_issuer issuer{endpoints, table, 600s};
+	auto const is_error = [](util::result<issued_ticket> const& r, auto code) {
+		return !r && r.get_error().code() == make_error_code(code);
+	};
+
+	// a member cannot ask for the right
+	auto const member = crypto::public_key_id{securepath::test::random_octet_vector(32)};
+	CHECK(is_error(issuer.issue(sid, descriptor, member, static_cast<std::uint32_t>(data_right::replicate), server_key, now)
+		, protocol::errc::invalid_state));
+	// and is no data server
+	table.announce(sid, id, data_holding{placement[0].key, 3, 3, true});
+	CHECK(is_error(issuer.issue_replica(sid, descriptor, member, server_key, now), protocol::errc::invalid_state));
+
+	auto const issued = issuer.issue_replica(sid, descriptor, placement[1].key, server_key, now);
+	REQUIRE(issued);
+	CHECK(issued->ticket.right() == data_right::replicate);
+	CHECK(issued->ticket.member() == placement[1].key);
+	CHECK(issued->ticket.descriptor() == descriptor);
+	CHECK(issued->ticket.storage_id() == sid);
+	CHECK(!issued->ticket.verify(keys, now));
+	CHECK(issued->holders == std::vector<data_endpoint>{placement[0]});
+
+	// nothing to pull from, nothing the storage vouches for, nothing to sign with
+	CHECK(is_error(issuer.issue_replica(sid, descriptor, placement[0].key, server_key, now), protocol::errc::data_not_held));
+	CHECK(is_error(issuer.issue_replica(sid, make_error(protocol::errc::data_pruned), placement[1].key, server_key, now), protocol::errc::data_pruned));
+	CHECK(is_error(issuer.issue_replica(sid, make_error(protocol::errc::unknown_data), placement[1].key, server_key, now), protocol::errc::unknown_data));
+	CHECK(is_error(issuer.issue_replica(sid, descriptor, placement[1].key, std::nullopt, now), protocol::errc::invalid_state));
+}
+
+// (RDS 10) what a record server does about the copies, without the servers around it
+TEST_CASE("replication plan", "[unit]") {
+	auto const endpoints = make_endpoints(3);
+	auto const sid = securepath::test::random_octet_vector(16);
+	data_availability table;
+	std::map<data_id, data_standing> standings;
+	std::set<crypto::public_key_id> reachable;
+	std::vector<data_id> asked;
+	replication_view const view{endpoints, table, 2
+		, [&](crypto::public_key_id const& key) { return reachable.contains(key); }
+		, [&](protocol::storage_id const&, data_id const& id) {
+			asked.push_back(id);
+			return standings[id];
+		}};
+	auto const held_by = [&](data_descriptor const& d, std::size_t place, bool complete = true) {
+		auto const holder = upload_order(endpoints, d.manifest_digest)[place].key;
+		table.announce(sid, d.manifest_digest, data_holding{holder, complete ? 3u : 1u, 3, complete});
+		return holder;
+	};
+	auto const second_of = [&](data_descriptor const& d) { return upload_order(endpoints, d.manifest_digest)[1].key; };
+	for(auto const& e : endpoints) {
+		reachable.insert(e.key);
+	}
+
+	auto const wanted = test_descriptor(), copied = test_descriptor(), uploading = test_descriptor();
+	auto const pruned = test_descriptor(), unknown = test_descriptor();
+	standings[wanted.manifest_digest] = data_standing{wanted, false};
+	standings[copied.manifest_digest] = data_standing{copied, false};
+	standings[uploading.manifest_digest] = data_standing{uploading, false};
+	standings[pruned.manifest_digest] = data_standing{std::nullopt, true};
+	standings[unknown.manifest_digest] = data_standing{};
+	held_by(wanted, 0);
+	held_by(copied, 0);
+	held_by(copied, 1);
+	held_by(uploading, 0, false);
+	held_by(pruned, 0);
+	held_by(unknown, 0);
+
+	auto const plan = plan_replication(view, table.known_data());
+	// the second primary of the wanted data gets a copy; nothing for what has its copies,
+	// is still coming in, or may be a record that has not arrived here yet
+	REQUIRE(plan.copies.size() == 1);
+	REQUIRE(plan.copies.contains(second_of(wanted)));
+	CHECK(plan.copies.at(second_of(wanted)).at(sid) == std::vector<data_descriptor>{wanted});
+	// what the storage certainly let go is released where it is held
+	REQUIRE(plan.stale.size() == 1);
+	CHECK(plan.stale.at(sid) == std::vector<data_id>{pruned.manifest_digest});
+	// the storage is not asked about what nobody holds completely
+	CHECK(std::ranges::find(asked, uploading.manifest_digest) == asked.end());
+	CHECK(asked.size() == 4);
+
+	// a data server that cannot be told now is left for the next sweep
+	reachable.erase(second_of(wanted));
+	CHECK(plan_replication(view, table.known_data()).copies.empty());
+	CHECK(plan_replication(view, {}).empty());
 }
 
 }

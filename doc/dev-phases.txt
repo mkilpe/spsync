@@ -15,7 +15,7 @@
 
 --- phase 2 (multi change per oid and per record support)
 + previous oid support (server validation + per-change rebase, 2026-08-27)
-* record data support (design + steps: record_data.txt; descriptor/chunk crypto, chain limits, client data store, engine create path + upload queue, data server + client data channel done, RDS 1-9, 2026-09-21 - a data goes the whole way between clients, both deployment shapes, interrupted transfers resume, system test with a 300 MiB object, data follows its records through cuts and rollbacks on clients and servers, retention policy kept_data_versions (default: the newest version keeps its data at a cut, records always stay); replication among data servers open, RDS 10)
+* record data support (design + steps: record_data.txt; descriptor/chunk crypto, chain limits, client data store, engine create path + upload queue, data server + client data channel done, RDS 1-10, 2026-09-21 - a data goes the whole way between clients, both deployment shapes, interrupted transfers resume, system test with a 300 MiB object, data follows its records through cuts and rollbacks on clients and servers, retention policy kept_data_versions (default: the newest version keeps its data at a cut, records always stay), copy count k among data servers - the record server looks after the copies, data servers pull from each other like members do; open: parallel ranges, see todos.txt)
 + user conflict handling (conflict_policy rebase_on_top/ask + on_object_conflict, 2026-08-27)
 
 --- phase 3 (full record support)

@@ -21,6 +21,14 @@
 * provide server support to send message to a person (potentially on different server)
 * provide side channel for storages groups to send non-stored packets to each others (eg. "writing a message" in gc)
 
+= tests
+* every fixed test port (42750-42830) lies inside Linux's ephemeral range (32768-60999): an
+  outgoing connection of ANY process can sit on one and the test that binds it fails with
+  "bind: Address already in use" (seen 2026-09-21: another process held 42780 for many
+  minutes, "s2s replica creates the storage on first contact" failed every run and took
+  "s2s bootstrap a new replica" with it). Move the test ports below 32768 or reserve them
+  (net.ipv4.ip_local_reserved_ports); a test that throws in start() should not disturb the next
+
 = server
 * commit throughput is sqlite-fsync bound (~85 signed commits/s per storage, measured
   2026-08-29 on 9950X); WAL + synchronous=NORMAL or commit batching moves it towards the
@@ -69,10 +77,13 @@
   800 with the default 1 MiB); the user change record needs a way to change keys without
   an envelope for each member, or another mechanism - options in doc/user_changes.txt
   "Scaling: members per user change"; segment records have the same ceiling (tag list)
-* record data: a release_data the record server sends while a separate data server is not
-  connected is lost, the data server keeps the chunks of cut away records for good (disk and
-  quota only, no tickets); needs a reconciliation that works with several record servers -
-  with RDS 10's availability exchange (record_data.txt RDS 9 "Known gap")
+* record data: a release_data a data server missed is made up for when it announces the data
+  again (RDS 10) - except for data a REPLICATED storage does not know (rollback, cut away
+  records): that could be a record that has not arrived yet, so nothing is released; needs a
+  statement all record servers of the storage agree on (record_data.txt RDS 10)
+* record data: parallel ranges of one data from several holders in the client's downloader;
+  a full data server stepping off the placement ring for new copies; "held by k replicas" as
+  a client visible data state (record_data.txt RDS 10 "Not done")
 + packet size caps on the record and s2s connections (found 2026-09-19 with record_data.txt
   RDS 5, fixed 2026-09-21): the deserialisers of the client's record connection, the server's
   client connection and the peer connection take messages up to the transport frame; the

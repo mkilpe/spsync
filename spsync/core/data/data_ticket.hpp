@@ -14,7 +14,11 @@ namespace securepath::sync {
 /// what a data ticket allows; the values are part of the signed ticket, never renumber
 enum class data_right : std::uint32_t {
 	upload = 1,
-	download = 2
+	download = 2,
+	/// a download by a data server that is to hold a copy (RD8/RD13 replication): issued
+	/// to data servers only, served like a download but outside the storage's transfer
+	/// quota - that one is about what members move
+	replicate = 3
 };
 
 /// a data-role server of a storage (RD12): where it listens and the key that authenticates it

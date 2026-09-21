@@ -526,4 +526,52 @@ TEST_CASE("data connection transfer quota", "[unit]") {
 	CHECK(!conn.take<protocol::download_data_piece_reply>().error);
 }
 
+// (RDS 10) a data server that is to hold a copy pulls like a member, with a ticket of
+// its own right - which the transfer quota of the storage's members does not count
+TEST_CASE("data connection serves a replica pull", "[unit]") {
+	test_data_context context;
+	context.transfer = transfer_quota{1500, 600s};
+	auto const data_server = crypto::generate_private_key().id();
+	auto const sid = securepath::test::random_octet_vector(16);
+	auto const data = make_data(4500);
+	auto const& id = data.descriptor.manifest_digest;
+	context.hold(sid, data, 5);
+
+	test_connection conn{context};
+	REQUIRE(!conn.on_connect(protocol::data_hello{}, data_server));
+	REQUIRE(!conn.take<protocol::data_hello_reply>().error);
+
+	// a ticket for somebody else is no good, and the right opens no upload
+	conn.handle(protocol::download_data_open{1, context.ticket(sid, data.descriptor, crypto::generate_private_key().id(), data_right::replicate)});
+	CHECK(is_error(conn.take<protocol::download_data_open_reply>().error, protocol::errc::invalid_data_ticket));
+	conn.handle(protocol::upload_data_manifest{2, context.ticket(sid, data.descriptor, data_server, data_right::replicate), data.manifest});
+	CHECK(is_error(conn.take<protocol::upload_data_manifest_reply>().error, protocol::errc::invalid_data_ticket));
+
+	conn.handle(protocol::download_data_open{3, context.ticket(sid, data.descriptor, data_server, data_right::replicate)});
+	auto const opened = conn.take<protocol::download_data_open_reply>();
+	REQUIRE(!opened.error);
+	CHECK(opened.manifest == data.manifest);
+
+	// every chunk, far beyond what the members may move in the window
+	for(std::uint64_t chunk_no = 0; chunk_no != data.descriptor.chunk_count(); ++chunk_no) {
+		auto const size = static_cast<std::uint32_t>(data.descriptor.chunk_enc_size(chunk_no));
+		conn.handle(protocol::download_data_piece{4, sid, id, chunk_no, 0, size});
+		auto const reply = conn.take<protocol::download_data_piece_reply>();
+		CHECK(!reply.error);
+		CHECK(reply.bytes == data.chunks.at(chunk_no));
+	}
+
+	// and the members' budget is untouched by it
+	test_connection member_conn{context};
+	auto const member = crypto::generate_private_key().id();
+	REQUIRE(!member_conn.on_connect(protocol::data_hello{}, member));
+	REQUIRE(!member_conn.take<protocol::data_hello_reply>().error);
+	member_conn.handle(protocol::download_data_open{1, context.ticket(sid, data.descriptor, member, data_right::download)});
+	REQUIRE(!member_conn.take<protocol::download_data_open_reply>().error);
+	member_conn.handle(protocol::download_data_piece{2, sid, id, 0, 0, 1000});
+	CHECK(!member_conn.take<protocol::download_data_piece_reply>().error);
+	member_conn.handle(protocol::download_data_piece{3, sid, id, 1, 0, 1000});
+	CHECK(is_error(member_conn.take<protocol::download_data_piece_reply>().error, protocol::errc::data_transfer_quota_exceeded));
+}
+
 }

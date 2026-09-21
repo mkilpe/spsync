@@ -46,6 +46,9 @@ public:
 	/// no record names the data any more (RD9): nobody is asked for it again
 	void forget(protocol::storage_id const&, data_id const&);
 
+	/// the holder tells everything it holds next: what it announced before is void
+	void forget_holder(crypto::public_key_id const& holder);
+
 	void set_load(crypto::public_key_id const& holder, holder_load const&);
 
 	/// the announced holdings of the data, in no particular order
@@ -53,6 +56,9 @@ public:
 
 	/// the last load the holder announced; zero when it never did
 	holder_load load(crypto::public_key_id const& holder) const;
+
+	/// every data somebody announced, for the replication sweep (RD13 copy count)
+	std::vector<std::pair<protocol::storage_id, data_id>> known_data() const;
 
 private:
 	using data_key = std::pair<protocol::storage_id, data_id>;
@@ -79,5 +85,22 @@ std::vector<data_endpoint> upload_order(std::vector<data_endpoint> endpoints, da
  */
 std::vector<data_endpoint> download_order(std::vector<data_endpoint> const& endpoints, data_id const&
 	, std::vector<data_holding> const& holdings, data_availability const& loads);
+
+/**
+ * Copy count (RD13): the primary holders of a data - the first `copies` servers of the
+ * placement order - that hold no complete copy of it, in placement order. Nothing while
+ * nobody holds it completely: there is nowhere to get it from yet (the upload is still on
+ * its way). A complete copy on a server that is no primary counts for nothing here: it
+ * was the uploader's fallback, the primaries still get theirs.
+ */
+std::vector<data_endpoint> missing_copies(std::vector<data_endpoint> const& endpoints, data_id const&
+	, std::vector<data_holding> const& holdings, std::size_t copies);
+
+/**
+ * Where a data server gets its copy from: the data servers that hold the data completely,
+ * in download order, without the one that asks.
+ */
+std::vector<data_endpoint> replica_sources(std::vector<data_endpoint> const& endpoints, data_id const&
+	, std::vector<data_holding> const& holdings, data_availability const& loads, crypto::public_key_id const& target);
 
 }
