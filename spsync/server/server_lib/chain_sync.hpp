@@ -30,10 +30,13 @@ struct chain_sync_config {
 	std::string log_id;
 	/// maximum records returned for one call
 	std::size_t max_returned_records{30};
-	/// byte budget of one batch (record content plus a per record allowance); a batch
-	/// travels in one transport frame (16 MiB cap) so a range of large records must not
-	/// wedge (record_data.txt RD10)
-	std::size_t max_response_bytes{8 * 1024 * 1024};
+	/// byte budget of one batch (record content plus a per record allowance): a range of
+	/// large records must not wedge (record_data.txt RD10). Kept small so an ordinary
+	/// fetch costs a client about this much memory; a batch always holds at least two
+	/// records (the first one of a range is the one the client continues from), so big
+	/// records (up to max_record_size_range.highest each) still get through - the receivers take
+	/// messages up to the transport frame
+	std::size_t max_response_bytes{1024 * 1024};
 	/// the storage's record content limit (RDS 8); 0 = unlimited. Part of validity: every
 	/// replica judges it identically, so it is a creation parameter of the storage
 	std::size_t max_record_size{};

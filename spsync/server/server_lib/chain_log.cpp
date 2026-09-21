@@ -23,10 +23,17 @@ namespace {
 /// the per record allowance on top of the content: signature, hashes, envelope, framing
 std::size_t constexpr record_wire_allowance{8 * 1024};
 
-/// size aware batching (RDS 8): keep appending while the byte budget allows, at least one
+/**
+ * Size aware batching (RDS 8): keep appending while the byte budget allows, but never
+ * fewer than two records. A client continues a fetch from the last record it holds, so
+ * the first record of its range is one it has already: a batch of one would be that
+ * record again and again whenever it and its successor exceed the budget together - a
+ * range that can never be fetched. Two records are at most twice max_record_size_range.highest,
+ * well inside a transport frame.
+ */
 void append_within_budget(std::deque<block_envelope>& out, block_envelope env, std::size_t& used, std::size_t max_bytes) {
 	auto const cost = env.block().record_bytes().size() + record_wire_allowance;
-	if(out.empty() || used + cost <= max_bytes) {
+	if(out.size() < 2 || used + cost <= max_bytes) {
 		used += cost;
 		out.push_back(std::move(env));
 	}

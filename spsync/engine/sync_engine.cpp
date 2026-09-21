@@ -129,10 +129,34 @@ public:
 		auto const cursor = fetch_cursor();
 		bool const behind = cursor < server_seq;
 		if(behind) {
-			auto req_h = comm.fetch_records(cursor, sequence_number{});
+			auto req_h = fetch_from(cursor, sequence_number{});
 			LTRACE("{}, requested records [{},-] (request handle {})", why, cursor, req_h);
 		}
 		return behind;
+	}
+
+	/// ask for the records from the one we hold (start) on; the start is remembered to
+	/// tell whether the answer got us anywhere
+	request_handle fetch_from(sequence_number start, sequence_number end) {
+		auto const handle = comm.fetch_records(start, end);
+		fetch_starts[handle] = start;
+		return handle;
+	}
+
+	/**
+	 * True when the answer reached past the record the fetch continued from. An answer
+	 * that does not must not be answered with the same request again: that is a loop at
+	 * full speed against a server whose batch cannot get past a big record. The next
+	 * record event or connect tries again.
+	 */
+	bool fetch_progressed(request_handle handle, sequence_number last_received) {
+		sequence_number start;
+		auto it = fetch_starts.find(handle);
+		if(it != fetch_starts.end()) {
+			start = it->second;
+			fetch_starts.erase(it);
+		}
+		return !start.is_valid() || start < last_received;
 	}
 
 	/**
@@ -1270,6 +1294,8 @@ public:
 	storage_limits limits;
 	/// the tags of the commit requests without an answer yet, by request handle
 	std::map<request_handle, record_tag> in_flight_commits;
+	/// the record each running fetch continued from, by request handle
+	std::map<request_handle, sequence_number> fetch_starts;
 	/// a pending record the server rejected, in the form (hash) it was rejected in
 	struct rejection {
 		octet_vector hash;
@@ -1348,6 +1374,7 @@ void sync_engine::on_disconnected(std::optional<error> err) {
 	impl_->pushing_pending_commit = 0;
 	// the answers to these never come
 	impl_->in_flight_commits.clear();
+	impl_->fetch_starts.clear();
 	impl_->uploads.clear();
 	impl_->downloads.clear();
 	LTRACE("on_disconnected [error = {}]", err.value_or(error()));
@@ -1384,10 +1411,14 @@ void sync_engine::on_record_response(request_handle req_handle, record_response 
 				impl_->handle_incoming_record(block);
 			}
 			sequence_number last_seq = records.back().sequence();
-			if(last_seq < res.requested_max || (!res.requested_max.is_valid() && last_seq < res.server_max_sequence)) {
-				auto req_h = impl_->comm.fetch_records(last_seq, res.requested_max);
+			bool const more = last_seq < res.requested_max || (!res.requested_max.is_valid() && last_seq < res.server_max_sequence);
+			if(more && impl_->fetch_progressed(req_handle, last_seq)) {
+				auto req_h = impl_->fetch_from(last_seq, res.requested_max);
 				LTRACE("requested more records [{},{}] (request handle {})", last_seq, res.requested_max, req_h);
 			} else {
+				if(more) {
+					LWARN("the server's answer did not get past record {}, not asking the same again", last_seq);
+				}
 				impl_->on_fetch_complete();
 			}
 			// an own record may have been confirmed by the fetch instead of its commit answer

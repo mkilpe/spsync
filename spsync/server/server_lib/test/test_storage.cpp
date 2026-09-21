@@ -81,6 +81,22 @@ TEST_CASE("storage limits are persisted and immutable", "[unit]") {
 	CHECK_THROWS(storage(sid3, cfg, storage_modes{sync_mode::allow_all, auth_mode::sign_records,
 		replication_mode::none, storage_limits{0, 1024}}));
 
+	// the biggest record a storage may allow is the biggest one the codec carries (a
+	// record is one octet string of its block); the defaults are inside the ranges
+	static_assert(valid_storage_limits(storage_limits{max_record_size_range.highest, chunk_size_range.highest}));
+	static_assert(!valid_storage_limits(storage_limits{max_record_size_range.highest + 1, 0}));
+	static_assert(!valid_storage_limits(storage_limits{0, chunk_size_range.highest + 1}));
+	static_assert(valid_storage_limits(storage_limits{default_max_record_size, default_chunk_size}));
+	static_assert(default_max_record_size == 1024 * 1024);
+	static_assert(max_record_size_range.highest == 2 * 1024 * 1024);
+	CHECK_THROWS(storage(sid3, cfg, storage_modes{sync_mode::allow_all, auth_mode::sign_records,
+		replication_mode::none, storage_limits{max_record_size_range.highest + 1, 0}}));
+	{
+		storage s(sid3, cfg, storage_modes{sync_mode::allow_all, auth_mode::sign_records,
+			replication_mode::none, storage_limits{max_record_size_range.highest, 0}});
+		CHECK(s.modes().limits.max_record_size == max_record_size_range.highest);
+	}
+
 	std::filesystem::remove_all(root);
 }
 

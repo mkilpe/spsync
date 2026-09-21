@@ -69,6 +69,16 @@ struct test_block_creator {
 		return next_block(test_record);
 	}
 
+	/// Create data change record whose encrypted header makes the record about the given size
+	/// (the servers never read the header: any octets do)
+	chain_block test_big_data_change(std::size_t size) {
+		record_tag tag = securepath::test::random_octet_vector(16);
+		auth_record<data_change_record> test_record{data_change_record{next_record_base()}, util::content_auth{tag}};
+		test_record.record.add(single_change{plain_single_change_data{util::create_object_id()}
+			, encrypted_record_header<data_change_header>{securepath::test::random_octet_vector(size)}});
+		return next_block(test_record);
+	}
+
 	/// Create data change record that has same object ids as the given record and those set as the previous change of the object id
 	chain_block test_followup_data_change(chain_block const& previous) {
 		data_change_record rec = previous.deserialise_to<data_change_record>();

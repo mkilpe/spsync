@@ -45,7 +45,7 @@ securepath::error data_connection::check_ticket(data_ticket const& ticket, data_
 	} else if(ticket.member() != id_ || ticket.right() != right) {
 		LOG_WARN("data ticket presented by user {} is for {} / another right", id_, ticket.member());
 		ret = make_error(protocol::errc::invalid_data_ticket);
-	} else if(ticket.storage_id().empty() || d.manifest_digest.empty() || d.chunk_size == 0 || d.chunk_size > max_chunk_size) {
+	} else if(ticket.storage_id().empty() || d.manifest_digest.empty() || d.chunk_size == 0 || d.chunk_size > chunk_size_range.highest) {
 		// a chunk must fit a transport frame whatever the record server signed
 		ret = make_error(protocol::errc::invalid_data_ticket);
 	}

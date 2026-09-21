@@ -26,7 +26,7 @@ bool data_manifest::verify_chunk(std::uint64_t chunk_no, octet_span encrypted) c
 }
 
 bool valid_data_descriptor(data_descriptor const& d) {
-	bool const chunking_ok = d.chunk_size >= min_chunk_size && d.chunk_size <= max_chunk_size;
+	bool const chunking_ok = d.chunk_size >= chunk_size_range.lowest && d.chunk_size <= chunk_size_range.highest;
 	return chunking_ok && d.manifest_digest.size() == crypto::hash_digest_size()
 		&& d.enc_size > chunk_tag_size() && d.chunk_count() <= max_data_chunks;
 }

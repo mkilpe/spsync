@@ -619,4 +619,67 @@ TEST_CASE("s2s server lifetime under running timers", "[unit]") {
 	std::filesystem::remove_all("test-s2s-la");
 }
 
+// a record above a mebibyte between replicas: pushed when it is committed, pulled by a
+// replica that was away (the peer connection's deserialiser capped a message at 1 MiB)
+TEST_CASE("s2s records above a mebibyte", "[unit]") {
+	std::filesystem::remove_all("test-s2s-ba");
+	std::filesystem::remove_all("test-s2s-bb");
+
+	test::test_context tctx;
+	tctx.add_client(2);
+	tctx.share_client_keys();
+	network::enable_pk_handshake(tctx.client_context(0));
+	network::enable_pk_handshake(tctx.client_context(1));
+	auto const key_a = tctx.key_id(0);
+	auto const key_b = tctx.key_id(1);
+
+	storage_server a(tctx.client_context(0),
+		s2s_test_params("test-s2s-ba", 42754, 42764, {peer_config{"127.0.0.1", 42765, key_b}}));
+	auto b = std::make_unique<storage_server>(tctx.client_context(1),
+		s2s_test_params("test-s2s-bb", 42755, 42765, {peer_config{"127.0.0.1", 42764, key_a}}));
+
+	protocol::storage_id const sid = securepath::test::random_octet_vector(8);
+	storage_modes modes{sync_mode::allow_all, auth_mode::sign_records, replication_mode::weak};
+	modes.limits = storage_limits{max_record_size_range.highest, 0};
+	auto sa = a.open_storage(sid, modes);
+	auto sb = b->open_storage(sid, modes);
+	REQUIRE(sa);
+	REQUIRE(sb);
+
+	a.start();
+	b->start();
+	WAIT_REQUIRE((!a.connected_peers().empty() && !b->connected_peers().empty()), 5s);
+
+	test::test_block_creator creator;
+	creator.signer = *tctx.client_context(0).private_data().my_private_key();
+	REQUIRE(sa->commit_block(creator.test_user_change()).block);
+	auto const big = creator.test_big_data_change(1536 * 1024);
+	REQUIRE(big.record_bytes().size() > 1024 * 1024);
+	REQUIRE(sa->commit_block(big).block);
+
+	// pushed
+	WAIT_REQUIRE(sb->current_sequence_number() == sequence_number{2}, 20s);
+	CHECK(sb->get_records(sequence_number{2}, sequence_number{2}).at(0).tag() == big.tag());
+
+	// B goes away, A commits more big ones, B comes back and pulls them
+	sb.reset();
+	b->close();
+	b.reset();
+	for(int i = 0; i != 3; ++i) {
+		REQUIRE(sa->commit_block(creator.test_big_data_change(1200 * 1024)).block);
+	}
+	storage_server back(tctx.client_context(1),
+		s2s_test_params("test-s2s-bb", 42755, 42765, {peer_config{"127.0.0.1", 42764, key_a}}));
+	back.start();
+	auto sback = back.open_storage(sid);
+	REQUIRE(sback);
+	WAIT_CHECK(sback->current_sequence_number() == sequence_number{5}, 30s);
+	CHECK(tag_set(*sback, sequence_number{5}) == tag_set(*sa, sequence_number{5}));
+
+	back.close();
+	a.close();
+	std::filesystem::remove_all("test-s2s-ba");
+	std::filesystem::remove_all("test-s2s-bb");
+}
+
 }

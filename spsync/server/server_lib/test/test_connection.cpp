@@ -434,4 +434,74 @@ TEST_CASE("storage syncing sends the client elsewhere", "[system]") {
 	WAIT_CHECK(client2.storage.last_block().sequence == sequence_number{1}, 2s);
 }
 
+// records above a mebibyte over the real connections (found with record_data.txt RDS 5,
+// fixed 2026-09-21): the packet deserialisers capped a message at 1 MiB while a record may
+// be up to max_record_size_range.highest and a batch was budgeted at 8 MiB, so a big commit dropped
+// the connection and a range of big records could never be fetched. The records that get
+// this big are the ones that scale with the group: a key rotation for many members
+TEST_CASE("records above a mebibyte", "[system]") {
+	event_system::single_thread_event_loop single_thread_event_loop;
+	test::test_context net_context;
+
+	net_context.add_client(3);
+	net_context.add_client_keys_for_server();
+	net_context.share_client_keys();
+
+	test::test_server server(net_context.server_context());
+	server.run();
+	std::this_thread::sleep_for(1s);
+
+	// a storage that allows the biggest records there are
+	storage_modes modes;
+	modes.limits = storage_limits{max_record_size_range.highest, 0};
+
+	test_client client1(net_context.client_context(0), single_thread_event_loop, 0);
+	client1.connect();
+	client1.wait_for_connection();
+	auto sid = client1.create_remote_storage(modes);
+	client1.wait_for_storage_created();
+	client1.create_initial_record({net_context.key_id(1), net_context.key_id(2)});
+
+	test_client client2(net_context.client_context(1), single_thread_event_loop, 1);
+	client2.connect();
+	client2.wait_for_connection();
+	client2.connect_to_storage(sid);
+	WAIT_REQUIRE(test::check_commit_records_equal(sequence_number{1}, client1.storage, client2.storage), 5s);
+
+	// one record of 1.5 MiB: the commit is a message above 1 MiB to the server, the
+	// notification one to the other client
+	client1.engine->sync_object_change(util::create_object_id()
+		, metadata{{"blob", securepath::test::random_octet_vector(1536 * 1024)}});
+	WAIT_REQUIRE(test::check_commit_records_equal(sequence_number{2}, client1.storage, client2.storage), 20s);
+
+	// a run of 300 KiB records: a range of them is more than one batch
+	for(int i = 0; i != 6; ++i) {
+		client1.engine->sync_object_change(util::create_object_id()
+			, metadata{{"blob", securepath::test::random_octet_vector(300 * 1024)}});
+	}
+	WAIT_REQUIRE(test::check_commit_records_equal(sequence_number{8}, client1.storage, client2.storage), 30s);
+
+	// a key rotation for 900 members: the group key enveloped for each, about 1.2 MiB
+	users many(users_change_mode::full);
+	for(int i = 0; i != 3; ++i) {
+		many.add(util::user_access{net_context.key_id(i), util::access_type::user_management_access});
+	}
+	for(int i = 0; i != 900; ++i) {
+		auto const member = crypto::generate_private_key();
+		net_context.client_context(0).public_keys().insert(member.public_key());
+		many.add(util::user_access{member.id(), util::access_type::data_write_access});
+	}
+	auto rotation = client1.engine->sync_user_change(encrypt_last_key_for_users(many, client1.cc));
+	REQUIRE(rotation);
+	CHECK(rotation->record().record_bytes().size() > 1024 * 1024);
+	WAIT_REQUIRE(test::check_commit_records_equal(sequence_number{9}, client1.storage, client2.storage), 30s);
+
+	// a member that joins now fetches all of it in ranges
+	test_client client3(net_context.client_context(2), single_thread_event_loop, 2);
+	client3.connect();
+	client3.wait_for_connection();
+	client3.connect_to_storage(sid);
+	WAIT_CHECK(test::check_commit_records_equal(sequence_number{9}, client1.storage, client3.storage), 30s);
+}
+
 }

@@ -6,6 +6,7 @@
 #include <spsync/protocol/s2s_protocol.hpp>
 
 #include <securepath/network/encryption/encrypted_connection.hpp>
+#include <securepath/network/encryption/framing.hpp>
 #include <securepath/serialisation/util.hpp>
 
 #include <functional>
@@ -92,7 +93,9 @@ private:
 	void resume_pulls();
 
 private:
-	serialisation::packet_deserialiser<protocol::s2s_types> deser_;
+	// pushes and pull answers carry records like the client connection does: the
+	// transport frame is the bound of a message
+	serialisation::packet_deserialiser<protocol::s2s_types> deser_{network::max_frame_size};
 	storage_server_context& sctx_;
 
 	mutable std::mutex mutex_;

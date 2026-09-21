@@ -186,7 +186,7 @@ TEST_CASE("data connection refuses bad tickets", "[unit]") {
 	}
 	SECTION("a descriptor no chunk of which fits a frame") {
 		auto d = data.descriptor;
-		d.chunk_size = max_chunk_size + 1;
+		d.chunk_size = chunk_size_range.highest + 1;
 		CHECK(refused(context.ticket(sid, d, member), protocol::errc::invalid_data_ticket));
 		d.chunk_size = 0;
 		CHECK(refused(context.ticket(sid, d, member), protocol::errc::invalid_data_ticket));

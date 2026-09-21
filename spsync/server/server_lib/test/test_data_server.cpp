@@ -196,11 +196,11 @@ TEST_CASE("data server upload end to end", "[unit]") {
 TEST_CASE("data server takes full size chunks", "[unit]") {
 	data_server_fixture f;
 	encryption_key const key{sequence_number{1}, securepath::test::random_octet_vector(crypto::aes_gcm_key_size())};
-	auto writer = f.store.create(key, max_chunk_size);
-	writer.write(securepath::test::random_octet_vector(max_chunk_size + 1000));
+	auto writer = f.store.create(key, chunk_size_range.highest);
+	writer.write(securepath::test::random_octet_vector(chunk_size_range.highest + 1000));
 	auto const data = writer.finish().descriptor;
 	REQUIRE(data.chunk_count() == 2);
-	REQUIRE(data.chunk_enc_size(0) > max_chunk_size);
+	REQUIRE(data.chunk_enc_size(0) > chunk_size_range.highest);
 	REQUIRE(data.chunk_enc_size(0) > protocol::max_data_piece_size);
 
 	net_data_channel channel{f.net.client_context(0), f.tickets({f.endpoint()})};
@@ -503,8 +503,10 @@ TEST_CASE("data server download refusals", "[unit]") {
 
 // RD10: a fetch that runs into the transfer quota keeps what it got and goes on in the next window
 TEST_CASE("data server transfer quota window", "[unit]") {
-	// a window of two seconds that serves a bit more than half of the data
-	data_server_fixture f{transfer_quota{40000, 2s}};
+	// windows of two seconds that serve less than half of the data each: the windows are
+	// fixed to the clock, so a download may straddle two of them whenever it starts - it
+	// still cannot finish without being refused once
+	data_server_fixture f{transfer_quota{25000, 2s}};
 	auto const data = f.create_full(60000);
 	auto const& id = data.descriptor.manifest_digest;
 	f.upload(data.descriptor);
@@ -518,7 +520,7 @@ TEST_CASE("data server transfer quota window", "[unit]") {
 	std::size_t tries = 0;
 	bool complete = false;
 	std::uint64_t held_after_first = 0;
-	while(!complete && tries != 6) {
+	while(!complete && tries != 10) {
 		CHECK(downloader.enqueue(id));
 		++tries;
 		WAIT_REQUIRE(log.count == tries, 30s);

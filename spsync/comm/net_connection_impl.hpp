@@ -9,6 +9,7 @@
 
 #include <securepath/crypto/random.hpp>
 #include <securepath/network/encryption/encrypted_connection.hpp>
+#include <securepath/network/encryption/framing.hpp>
 #include <securepath/serialisation/util.hpp>
 
 namespace securepath::sync {
@@ -140,7 +141,9 @@ public:
 	mutable std::mutex mutex;
 	event_system::event_handler& handler;
 	std::atomic<std::uint32_t> call_id{};
-	serialisation::packet_deserialiser<protocol::s2c_types> deser;
+	// a record may be up to max_record_size_range.highest and a batch is budgeted by the server: the
+	// transport frame is the bound of a message, not the deserialiser's 1 MiB default
+	serialisation::packet_deserialiser<protocol::s2c_types> deser{network::max_frame_size};
 	std::map<storage_id, std::unique_ptr<comm>> comms;
 	std::map<storage_id, std::unique_ptr<comm>> attached_comms;
 	bool hello_done{};

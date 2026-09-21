@@ -112,7 +112,7 @@ RD4 Transfer protocol (flesh out the c2s stubs; all inside the encrypted
     gets the whole checked against the manifest and only then it becomes a
     chunk. A gap, an overrun or wrong bytes lose the chunk (it starts over at
     offset 0), a lost connection loses the chunks that were half way. So
-    max_chunk_size stays 8 MiB and the memory a transfer takes is the window
+    the biggest chunk size stays 8 MiB and the memory a transfer takes is the window
     of pieces, whatever the chunk size.
 
 RD5 Server data store. Chunks as files under the storage directory
@@ -544,7 +544,7 @@ Implementation steps
       + data_connection (server_lib/data_connection, transport left out like
         connection): ticket check = verify + trusted issuer + issued to the key
         this connection authenticated with + right upload + a descriptor whose
-        chunks fit a frame (chunk_size 1..max_chunk_size; the lower bound and
+        chunks fit a frame (chunk_size 1..chunk_size_range.highest; the lower bound and
         the match with the committed record are the issuer's business, RDS 5).
         Uploads are opened per connection by (sid, data_id); a chunk for
         anything else is no_such_upload. Completion calls
@@ -617,7 +617,7 @@ Implementation steps
         ever improves the answer and need not be complete; holders that are no
         data server of the storage are left out.
       + descriptor bounds are a validity rule now (RD10): valid_data_descriptor
-        - sha3-512 digest, chunk_size in [min_chunk_size, max_chunk_size], at
+        - sha3-512 digest, chunk_size within chunk_size_range, at
         least one and at most max_data_chunks (200000, a manifest fits a frame)
         chunks - checked by chain_sync on the commit AND the foreign path ->
         invalid_record. chunk_size need not be the storage's (every data is
@@ -648,9 +648,9 @@ Implementation steps
         packet_deserialiser forwards the limit constructor); (2) the DER codec
         refuses one octet string above 2 MiB (max_structure_size), so a chunk
         above that could not travel in one packet - solved by the wire pieces
-        of RD4 (below), max_chunk_size stays 8 MiB. The same 1 MiB deserialiser default
-        sits on the record and s2s connections against 8 MiB record batches:
-        recorded in todos.txt, not fixed here. The default data port is 18203
+        of RD4 (below), the biggest chunk size stays 8 MiB. The same 1 MiB deserialiser default
+        sat on the record and s2s connections against 8 MiB record batches:
+        fixed 2026-09-21, see the revision in RDS 8. The default data port is 18203
         (18202 is the packet server).
       + tests: server_lib test_data_availability (table, placement: same order
         from any configuration order, spread, minimal movement; download order
@@ -868,9 +868,11 @@ Implementation steps
       rejected identically on reopen, mismatching creation limits refused, a
       range of large records still fetchable.
       Implemented: storage_limits {max_record_size, chunk_size} inside
-      storage_modes (sync_mode.hpp; defaults 256 KiB / 1 MiB, ranges 4 KiB..8 MiB
-      and 256 KiB..8 MiB, valid_storage_limits; a chunk above the codec's 2 MiB
-      octet string limit is no problem since chunks travel in pieces, RD4). 0 = not stated: the server
+      storage_modes (sync_mode.hpp; defaults 1 MiB / 1 MiB, ranges 4 KiB..2 MiB
+      and 256 KiB..8 MiB, valid_storage_limits - the record default was 256 KiB
+      and its maximum 8 MiB until 2026-09-21, see the revision below; a chunk
+      above the codec's 2 MiB octet string limit is no problem since chunks
+      travel in pieces, RD4). 0 = not stated: the server
       defaults at creation (storage_config::default_limits, spsync_server
       --max_record_size / --chunk_size), "whatever the storage has" when a client
       states its expectation (modes_match, which also covers the unasserted
@@ -882,9 +884,10 @@ Implementation steps
       protocol::errc::record_too_big; the limit is over the authenticated record
       content (chain_block::record_bytes), signature and framing (~ a few KiB)
       come on top. Batching: chain_log::get / get_by_origin take a byte budget
-      (chain_sync_config::max_response_bytes, 8 MiB) with an 8 KiB per record
-      allowance, always at least one record - clients and peers walk ranges as
-      before, they just get shorter batches for large records. Client: comm
+      (chain_sync_config::max_response_bytes, 1 MiB - it was 8 MiB) with an
+      8 KiB per record allowance, always at least TWO records (it was one, see
+      the revision below) - clients and peers walk ranges as before, they just
+      get shorter batches for large records. Client: comm
       delivers the limits in sequence_info (the sequence request is the per
       connection attach exchange: expected modes out, actual modes + limits back;
       the server id rides there too because that answer is where the engine
@@ -902,6 +905,32 @@ Implementation steps
       "refuses oversized records" (incl. offline after the limits were learned),
       record_storage "limits persist", s2s replica creation compares the filled
       limits.
+      Revision 2026-09-21 (after RDS 7; what RDS 5 had noted in todos.txt): the
+      wedge this step was to prevent was still there, twice. (1) The packet
+      deserialisers of the client's record connection, the server's client
+      connection and the peer connection capped a message at 1 MiB, below both
+      a big record and the 8 MiB batch: they take the transport frame now. (2)
+      A client continues a fetch FROM the last record it holds, so the first
+      record of its range is one it has; "at least one record per batch" is
+      that record again whenever it and its successor exceed the budget - the
+      same request for ever (3185 of them in 30 s in the test). Batches hold at
+      least two records now, and the engine does not repeat a fetch whose
+      answer did not get past the record it continued from. The old test
+      walked ranges from last + 1, which the engine never does. Sizes: the
+      records that get big scale with the group, not with a payload - a user
+      change is about 1.3 KB per member it envelopes the key for, a segment
+      record 18 B per covered record - so the default went from 256 KiB (about
+      200 members per key rotation) to 1 MiB (about 800), and the maximum from a
+      fictional 8 MiB to the 2 MiB the codec carries for one record
+      (static_assert in chain_block.hpp; the bounds are
+      max_record_size_range / chunk_size_range in sync_mode.hpp, lowest and
+      highest - they were min_max_record_size ... max_chunk_size). Beyond that: doc/user_changes.txt
+      "Scaling". Tests: server_lib "records above a mebibyte" (real server:
+      1.5 MiB commit, notification, a run of 300 KiB records, a 900 member key
+      rotation of 1.2 MiB, a late joiner fetching all of it), "s2s records above
+      a mebibyte" (push and pull), chain_sync "batches get past the record a
+      fetch continues from", engine "does not repeat a fetch that made no
+      progress", limits range in the storage limits test.
 
 - RDS 9  Retention / segment interaction                                       [1d]
       With segments.txt SEG 5 (done 2026-09-01): prune data at segment cut,

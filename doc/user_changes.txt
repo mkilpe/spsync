@@ -23,3 +23,48 @@ needed data:
 	* enveloped content for public key encrypt the new key
 		- do only for added person
 	* symmetric encryption of the new key
+
+
+Scaling: members per user change (open, recorded 2026-09-21)
+-----------------------------------------------------------
+
+Measured: a user change carries the group key in a post quantum KEM envelope for every
+recipient, about 1.3 KB each (100 members = 129.7 KB of record content). A change that
+gives a key to everybody - the first record, a full mode change and above all the key
+rotation after a member was removed - is therefore bounded by the record size:
+
+	max_record_size            members per such record
+	256 KiB (default till now)   about 200
+	1 MiB   (default since)      about 800
+	2 MiB   (the maximum)        about 1600
+
+2 MiB is a hard ceiling today, not a knob: a record is one octet string of its chain block
+and the DER codec takes 2 MiB for one (sync_mode.hpp max_record_size_range.highest, static_assert in
+chain_block.hpp). Groups beyond that need another way to hand out keys. Options, none
+decided:
+
+	* wrap the new key with the previous group key for the members that stay, KEM envelopes
+	  only for members that are added (the "enc with old key?" / "do only for added person"
+	  of the notes above). One small wrap instead of n envelopes - but only for a rotation
+	  that excludes nobody (periodic rotation, adding members). After a REMOVAL the removed
+	  member holds the old key, so this is exactly the case it cannot serve, and that is
+	  the expensive one.
+	* spread a rotation over several user change records, each with the envelopes of a part
+	  of the members, and a rule for when the new key sequence becomes the one to write
+	  with (everybody must have had the chance to learn it; what about records written
+	  meanwhile?). Keeps the record format, costs chain space n * 1.3 KB all the same.
+	* envelopes out of band: the user change commits to the envelope list by a digest (as a
+	  data change commits to a manifest, record_data.txt RD2) and the list travels as
+	  record data over the data servers; a member fetches the piece its envelope is in.
+	  The envelopes are ciphertext for their recipients already, so they need not be - and
+	  cannot be - encrypted with the group key they deliver. The chain stays small, the
+	  transfer machinery exists; a member must reach a data server before it can read on.
+	* a key tree (logical key hierarchy / TreeKEM as in MLS): a removal re-keys the path of
+	  the removed member, log(n) envelopes instead of n. The real fix for big groups and
+	  the biggest change: membership state becomes a tree every member maintains.
+
+The same ceiling for segment records (segments.txt): 18 B per covered record, the tag
+list - about 58000 records per segment at 1 MiB, 116000 at 2 MiB. There the way out is
+cheap: commit to the covered tags with a digest (or a Merkle root, which also gives
+membership proofs) instead of listing them.
+

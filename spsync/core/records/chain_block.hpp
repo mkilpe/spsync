@@ -2,10 +2,12 @@
 
 #include "record_base.hpp"
 #include "record_types.hpp"
+#include <spsync/core/sync_mode.hpp>
 #include <spsync/core/types.hpp>
 #include <spsync/util/content_auth.hpp>
 
 #include <securepath/crypto/hash.hpp>
+#include <securepath/serialisation/codec/asn_der/types.hpp>
 #include <securepath/serialisation/sequence.hpp>
 #include <securepath/serialisation/util.hpp>
 #include <securepath/util/typelist.hpp>
@@ -48,6 +50,10 @@ using record_types = typelist<
 /**
  * Contains the serialised record<RecordType> class, authentication information and the server set block information
  */
+// the serialised record is one octet string of the block: the biggest record a storage
+// may allow must be one the codec encodes and decodes
+static_assert(max_record_size_range.highest <= serialisation::max_structure_size);
+
 class chain_block {
 public:
 	chain_block() = default;

@@ -52,7 +52,7 @@ struct upload_data_manifest : protocol_base {
 };
 
 /**
- * A chunk - the unit at rest, up to max_chunk_size - never travels in one packet: it
+ * A chunk - the unit at rest, up to chunk_size_range.highest - never travels in one packet: it
  * moves in pieces, so neither side holds more than a piece of it in memory and the size
  * of a chunk is not bound by what a packet may carry. The sender picks the piece size
  * (default below), the receiver takes pieces up to the maximum.

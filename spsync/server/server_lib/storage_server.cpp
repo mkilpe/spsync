@@ -14,6 +14,7 @@
 
 #include <securepath/crypto/private_data_access.hpp>
 #include <securepath/network/encryption/encrypted_server.hpp>
+#include <securepath/network/encryption/framing.hpp>
 #include <securepath/serialisation/util.hpp>
 #include <securepath/util/conversions.hpp>
 
@@ -125,7 +126,9 @@ public:
 	}
 
 private:
-	serialisation::packet_deserialiser<protocol::c2s_types> deser_;
+	// a commit carries a record of up to max_record_size_range.highest: the transport frame is the
+	// bound of a message, not the deserialiser's 1 MiB default
+	serialisation::packet_deserialiser<protocol::c2s_types> deser_{network::max_frame_size};
 	bool connection_good_{};
 };
 

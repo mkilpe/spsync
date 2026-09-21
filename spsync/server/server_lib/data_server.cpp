@@ -104,7 +104,7 @@ public:
 	}
 
 private:
-	// a chunk packet is up to max_chunk_size and a manifest up to max_data_chunks digests:
+	// a chunk packet is up to chunk_size_range.highest and a manifest up to max_data_chunks digests:
 	// the transport frame is the bound, not the deserialiser's 1 MiB default
 	serialisation::packet_deserialiser<protocol::c2d_types> deser_{network::max_frame_size};
 	bool connection_good_{};

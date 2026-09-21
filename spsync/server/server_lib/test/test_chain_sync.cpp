@@ -507,6 +507,51 @@ TEST_CASE("chain_sync record size limit and size aware batching", "[unit]") {
 	}
 }
 
+// (6j) a client continues a fetch FROM the last record it holds, so the first record of
+// its range is one it has: a batch must get past it whatever the sizes are, or the same
+// answer comes again for ever (found 2026-09-21 when the batch budget went to 1 MiB)
+TEST_CASE("chain_sync batches get past the record a fetch continues from", "[unit]") {
+	remove_database_test_db();
+	chain_sync_config config{sync_mode::allow_all};
+	config.max_record_size = max_record_size_range.highest;
+	chain_sync sync(database::sqlite::create_sqlite_connection(db_name), config);
+	REQUIRE(config.max_response_bytes == 1024 * 1024);
+
+	test_block_creator creator;
+	REQUIRE(sync.commit_block(creator.test_user_change()));
+	// each pair of neighbours is more than the budget
+	std::vector<std::size_t> const sizes{300 * 1024, 1200 * 1024, 900 * 1024, 2000 * 1024, 700 * 1024, 100, 100, 1900 * 1024};
+	for(auto size : sizes) {
+		REQUIRE(sync.commit_block(creator.test_big_data_change(size)));
+	}
+	auto const last = sync.current_sequence_number();
+	REQUIRE(last == sequence_number{1 + sizes.size()});
+
+	// the way the engine walks: from the record held, until the head
+	sequence_number held{1};
+	std::size_t requests = 0;
+	while(held < last && requests != 50) {
+		auto const batch = sync.get_records(held, sequence_number{});
+		++requests;
+		REQUIRE(!batch.empty());
+		CHECK(batch.front().sequence() == held);
+		// past the record the fetch continued from
+		REQUIRE(batch.back().sequence() > held);
+		// two records, or what fits the budget
+		std::size_t bytes = 0;
+		for(auto const& b : batch) {
+			bytes += b.record_bytes().size();
+		}
+		CHECK((batch.size() == 2 || bytes <= config.max_response_bytes));
+		held = batch.back().sequence();
+	}
+	CHECK(held == last);
+	CHECK(requests < 50);
+
+	// peers pull by origin with the same budget rule
+	CHECK(sync.get_envelopes(sequence_number{2}, sequence_number{}).size() >= 2);
+}
+
 // (7) validate/apply split behaves like commit_block
 TEST_CASE("chain_sync validate and apply", "[unit]") {
 	remove_database_test_db();
@@ -591,19 +636,19 @@ TEST_CASE("chain_sync data descriptor bounds", "[unit]") {
 	auto const digest = securepath::test::random_octet_vector(64);
 	data_descriptor const good{3 * 1024 * 1024 + 48, 1024 * 1024, digest};
 	REQUIRE(valid_data_descriptor(good));
-	CHECK(valid_data_descriptor(data_descriptor{4112, min_chunk_size, digest}));
-	CHECK(valid_data_descriptor(data_descriptor{4112, max_chunk_size, digest}));
+	CHECK(valid_data_descriptor(data_descriptor{4112, chunk_size_range.lowest, digest}));
+	CHECK(valid_data_descriptor(data_descriptor{4112, chunk_size_range.highest, digest}));
 
 	std::vector<data_descriptor> const bad{
-		data_descriptor{good.enc_size, min_chunk_size - 1, digest},
-		data_descriptor{good.enc_size, max_chunk_size + 1, digest},
+		data_descriptor{good.enc_size, chunk_size_range.lowest - 1, digest},
+		data_descriptor{good.enc_size, chunk_size_range.highest + 1, digest},
 		data_descriptor{good.enc_size, 0, digest},
 		data_descriptor{0, good.chunk_size, digest},
 		data_descriptor{16, good.chunk_size, digest},
 		data_descriptor{good.enc_size, good.chunk_size, securepath::test::random_octet_vector(32)},
 		data_descriptor{good.enc_size, good.chunk_size, {}},
 		// more chunks than a manifest may name
-		data_descriptor{(std::uint64_t{min_chunk_size} + 16) * (max_data_chunks + 1), min_chunk_size, digest}};
+		data_descriptor{(std::uint64_t{chunk_size_range.lowest} + 16) * (max_data_chunks + 1), chunk_size_range.lowest, digest}};
 	for(auto const& d : bad) {
 		CHECK(!valid_data_descriptor(d));
 		auto creator_copy = creator;
@@ -614,7 +659,7 @@ TEST_CASE("chain_sync data descriptor bounds", "[unit]") {
 
 	CHECK(sync.commit_block(creator.test_data_change_with_data(good)));
 	auto foreign_creator = creator;
-	CHECK(sync.commit_foreign(foreign_creator.test_data_change_with_data(data_descriptor{4112, min_chunk_size
+	CHECK(sync.commit_foreign(foreign_creator.test_data_change_with_data(data_descriptor{4112, chunk_size_range.lowest
 		, securepath::test::random_octet_vector(64)})));
 }
 

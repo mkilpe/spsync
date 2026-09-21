@@ -5,6 +5,7 @@
 #include <spsync/protocol/s2s_protocol.hpp>
 
 #include <securepath/network/encryption/encrypted_connection.hpp>
+#include <securepath/network/encryption/framing.hpp>
 #include <securepath/serialisation/util.hpp>
 
 #include <functional>
@@ -65,7 +66,9 @@ private:
 	peer_config const record_server_;
 	crypto::public_key_id const own_id_;
 	hooks const hooks_;
-	serialisation::packet_deserialiser<protocol::s2s_types> deser_;
+	// nothing big is for a data server, but a record server that does not know the link's
+	// role yet may send it: taken and dropped rather than refused
+	serialisation::packet_deserialiser<protocol::s2s_types> deser_{network::max_frame_size};
 
 	mutable std::mutex mutex_;
 	bool ready_{};

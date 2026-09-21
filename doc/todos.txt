@@ -64,14 +64,15 @@
   - R2 strict mode on a different replica (phase 6)
   - D1-D9 duplication and dead code, D1 candidate-key helper first
 
-* packet size caps on the record and s2s connections (found 2026-09-19 with record_data.txt RDS 5, not fixed)
-  - serialisation::packet_deserialiser caps a message at 1 MiB by default; the client's record
-    connection (comm/net_connection_impl.hpp), the server's client connection (storage_server.cpp)
-    and the peer connection (peer_connection.hpp) use the default, while chain_sync batches up to
-    max_response_bytes = 8 MiB into one response_records / response_envelopes. A batch above
-    1 MiB would throw "max buffer size reached" on the receiver: the range wedge of RD10 at 1 MiB
-    instead of the 16 MiB frame. Seen by reading only, no test shows it yet. The template takes
-    the limit now (network::max_frame_size, as the data listener does); needs a test with a
-    > 1 MiB batch over the wire. Note also the DER codec's 2 MiB limit for one octet string
-    (a single metadata value above it cannot be encoded; record data is not affected, chunks
-    travel in pieces).
+* bigger groups: a user change that gives the key to every member (key rotation after a
+  removal) costs about 1.3 KB per member and a record is at most 2 MiB (about 1600 members,
+  800 with the default 1 MiB); the user change record needs a way to change keys without
+  an envelope for each member, or another mechanism - options in doc/user_changes.txt
+  "Scaling: members per user change"; segment records have the same ceiling (tag list)
++ packet size caps on the record and s2s connections (found 2026-09-19 with record_data.txt
+  RDS 5, fixed 2026-09-21): the deserialisers of the client's record connection, the server's
+  client connection and the peer connection take messages up to the transport frame; the
+  batch budget is 1 MiB with at least two records per batch (a fetch continues FROM the
+  record held, a batch of one never got past it - the actual wedge); max_record_size default
+  1 MiB, maximum 2 MiB (what the codec carries for one record); the engine does not repeat
+  a fetch that made no progress

@@ -47,22 +47,38 @@ struct storage_limits {
 	bool operator==(storage_limits const&) const = default;
 };
 
-std::uint32_t constexpr default_max_record_size{256 * 1024};
-std::uint32_t constexpr min_max_record_size{4 * 1024};
-std::uint32_t constexpr max_max_record_size{8 * 1024 * 1024};
-std::uint32_t constexpr default_chunk_size{1024 * 1024};
-std::uint32_t constexpr min_chunk_size{256 * 1024};
+/// the values a limit of a storage may be set to
+struct limit_range {
+	[[nodiscard]] constexpr bool contains(std::uint32_t value) const {
+		return value >= lowest && value <= highest;
+	}
+
+public:
+	std::uint32_t lowest{};
+	std::uint32_t highest{};
+};
+
+/**
+ * The records that grow are the ones that scale with the group, not with a payload: a
+ * user change carries the group key enveloped for every recipient (about 1.3 KB each, so
+ * the 1 MiB default is a key rotation for about 800 members) and a segment record the tag
+ * of every record it covers (18 B each, about 58000 records). The highest value is what
+ * the DER codec takes for one octet string, which is what a record is inside its block
+ * (checked where chain_block is defined): about 1600 members per key rotation and 116000
+ * records per segment; more needs another record design, see doc/user_changes.txt.
+ */
+inline constexpr limit_range max_record_size_range{4 * 1024, 2 * 1024 * 1024};
+std::uint32_t constexpr default_max_record_size{1024 * 1024};
+
 /// the chunk is the unit at rest (one file, one AES-GCM pass); on the wire it travels in
 /// pieces (protocol/data_protocol.hpp), so its size is not bound by a packet
-std::uint32_t constexpr max_chunk_size{8 * 1024 * 1024};
+inline constexpr limit_range chunk_size_range{256 * 1024, 8 * 1024 * 1024};
+std::uint32_t constexpr default_chunk_size{1024 * 1024};
 
-/// stated limits must be within the ranges (the upper bounds keep a batch of records or a
-/// chunk well under the 16 MiB transport frame)
+/// stated limits must be within the ranges; 0 = not stated
 [[nodiscard]] constexpr bool valid_storage_limits(storage_limits const& l) {
-	bool const record_ok = l.max_record_size == 0
-		|| (l.max_record_size >= min_max_record_size && l.max_record_size <= max_max_record_size);
-	bool const chunk_ok = l.chunk_size == 0
-		|| (l.chunk_size >= min_chunk_size && l.chunk_size <= max_chunk_size);
+	bool const record_ok = l.max_record_size == 0 || max_record_size_range.contains(l.max_record_size);
+	bool const chunk_ok = l.chunk_size == 0 || chunk_size_range.contains(l.chunk_size);
 	return record_ok && chunk_ok;
 }
 

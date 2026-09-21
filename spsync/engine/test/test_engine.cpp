@@ -413,4 +413,41 @@ TEST_CASE("engine fork check not in weak mode", "[unit]") {
 	target.engine.set_output(nullptr);
 }
 
+// * a fetch answer that does not get past the record the fetch continued from is not
+// answered with the same request again (a server whose batch cannot pass a big record
+// would be asked at full speed for ever); the next event tries again
+TEST_CASE("engine does not repeat a fetch that made no progress", "[unit]") {
+	test::engine_context context;
+	context.add_default_commit_response();
+	context.create_initial_record();
+	context.io.process_events();
+	REQUIRE(context.storage.last_block().sequence == sequence_number{1});
+
+	auto const held = context.storage.find(sequence_number{1});
+	auto first = held->record();
+	first.set_sequence_and_parent_hash(held->block_id().sequence, held->parent_block_hash());
+
+	// the server is at 5 and answers every fetch with the record we continue from only
+	for(int i = 0; i != 4; ++i) {
+		context.io.next_sequence_number();
+	}
+	int answers = 0;
+	for(int i = 0; i != 5; ++i) {
+		context.io.add_fetch_records_response([&, first](sequence_number, sequence_number) {
+			++answers;
+			return std::deque<chain_block>{first};
+		});
+	}
+	context.engine.on_connected();
+	context.io.process_events();
+	CHECK(answers == 1);
+
+	// the next connect asks once more
+	context.engine.on_disconnected({});
+	context.engine.on_connected();
+	context.io.process_events();
+	CHECK(answers == 2);
+	CHECK(context.storage.last_block().sequence == sequence_number{1});
+}
+
 }

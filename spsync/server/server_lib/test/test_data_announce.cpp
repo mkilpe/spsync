@@ -207,7 +207,7 @@ TEST_CASE("separate data server", "[unit]") {
 	auto storage = records.open_storage(sid, storage_modes{sync_mode::allow_all, auth_mode::only_tag});
 	record_data_store store{database::sqlite::create_sqlite_connection("test-announce-client.db"), "test-announce-client"};
 	encryption_key const key{sequence_number{1}, securepath::test::random_octet_vector(crypto::aes_gcm_key_size())};
-	auto writer = store.create(key, min_chunk_size);
+	auto writer = store.create(key, chunk_size_range.lowest);
 	auto const plain = securepath::test::random_octet_vector(700000);
 	writer.write(plain);
 	auto const made = writer.finish();

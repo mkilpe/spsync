@@ -47,7 +47,7 @@ std::uint64_t constexpr max_data_chunks{200000};
 /**
  * The bounds every replica judges a descriptor by (RD10: a validity rule, so it is
  * deterministic and states nothing about the data itself, which the record servers never
- * see): a sha3-512 manifest digest, a chunk size within [min_chunk_size, max_chunk_size]
+ * see): a sha3-512 manifest digest, a chunk size within chunk_size_range (sync_mode.hpp)
  * - every data is self-describing, it need not be the storage's default - and a size
  * that makes at least one and at most max_data_chunks chunks.
  */
