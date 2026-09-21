@@ -41,7 +41,7 @@ struct spsync_server_commands : sync::spsync_server_params, command_parser {
 		add(ticket_validity, "ticket_validity", "", "seconds an issued data ticket is valid");
 		add(data_params.enabled, "data_role", "", "serve record data: run the data listener");
 		add(data_params.data_port, "data_port", "", "data server listening port");
-		add(data_params.record_servers, "record_servers", "", "key ids (hex) of the record servers whose data tickets are accepted; the own key always is");
+		add(data_params.record_servers, "record_servers", "", "record servers of the data role as host:s2s_port/keyid-hex: their data tickets are accepted and they are told what is held; the own key always is accepted");
 		add(data_params.quota.max_data_size, "max_data_size", "", "biggest single record data (encrypted bytes) this server takes, 0 = no limit");
 		add(data_params.quota.max_storage_bytes, "max_storage_data", "", "record data bytes one storage may take on this server, 0 = no limit");
 		add(upload_expiry, "upload_expiry", "", "seconds after which an untouched incomplete upload is dropped");

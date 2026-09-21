@@ -1,5 +1,6 @@
 #include "data_server.hpp"
 #include "data_connection.hpp"
+#include "record_server_link.hpp"
 
 #include <spsync/core/error.hpp>
 #include <spsync/protocol/error.hpp>
@@ -130,22 +131,130 @@ public:
 	/// the record servers whose tickets are accepted: the configured ones and this server itself
 	void resolve_issuers() {
 		std::set<crypto::public_key_id> issuers;
-		for(auto const& hex : params_.record_servers) {
-			try {
-				issuers.insert(crypto::public_key_id{hex});
-			} catch(std::exception const&) {
-				throw make_error(sync::errc::invalid_configuration, "invalid record server key id hex");
-			}
+		for(auto const& server : params_.record_servers) {
+			issuers.insert(server.key);
 		}
+		crypto::public_key_id own;
 		if(auto key = context_.private_data().my_private_key()) {
-			issuers.insert(key->id());
+			own = key->id();
+			issuers.insert(own);
 			// tickets an all-in-one server issues to itself verify with its own key
-			if(!context_.public_keys().find(key->id())) {
+			if(!context_.public_keys().find(own)) {
 				context_.public_keys().insert(key->public_key());
 			}
 		}
 		std::unique_lock lock{mutex_};
 		issuers_ = std::move(issuers);
+		own_id_ = own;
+	}
+
+	// -- links to the record servers (RD13) --
+
+	/// one configured record server: the link and its reconnect state
+	struct link_state {
+		link_state(asio::io_context& io, peer_config s) : server(std::move(s)), timer(io) {}
+
+		peer_config server;
+		std::shared_ptr<record_server_link> link;
+		asio::steady_timer timer;
+		std::chrono::seconds backoff{1};
+	};
+
+	void start_links() {
+		for(auto const& server : params_.record_servers) {
+			// the own entry of a shared cluster configuration: an all-in-one server hears
+			// of its completions directly
+			if(server.key != own_id_ && own_id_.is_valid() && !server.host.empty()) {
+				links_.push_back(std::make_shared<link_state>(context_.io_context(), server));
+				connect_link(links_.back());
+			}
+		}
+	}
+
+	void connect_link(std::shared_ptr<link_state> const& state) {
+		record_server_link::hooks hooks;
+		hooks.whole_view = [weak = weak_self()] {
+			auto self = weak.lock();
+			return self ? self->whole_view() : std::vector<protocol::announce_data>{};
+		};
+		hooks.trust = [weak = weak_self()](crypto::public_key const& key) {
+			auto self = weak.lock();
+			if(self && !self->context_.public_keys().find(key.id())) {
+				LOG_INFO("trusting the key of record server {}", key.id());
+				self->context_.public_keys().insert(key);
+			}
+		};
+		hooks.connected = [wstate = std::weak_ptr<link_state>(state), weak = weak_self()] {
+			auto self = weak.lock();
+			auto st = wstate.lock();
+			if(self && st) {
+				std::unique_lock lock{self->mutex_};
+				st->backoff = std::chrono::seconds{1};
+			}
+		};
+		hooks.disconnected = [wstate = std::weak_ptr<link_state>(state), weak = weak_self()] {
+			auto self = weak.lock();
+			auto st = wstate.lock();
+			if(self && st) {
+				self->schedule_reconnect(st);
+			}
+		};
+		auto link = std::make_shared<record_server_link>(context_, state->server, own_id_, std::move(hooks));
+		{
+			std::unique_lock lock{mutex_};
+			if(closing_) {
+				return;
+			}
+			state->link = link;
+		}
+		link->start(params_.timeout);
+	}
+
+	/// exponential backoff capped at one minute
+	void schedule_reconnect(std::shared_ptr<link_state> const& state) {
+		std::unique_lock lock{mutex_};
+		if(!closing_) {
+			state->timer.expires_after(state->backoff);
+			state->backoff = std::min(state->backoff * 2, std::chrono::seconds{60});
+			state->timer.async_wait([weak = weak_self(), wstate = std::weak_ptr<link_state>(state)](std::error_code const& ec) {
+				auto self = weak.lock();
+				auto st = wstate.lock();
+				if(self && st && !ec) {
+					self->connect_link(st);
+				}
+			});
+		}
+	}
+
+	/// closed outside the mutex: closing waits for the link's strand, whose handlers take it
+	void close_links() {
+		std::vector<std::shared_ptr<link_state>> links;
+		{
+			std::unique_lock lock{mutex_};
+			closing_ = true;
+			links.swap(links_);
+		}
+		for(auto const& state : links) {
+			state->timer.cancel();
+			if(state->link) {
+				state->link->close();
+			}
+		}
+	}
+
+	std::vector<std::shared_ptr<record_server_link>> live_links() const {
+		std::unique_lock lock{mutex_};
+		std::vector<std::shared_ptr<record_server_link>> ret;
+		for(auto const& state : links_) {
+			if(state->link) {
+				ret.push_back(state->link);
+			}
+		}
+		return ret;
+	}
+
+	std::vector<protocol::announce_data> whole_view() {
+		return owner_ ? owner_->announcements(own_id_) : std::vector<protocol::announce_data>{};
 	}
 
 	// -- data_server_context --
@@ -183,6 +292,14 @@ public:
 		}
 		if(handler) {
 			handler(sid, id);
+		}
+		// a separate data server tells its record servers
+		auto const links = live_links();
+		auto const announcement = (links.empty() || !owner_) ? std::nullopt : owner_->announcement(own_id_, sid, id);
+		if(announcement) {
+			for(auto const& link : links) {
+				link->announce(*announcement);
+			}
 		}
 	}
 
@@ -273,6 +390,10 @@ public:
 	network::handshake_data handshake_data_;
 	std::map<protocol::storage_id, std::shared_ptr<server_data_store>> stores_;
 	std::set<crypto::public_key_id> issuers_;
+	crypto::public_key_id own_id_;
+	/// the data_server this is the inside of: the announcements are built from its view
+	data_server* owner_{};
+	std::vector<std::shared_ptr<link_state>> links_;
 	complete_handler on_complete_;
 	std::optional<asio::steady_timer> timer_;
 	bool closing_{};
@@ -282,6 +403,7 @@ public:
 data_server::data_server(network::context& context, data_server_params params)
 : impl_(std::make_shared<impl>(context, std::move(params)))
 {
+	impl_->owner_ = this;
 }
 
 data_server::~data_server() {
@@ -295,10 +417,12 @@ void data_server::start() {
 	impl_->start(impl_->params_.create_endpoint(), impl_->params_.timeout);
 	impl_->running_ = true;
 	impl_->start_expiry();
+	impl_->start_links();
 	LOG_INFO("data server listening on port {}", impl_->local_endpoint().port());
 }
 
 void data_server::close() {
+	impl_->close_links();
 	impl_->stop_expiry();
 	if(impl_->running_) {
 		impl_->running_ = false;
@@ -342,6 +466,47 @@ std::vector<std::pair<protocol::storage_id, data_state_row>> data_server::comple
 	for(auto const& [sid, store] : impl_->open_stores()) {
 		for(auto& row : store->complete_data()) {
 			ret.emplace_back(sid, std::move(row));
+		}
+	}
+	return ret;
+}
+
+std::vector<protocol::announce_data> data_server::announcements(crypto::public_key_id const& holder) {
+	std::size_t const batch = 500;
+	auto const stored = stored_bytes();
+	auto const uploads = static_cast<std::uint32_t>(uploads_in_progress());
+	std::vector<protocol::announce_data> ret;
+	std::vector<protocol::data_holding_entry> entries;
+	for(auto const& [sid, row] : complete_holdings()) {
+		entries.push_back({sid, row.descriptor.manifest_digest, row.have.count(), row.have.size(), true});
+		if(entries.size() == batch) {
+			ret.emplace_back(holder, std::move(entries), stored, uploads);
+			entries.clear();
+		}
+	}
+	if(!entries.empty() || ret.empty()) {
+		ret.emplace_back(holder, std::move(entries), stored, uploads);
+	}
+	return ret;
+}
+
+std::optional<protocol::announce_data> data_server::announcement(crypto::public_key_id const& holder
+	, protocol::storage_id const& sid, data_id const& id) {
+	std::optional<protocol::announce_data> ret;
+	auto const row = find(sid, id);
+	if(row) {
+		ret.emplace(holder, std::vector<protocol::data_holding_entry>{{sid, id, row->have.count(), row->have.size()
+			, row->state == record_data_state::in_sync}}, stored_bytes(), static_cast<std::uint32_t>(uploads_in_progress()));
+	}
+	return ret;
+}
+
+std::vector<crypto::public_key_id> data_server::connected_record_servers() const {
+	std::vector<crypto::public_key_id> ret;
+	std::unique_lock lock{impl_->mutex_};
+	for(auto const& state : impl_->links_) {
+		if(state->link && state->link->ready()) {
+			ret.push_back(state->server.key);
 		}
 	}
 	return ret;

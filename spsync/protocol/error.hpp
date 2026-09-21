@@ -3,6 +3,10 @@
 #include <securepath/util/error.hpp>
 #include <securepath/network/net_error.hpp>
 
+#include <chrono>
+#include <cstdint>
+#include <optional>
+
 namespace securepath::sync::protocol {
 inline namespace v1 {
 
@@ -59,6 +63,15 @@ std::error_category const& error_category();
 
 /// convert net_error to error using the errc from this protocol
 error to_error(network::net_error const& err);
+
+/**
+ * An error that says when another try makes sense (a transfer quota window, RD10): the
+ * seconds travel in the error's message, so they survive every layer an error passes.
+ */
+error make_retry_error(errc, std::uint32_t retry_after_seconds);
+
+/// the seconds of make_retry_error; nullopt for any other error
+std::optional<std::chrono::seconds> retry_after(error const&);
 
 }
 

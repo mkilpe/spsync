@@ -4,6 +4,7 @@
 #include "data_uploader.hpp"
 #include "interface.hpp"
 #include "net_data_channel.hpp"
+#include "transfer_retry.hpp"
 #include <spsync/core/sync_mode.hpp>
 #include <spsync/protocol/server_protocol.hpp>
 
@@ -74,6 +75,8 @@ private:
 	std::optional<request_handle> end_transfer(transfers&, data_id const&);
 	void on_upload_done(data_id const&, std::optional<error>);
 	void on_download_done(data_id const&, std::optional<error>);
+	/// true when the ended transfer is tried again by itself: nothing is reported yet
+	bool retried(transfer_retry*, data_id const&, std::optional<error> const&);
 	void fail_ticket_requests(error const&);
 
 private:
@@ -96,6 +99,10 @@ private:
 	/// set when the storage has a data store; declared after the channel they use
 	std::unique_ptr<data_uploader> uploader_;
 	std::unique_ptr<data_downloader> downloader_;
+	/// tries ended transfers again without waiting for a reconnect (RDS 7); declared last,
+	/// so they go first
+	std::unique_ptr<transfer_retry> upload_retry_;
+	std::unique_ptr<transfer_retry> download_retry_;
 };
 
 }

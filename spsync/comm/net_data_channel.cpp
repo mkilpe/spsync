@@ -177,7 +177,10 @@ private:
 
 	void handle(protocol::download_data_piece_reply const& p) {
 		auto handler = take(fetches_, p.cid);
-		if(handler && p.error) {
+		if(handler && p.error && p.retry_after != 0) {
+			// a transfer quota window: the refusal says when the next one opens
+			handler(util::result<octet_vector>{protocol::make_retry_error(protocol::errc::data_transfer_quota_exceeded, p.retry_after)});
+		} else if(handler && p.error) {
 			handler(util::result<octet_vector>{protocol::to_error(p.error)});
 		} else if(handler) {
 			handler(util::result<octet_vector>{p.bytes});
@@ -294,8 +297,9 @@ public:
 				if(have && self) {
 					self->remember_upload(att->grant.ticket, link);
 					att->callback(util::result<have_bitmap>{have_bitmap{att->descriptor.chunk_count(), std::move(have.value())}});
-				} else if(transport_failure && self) {
-					// RD13: a holder that is down is the next entry
+				} else if((transport_failure || is_full(have.get_error())) && self) {
+					// RD13: a holder that is down is the next entry, and one at its quota
+					// behaves as if it was not on the ring for new data
 					++att->holder;
 					self->try_holder(att, have.get_error());
 				} else {
@@ -303,6 +307,12 @@ public:
 				}
 			});
 		}
+	}
+
+	/// the data server has no room for the data: another one may
+	static bool is_full(error const& err) {
+		return err.code() == make_error_code(protocol::errc::data_quota_exceeded)
+			|| err.code() == make_error_code(protocol::errc::data_too_big);
 	}
 
 	void send_piece(data_id const& id, std::uint64_t chunk_no, std::uint64_t offset, octet_vector bytes, piece_callback cb) {

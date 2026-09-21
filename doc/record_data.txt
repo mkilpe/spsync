@@ -792,15 +792,71 @@ Implementation steps
         hand without decrypting the record; it applies to data that is asked
         for).
 
-- RDS 7  End to end                                                            [1d]
++ RDS 7  End to end -- done 2026-09-21                                        [1d]
       System test: multi-hundred-MB object between two clients over the test
       server incl. kill/resume both directions; mobile-style lazy fetch of one
       object among many; the two deployment shapes of RD12 (record servers +
-      separate data server, all-in-one replicas) - the separate shape needs the
-      data server's announcement link to the record servers (left by RDS 5);
-      transfers need a retry that does not wait for a record server reconnect:
-      uploads whose data connection dropped (left by RDS 4) and fetches refused
-      by the transfer quota, after retry_after (left by RDS 6).
+      separate data server, all-in-one replicas); the announcement link of a
+      separate data server (left by RDS 5); transfer retries that do not wait
+      for a record server reconnect (left by RDS 4 and RDS 6).
+      + system test (client test_record_data_system, real clients, a real
+        all-in-one server, a file as the source): the author loses its
+        connection in the middle of the upload and comes back - the server kept
+        what had arrived and the upload goes on from there; the reader loses its
+        connection in the middle of the download - state download_pending, the
+        whole chunks kept, resumed on reconnect - and reads the content back
+        (sha3 compared in pieces). Then twenty objects of which the reader asks
+        for one: that one is in_sync, the others stay deferred with nothing
+        held. "record data system transfer" [system] runs with the suite with
+        48 MiB (about 10 s), "... of a big object" [.system] is the same with
+        300 MiB (about 30 s, run explicitly). Both interruptions are asserted
+        to have happened mid-transfer.
+      + a record connection that goes takes the data connections along: comm
+        closes its net_data_channel on disconnect (tickets come over the record
+        connection; a killed client drops both anyway).
+      + transfer retry (comm/transfer_retry): a transfer that ended with an
+        error another try may lift is tried again by comm after a wait, with
+        its handle kept - the owner hears once, when it ended for good. Wait =
+        what the error says, else the data's backoff (1 s doubling to 60 s,
+        forgotten when the data's transfer ends for good); cancelled on
+        disconnect (the engine asks again after the reconnect).
+        retryable_transfer_error: everything except what another try would
+        repeat (refused ticket, manifest or chunk that does not verify, unknown
+        data, no data servers, not supported) and data_not_held, which is the
+        owner's news and ends with notify_data. The transfer quota's retry_after
+        reaches the retry: protocol::make_retry_error / retry_after carry the
+        seconds in the error.
+      + uploads fail over on a full data server as well: data_quota_exceeded and
+        data_too_big move to the next holder of the grant (RD13: a data server
+        at its quota behaves as if it was not on the ring for new data).
+      + separate data server (RD12 shape two): --record_servers is now
+        host:s2s_port/keyid - the data server trusts their tickets AND keeps a
+        link to each (server_lib/record_server_link): dials the record server's
+        s2s listener with backoff reconnect, says peer_hello, hands the record
+        server's handshake-verified key to its key store (how a separate data
+        server learns the keys its tickets are signed with) and announces -
+        the whole view when the link comes up, each completion as it happens.
+        An entry without a host is trusted for tickets only. The record server
+        runs its s2s listener also when a data server other than itself is
+        configured, accepts a configured data server's key there
+        (storage_server_context::is_data_server) and marks the connection: a
+        data server link gets no heads, pushes or announcements and everything
+        but announce_data from it is ignored. The announcement builders moved to
+        data_server (announcements / announcement) and serve both shapes.
+      + tests: comm test_transfer_retry (retry_after parsing, retryable errors,
+        backoff doubling and cap, hint, forget, cancel, owner gone while
+        waiting), client "comm retries transfers" (upload retried after a lost
+        data connection and reported once, refusal reported at once, download
+        after the quota's retry_after, a wait running at detach), server_lib
+        "separate data server" (link up after the record server starts, key
+        learned, upload with the record server's ticket, announcement and load
+        in its table, download by another client, restarted record server gets
+        the whole view) next to the all-in-one "data availability is announced
+        to the peers" of RDS 5.
+      Not done: a kill of the SERVER in the middle of a transfer as a system
+      test (covered piecewise: the store keeps whole chunks and expires the
+      rest, links and clients reconnect with backoff); real processes instead of
+      in-process servers (scripts/multi_server_env.sh knows no data role yet).
 
 + RDS 8  Chain validity limits -- done 2026-09-07                          [0.5d]
       max_record_size and chunk_size as per-storage creation parameters (RD10

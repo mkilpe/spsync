@@ -31,12 +31,17 @@ comm::comm(network_connection_impl* nc_impl, storage_id sid, record_storage& s, 
 			, [this](data_id const& id, std::uint64_t transferred, std::uint64_t total) {
 				progress_.emit<progress_events::on_data_progress>(id, transferred, total, false);
 			});
+		auto& io = nc_impl_->context().io_context();
+		upload_retry_ = std::make_unique<transfer_retry>(io, transfer_retry_config{}, [this](data_id const& id) { uploader_->enqueue(id); });
+		download_retry_ = std::make_unique<transfer_retry>(io, transfer_retry_config{}, [this](data_id const& id) { downloader_->enqueue(id); });
 	}
 }
 
 comm::~comm()
 {
-	// the transfers first, then the channel whose ticket source is this object
+	// the retries first, then the transfers, then the channel whose ticket source is this object
+	upload_retry_.reset();
+	download_retry_.reset();
 	uploader_.reset();
 	downloader_.reset();
 	own_channel_.reset();
@@ -57,8 +62,15 @@ void comm::on_disconnected(error const& err) {
 	if(uploader_) {
 		// what the server got stays there, what arrived here too; the engine asks again
 		// after the reconnect
+		upload_retry_->cancel();
+		download_retry_->cancel();
 		uploader_->reset();
 		downloader_->reset();
+	}
+	if(own_channel_) {
+		// tickets come over the record connection: without it the data connections have
+		// nothing to do, and a client that went away takes them along anyway
+		own_channel_->close();
 	}
 	{
 		std::unique_lock lock{upload_mutex_};
@@ -236,15 +248,34 @@ request_handle comm::upload_data(data_id const& id) {
 	return handle;
 }
 
+/**
+ * A transfer that ended with an error another try may lift is tried again after a wait
+ * (a lost data connection, a transfer quota window...): its handle stays and the owner
+ * hears of it when it ends for good. Whatever wait was running for the data is over.
+ */
+bool comm::retried(transfer_retry* retry, data_id const& id, std::optional<error> const& err) {
+	bool const again = retry && err && retryable_transfer_error(*err);
+	if(again) {
+		retry->schedule(id, protocol::retry_after(*err));
+	} else if(retry) {
+		retry->forget(id);
+	}
+	return again;
+}
+
 void comm::on_upload_done(data_id const& id, std::optional<error> err) {
-	if(auto const handle = end_transfer(uploads_, id)) {
-		output_->emit<comm_events::on_data_uploaded>(*handle, std::move(err));
+	if(!retried(upload_retry_.get(), id, err)) {
+		if(auto const handle = end_transfer(uploads_, id)) {
+			output_->emit<comm_events::on_data_uploaded>(*handle, std::move(err));
+		}
 	}
 }
 
 void comm::on_download_done(data_id const& id, std::optional<error> err) {
-	if(auto const handle = end_transfer(downloads_, id)) {
-		output_->emit<comm_events::on_data_downloaded>(*handle, std::move(err));
+	if(!retried(download_retry_.get(), id, err)) {
+		if(auto const handle = end_transfer(downloads_, id)) {
+			output_->emit<comm_events::on_data_downloaded>(*handle, std::move(err));
+		}
 	}
 }
 

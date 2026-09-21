@@ -87,6 +87,13 @@ public:
 	/// a peer announced what its data role holds
 	virtual void data_announced(protocol::announce_data const&) = 0;
 
+	/**
+	 * True for the key of a configured data-role server that is no replication peer (the
+	 * separate data server of RD12): it may connect to the s2s listener to announce what
+	 * it holds, and nothing else.
+	 */
+	virtual bool is_data_server(crypto::public_key_id const&) const = 0;
+
 	/// what this server's own data role holds, as announcements for a peer whose link
 	/// just came up; empty without a data role
 	virtual std::vector<protocol::announce_data> own_data_announcements() = 0;

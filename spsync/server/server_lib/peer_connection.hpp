@@ -24,7 +24,8 @@ namespace securepath::sync {
  * accepted by the s2s listener. Both sides authenticate the remote ML-DSA key id
  * against the peer configuration (3.3), exchange peer_hello and then announce the
  * heads of their replicated storages. pull_records is served from the chain log;
- * push_records is applied with plan 4.2.
+ * push_records is applied with plan 4.2. A configured data server that is no peer is
+ * accepted as well (record_data.txt RD12/RD13): its link carries data announcements only.
  */
 class peer_connection : public network::encrypted_connection {
 public:
@@ -82,6 +83,7 @@ private:
 	void send_our_heads();
 	void send_packet(auto const& packet);
 	bool check_ready(char const* what);
+	bool check_peer(char const* what);
 	void start_pulls(protocol::peer_heads const&);
 	void request_pull(protocol::storage_id const&, crypto::public_key_id const&,
 		sequence_number from, sequence_number to);
@@ -98,6 +100,9 @@ private:
 	std::optional<peer_config> expected_;
 	/// the verified remote server id, set after peer_hello
 	std::optional<crypto::public_key_id> peer_id_;
+	/// the remote is a separate data server (RD12), not a replication peer: it announces
+	/// what it holds and takes no part in the record exchange
+	bool data_server_link_{};
 	std::map<protocol::storage_id, std::vector<origin_head>> peer_heads_;
 	std::function<void(securepath::error const&)> on_disconnect_;
 	std::function<void()> on_connected_;

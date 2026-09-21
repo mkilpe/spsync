@@ -3,6 +3,10 @@
 
 #include <securepath/log/log.hpp>
 
+#include <charconv>
+#include <string>
+#include <string_view>
+
 namespace securepath::sync::protocol {
 
 namespace {
@@ -50,6 +54,29 @@ std::error_code make_error_code(errc e) {
 
 std::error_category const& error_category() {
 	return err_cat();
+}
+
+namespace {
+	std::string_view const retry_prefix{"retry after "};
+}
+
+error make_retry_error(errc e, std::uint32_t retry_after_seconds) {
+	return make_error(e, std::string{retry_prefix} + std::to_string(retry_after_seconds));
+}
+
+std::optional<std::chrono::seconds> retry_after(error const& err) {
+	std::optional<std::chrono::seconds> ret;
+	auto const msg = err.message();
+	if(err.code().category() == error_category() && msg.starts_with(retry_prefix)) {
+		std::uint32_t seconds = 0;
+		auto const* first = msg.data() + retry_prefix.size();
+		auto const* last = msg.data() + msg.size();
+		auto const parsed = std::from_chars(first, last, seconds);
+		if(parsed.ec == std::errc{} && parsed.ptr == last) {
+			ret = std::chrono::seconds{seconds};
+		}
+	}
+	return ret;
 }
 
 error to_error(network::net_error const& err) {

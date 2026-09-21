@@ -42,7 +42,8 @@ struct data_server_fixture {
 		params.enabled = true;
 		params.data_endpoint = asio::ip::tcp::endpoint(asio::ip::address_v4::loopback(), 0);
 		params.storage_root = server_root;
-		params.record_servers = {record_server.id().in_hex()};
+		// trusted for its tickets; there is no record server to keep a link to here
+		params.record_servers = {peer_config{"", 0, record_server.id()}};
 		params.transfer = transfer;
 		server = std::make_unique<data_server>(net.server_context(), params);
 		server->set_complete_handler([this](protocol::storage_id const&, data_id const& id) {

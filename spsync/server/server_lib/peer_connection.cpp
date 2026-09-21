@@ -64,7 +64,8 @@ void peer_connection::push(protocol::push_records const& p) {
 	bool ready{};
 	{
 		std::unique_lock lock{mutex_};
-		ready = peer_id_.has_value();
+		// a data server link takes no part in the record exchange
+		ready = peer_id_.has_value() && !data_server_link_;
 	}
 	if(ready) {
 		send_packet(p);
@@ -75,7 +76,7 @@ void peer_connection::announce_heads() {
 	bool ready{};
 	{
 		std::unique_lock lock{mutex_};
-		ready = peer_id_.has_value();
+		ready = peer_id_.has_value() && !data_server_link_;
 	}
 	if(ready) {
 		send_our_heads();
@@ -86,7 +87,8 @@ void peer_connection::announce(protocol::announce_data const& p) {
 	bool ready{};
 	{
 		std::unique_lock lock{mutex_};
-		ready = peer_id_.has_value();
+		// record servers tell each other; a data server has no use for it
+		ready = peer_id_.has_value() && !data_server_link_;
 	}
 	if(ready) {
 		send_packet(p);
@@ -115,8 +117,12 @@ bool peer_connection::authenticate_transport() {
 	}
 	auto const& peers = sctx_.identity().peers;
 	if(std::ranges::find(peers, *key, &peer_config::key) == peers.end()) {
-		LOG_WARN("connection from an unknown peer [key={}]", *key);
-		return false;
+		// a separate data server announcing what it holds (RD12/RD13)
+		data_server_link_ = sctx_.is_data_server(*key);
+		if(!data_server_link_) {
+			LOG_WARN("connection from an unknown peer [key={}]", *key);
+		}
+		return data_server_link_;
 	}
 	return true;
 }
@@ -180,6 +186,17 @@ bool peer_connection::check_ready(char const* what) {
 	return peer_id_.has_value();
 }
 
+/// the record exchange is between replication peers: a data server link takes no part in it
+bool peer_connection::check_peer(char const* what) {
+	bool ok = check_ready(what);
+	std::unique_lock lock{mutex_};
+	if(ok && data_server_link_) {
+		LOG_WARN("{} on a data server link, ignored", what);
+		ok = false;
+	}
+	return ok;
+}
+
 void peer_connection::operator()(protocol::peer_hello const& p) {
 	// the claimed identity must be the authenticated transport key
 	if(p.server_id != remote_key_id().value_or(crypto::public_key_id{})) {
@@ -203,10 +220,17 @@ void peer_connection::operator()(protocol::peer_hello const& p) {
 		if(auto key = remote_public_key()) {
 			sctx_.trust_peer_key(*key);
 		}
-		send_our_heads();
-		// RD13: the availability tables are transient, a link that comes up gets the whole view
-		for(auto const& announcement : sctx_.own_data_announcements()) {
-			send_packet(announcement);
+		bool data_server_link{};
+		{
+			std::unique_lock lock{mutex_};
+			data_server_link = data_server_link_;
+		}
+		if(!data_server_link) {
+			send_our_heads();
+			// RD13: the availability tables are transient, a link that comes up gets the whole view
+			for(auto const& announcement : sctx_.own_data_announcements()) {
+				send_packet(announcement);
+			}
 		}
 	}
 }
@@ -223,7 +247,7 @@ void peer_connection::operator()(protocol::announce_data const& p) {
 }
 
 void peer_connection::operator()(protocol::peer_heads const& p) {
-	if(check_ready("peer heads")) {
+	if(check_peer("peer heads")) {
 		LOG_TRACE("peer heads [sid={}, heads={}]", to_hex(p.sid), p.heads.size());
 		{
 			std::unique_lock lock{mutex_};
@@ -311,7 +335,7 @@ void peer_connection::request_signer_key(crypto::public_key_id const& id) {
 }
 
 void peer_connection::operator()(protocol::request_key const& p) {
-	if(check_ready("request_key")) {
+	if(check_peer("request_key")) {
 		auto key = sctx_.find_key(p.key);
 		LOG_TRACE("request_key [key={}, held={}]", p.key, key.has_value());
 		send_packet(protocol::response_key{p.cid, std::move(key)});
@@ -320,7 +344,7 @@ void peer_connection::operator()(protocol::request_key const& p) {
 
 void peer_connection::operator()(protocol::response_key const& p) {
 	LOG_TRACE("response_key [held={}]", p.key.has_value());
-	if(check_ready("response_key")) {
+	if(check_peer("response_key")) {
 		// the request is done either way; a negative answer leaves the signer askable again
 		std::optional<crypto::public_key_id> asked;
 		{
@@ -360,7 +384,7 @@ void peer_connection::request_pull(protocol::storage_id const& sid, crypto::publ
 }
 
 void peer_connection::operator()(protocol::pull_records const& p) {
-	if(check_ready("pull_records")) {
+	if(check_peer("pull_records")) {
 		auto handle = sctx_.acquire_replica(p.sid, {});
 		if(!handle) {
 			send_packet(protocol::not_replicating{0, p.sid});
@@ -376,7 +400,7 @@ void peer_connection::operator()(protocol::pull_records const& p) {
 }
 
 void peer_connection::operator()(protocol::response_envelopes const& p) {
-	if(check_ready("response_envelopes")) {
+	if(check_peer("response_envelopes")) {
 		{
 			std::unique_lock lock{mutex_};
 			pulling_.erase({p.sid, p.origin.data()});
@@ -400,7 +424,7 @@ void peer_connection::operator()(protocol::response_envelopes const& p) {
 }
 
 void peer_connection::operator()(protocol::push_records const& p) {
-	if(check_ready("push_records")) {
+	if(check_peer("push_records")) {
 		auto handle = sctx_.acquire_replica(p.sid, protocol::peer_modes(p.modes));
 		if(!handle || handle->modes().replication == replication_mode::none) {
 			send_packet(protocol::not_replicating{0, p.sid});

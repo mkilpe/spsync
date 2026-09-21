@@ -17,6 +17,7 @@
 #include <securepath/serialisation/util.hpp>
 #include <securepath/util/conversions.hpp>
 
+#include <algorithm>
 #include <filesystem>
 
 namespace securepath::sync {
@@ -415,42 +416,32 @@ public:
 		}
 	}
 
-	/// an announcement of the own data role with its current load
-	protocol::announce_data make_announcement(std::vector<protocol::data_holding_entry> entries) const {
-		return protocol::announce_data{identity_.server_id, std::move(entries), data_role_->stored_bytes()
-			, static_cast<std::uint32_t>(data_role_->uploads_in_progress())};
+	bool is_data_server(crypto::public_key_id const& key) const override {
+		auto const& servers = issuer_.data_servers();
+		return key != identity_.server_id && std::ranges::find(servers, key, &data_endpoint::key) != servers.end();
+	}
+
+	/// a data server other than this server is configured: it will dial the s2s listener
+	bool has_separate_data_servers() const {
+		return std::ranges::any_of(issuer_.data_servers(), [this](data_endpoint const& e) { return e.key != identity_.server_id; });
 	}
 
 	std::vector<protocol::announce_data> own_data_announcements() override {
 		std::vector<protocol::announce_data> ret;
 		if(data_role_ && identity_.server_id.is_valid()) {
-			// in batches: a packet stays well under a transport frame
-			std::size_t const batch = 500;
-			std::vector<protocol::data_holding_entry> entries;
-			for(auto const& [sid, row] : data_role_->complete_holdings()) {
-				entries.push_back({sid, row.descriptor.manifest_digest, row.have.count(), row.have.size(), true});
-				if(entries.size() == batch) {
-					ret.push_back(make_announcement(std::move(entries)));
-					entries.clear();
-				}
-			}
-			if(!entries.empty() || ret.empty()) {
-				// an empty one still carries the load
-				ret.push_back(make_announcement(std::move(entries)));
-			}
+			ret = data_role_->announcements(identity_.server_id);
 		}
 		return ret;
 	}
 
 	/// the own data role completed a data: into the table here, and to the peers (RD13)
 	void on_data_complete(protocol::storage_id const& sid, data_id const& id) {
-		auto const row = data_role_->find(sid, id);
-		if(row && identity_.server_id.is_valid()) {
-			auto const announcement = make_announcement({{sid, id, row->have.count(), row->have.size()
-				, row->state == record_data_state::in_sync}});
-			data_announced(announcement);
+		auto const announcement = identity_.server_id.is_valid()
+			? data_role_->announcement(identity_.server_id, sid, id) : std::nullopt;
+		if(announcement) {
+			data_announced(*announcement);
 			for(auto const& conn : peer_connections()) {
-				conn->announce(announcement);
+				conn->announce(*announcement);
 			}
 		}
 	}
@@ -473,7 +464,8 @@ public:
 
 	/// start the s2s side when peers are configured (plan 4.1)
 	void start_s2s() {
-		if(identity_.peers.empty()) {
+		// peers exchange records over it, separate data servers announce what they hold
+		if(identity_.peers.empty() && !(identity_.server_id.is_valid() && has_separate_data_servers())) {
 			return;
 		}
 		s2s_ = std::make_shared<s2s_listener>(context_, *this, handshake_data_);

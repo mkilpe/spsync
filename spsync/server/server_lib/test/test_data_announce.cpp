@@ -3,8 +3,12 @@
 
 #include <spsync/server/server_lib/data_server.hpp>
 #include <spsync/server/server_lib/storage_server.hpp>
+#include <spsync/comm/data_downloader.hpp>
 #include <spsync/comm/data_uploader.hpp>
 #include <spsync/comm/net_data_channel.hpp>
+#include <spsync/server/server_lib/storage.hpp>
+#include <spsync/server/server_lib/ticket_issuer.hpp>
+#include <spsync/test/test_block_creator.hpp>
 #include <spsync/test/test_context.hpp>
 
 #include <securepath/crypto/aes_gcm.hpp>
@@ -148,6 +152,135 @@ TEST_CASE("data availability is announced to the peers", "[unit]") {
 	CHECK(restarted.records.availability().holdings(sid, early.manifest_digest).size() == 1);
 	CHECK(restarted.records.availability().holdings(sid, late.manifest_digest).size() == 1);
 	restarted.close();
+}
+
+// RD12, the other deployment shape: a record server without a data role and a data server
+// without a chain. The data server dials the record server's s2s listener - accepted for
+// announcements only - learns the key its tickets are signed with from that link, and
+// tells what it holds; the record server issues the tickets and orders the holders
+TEST_CASE("separate data server", "[unit]") {
+	std::filesystem::remove_all("test-separate-records");
+	std::filesystem::remove_all("test-separate-data");
+	std::filesystem::remove_all("test-announce-client");
+	std::remove("test-announce-client.db");
+
+	test::test_context tctx;
+	tctx.add_client(4);
+	tctx.share_client_keys();
+	auto& record_context = tctx.client_context(0);
+	auto& data_context = tctx.client_context(1);
+	network::enable_pk_handshake(record_context);
+	network::enable_pk_handshake(data_context);
+	auto const record_key = tctx.key_id(0);
+	auto const data_key = tctx.key_id(1);
+
+	// the data server does not know the record server's key before the link told it
+	data_context.public_keys().remove(record_key);
+	REQUIRE(!data_context.public_keys().find(record_key));
+
+	data_server_params dparams;
+	dparams.enabled = true;
+	dparams.storage_root = "test-separate-data";
+	dparams.data_endpoint = asio::ip::tcp::endpoint(asio::ip::address_v4::loopback(), 42792);
+	dparams.record_servers = {peer_config{"127.0.0.1", 42791, record_key}};
+	data_server data{data_context, dparams};
+
+	storage_server_params rparams;
+	rparams.storage_root = "test-separate-records";
+	rparams.storage_server_endpoint = asio::ip::tcp::endpoint(asio::ip::address_v4::loopback(), 42790);
+	rparams.s2s_endpoint = asio::ip::tcp::endpoint(asio::ip::address_v4::loopback(), 42791);
+	data_endpoint const endpoint{"127.0.0.1", 42792, data_key, {}, {}};
+	rparams.data_servers = {endpoint};
+	storage_server records{record_context, rparams};
+
+	// the data server first: its link finds nobody, and comes back
+	data.start();
+	records.start();
+	REQUIRE(records.s2s_local_endpoint().has_value());
+	WAIT_REQUIRE(data.connected_record_servers() == std::vector<crypto::public_key_id>{record_key}, 15s);
+	CHECK(data_context.public_keys().find(record_key));
+	// no replication peer: the record server talks records to nobody
+	CHECK(records.connected_peers().size() <= 1);
+
+	// a storage with a committed data change, as a client's commit leaves it
+	auto const sid = securepath::test::random_octet_vector(16);
+	auto storage = records.open_storage(sid, storage_modes{sync_mode::allow_all, auth_mode::only_tag});
+	record_data_store store{database::sqlite::create_sqlite_connection("test-announce-client.db"), "test-announce-client"};
+	encryption_key const key{sequence_number{1}, securepath::test::random_octet_vector(crypto::aes_gcm_key_size())};
+	auto writer = store.create(key, min_chunk_size);
+	auto const plain = securepath::test::random_octet_vector(700000);
+	writer.write(plain);
+	auto const made = writer.finish();
+	test::test_block_creator creator;
+	REQUIRE(storage->commit_block(creator.test_user_change()).block);
+	REQUIRE(storage->commit_block(creator.test_data_change_with_data(made.descriptor)).block);
+
+	// the record server's part of a transfer, as its connection handler does it
+	auto const tickets = [&](std::size_t client) {
+		return ticket_source{[&, client](data_descriptor const& d, data_right right, std::move_only_function<void(util::result<data_grant>)> cb) {
+			ticket_issuer issuer{{endpoint}, records.availability(), 600s};
+			auto issued = issuer.issue(sid, storage->committed_data(d.manifest_digest), tctx.key_id(client)
+				, static_cast<std::uint32_t>(right), record_context.private_data().my_private_key(), clock_type::now());
+			if(issued) {
+				cb(util::result<data_grant>{data_grant{std::move(issued->ticket), std::move(issued->holders)}});
+			} else {
+				cb(util::result<data_grant>{issued.get_error()});
+			}
+		}};
+	};
+
+	// client 2 uploads with a ticket of the record server, to the data server
+	{
+		net_data_channel channel{tctx.client_context(2), tickets(2)};
+		std::atomic<int> done{0};
+		std::atomic<bool> failed{false};
+		data_uploader uploader{store, channel, data_upload_config{}, [&](data_id const&, std::optional<error> err) {
+			failed = err.has_value();
+			++done;
+		}};
+		REQUIRE(uploader.enqueue(made.descriptor.manifest_digest));
+		WAIT_REQUIRE(done == 1, 30s);
+		REQUIRE(!failed);
+	}
+
+	// the data server told the record server
+	WAIT_CHECK(records.availability().holdings(sid, made.descriptor.manifest_digest).size() == 1, 10s);
+	auto const holdings = records.availability().holdings(sid, made.descriptor.manifest_digest);
+	REQUIRE(holdings.size() == 1);
+	CHECK(holdings[0] == data_holding{data_key, made.descriptor.chunk_count(), made.descriptor.chunk_count(), true});
+	CHECK(records.availability().load(data_key).stored_bytes == made.descriptor.enc_size);
+
+	// client 3 downloads
+	std::filesystem::remove_all("test-separate-reader");
+	std::remove("test-separate-reader.db");
+	record_data_store reader{database::sqlite::create_sqlite_connection("test-separate-reader.db"), "test-separate-reader"};
+	auto handle = reader.open({key}, made.descriptor, made.header);
+	REQUIRE(handle);
+	{
+		net_data_channel channel{tctx.client_context(3), tickets(3)};
+		std::atomic<int> done{0};
+		std::atomic<bool> failed{false};
+		data_downloader downloader{reader, channel, data_download_config{}, [&](data_id const&, std::optional<error> err) {
+			failed = err.has_value();
+			++done;
+		}};
+		REQUIRE(downloader.enqueue(made.descriptor.manifest_digest));
+		WAIT_REQUIRE(done == 1, 30s);
+		CHECK(!failed);
+	}
+	octet_vector read_back(plain.size());
+	CHECK(handle->read(0, read_back.data(), read_back.size()) == plain.size());
+	CHECK(read_back == plain);
+
+	// a restarted record server gets the whole view again when the link comes back
+	records.close();
+	storage.reset();
+	storage_server restarted{record_context, rparams};
+	restarted.start();
+	WAIT_CHECK(restarted.availability().holdings(sid, made.descriptor.manifest_digest).size() == 1, 30s);
+
+	restarted.close();
+	data.close();
 }
 
 }

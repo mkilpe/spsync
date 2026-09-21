@@ -1,9 +1,11 @@
 #pragma once
 
 #include "data_store.hpp"
+#include "peer_config.hpp"
 
 #include <spsync/protocol/ports.hpp>
 #include <spsync/protocol/protocol_base.hpp>
+#include <spsync/protocol/s2s_protocol.hpp>
 
 #include <securepath/network/encryption/context.hpp>
 
@@ -44,11 +46,15 @@ struct data_server_params {
 	transfer_quota transfer;
 
 	/**
-	 * Public key ids (hex) of the record servers whose tickets this server accepts
-	 * (RD12). The server's own key always is one: an all-in-one server issues tickets to
-	 * itself. The keys themselves must be known to the server (its public key access).
+	 * The record servers of this data server (RD12) as host:port/keyid-hex of their s2s
+	 * listener: their tickets are accepted, and a link is kept to each to announce what
+	 * is held here (RD13) - the link is also how their keys are learned. The server's
+	 * own key is always accepted: an all-in-one server issues tickets to itself and
+	 * hears of completions directly (storage_server::attach_data_role), its own entry
+	 * in a shared cluster configuration is dropped. An entry without a host is trusted
+	 * for tickets only, no link is kept to it.
 	 */
-	std::vector<std::string> record_servers;
+	std::vector<peer_config> record_servers;
 
 	/// an upload nothing touched for this long is dropped and its reservation freed
 	std::chrono::seconds incomplete_upload_expiry{24h};
@@ -95,6 +101,19 @@ public:
 	/// load signals (RD13): octets reserved by the known data, uploads in progress
 	std::uint64_t stored_bytes();
 	std::uint64_t uploads_in_progress();
+
+	/**
+	 * Everything held completely as availability announcements of the given holder, in
+	 * batches that stay well under a transport frame; an empty one still carries the
+	 * load. For a link that just came up (RD13).
+	 */
+	std::vector<protocol::announce_data> announcements(crypto::public_key_id const& holder);
+
+	/// one data as an announcement with the current load; nullopt when it is not known here
+	std::optional<protocol::announce_data> announcement(crypto::public_key_id const& holder, protocol::storage_id const&, data_id const&);
+
+	/// the record servers a link is up to (tests and tooling)
+	std::vector<crypto::public_key_id> connected_record_servers() const;
 
 private:
 	class impl;
