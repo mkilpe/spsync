@@ -7,7 +7,7 @@
 namespace securepath::sync {
 
 comm::comm(network_connection_impl* nc_impl, storage_id sid, record_storage& s, sync::progress& p, std::optional<storage_modes> expected_modes
-	, record_data_store* data, data_channel* channel)
+	, record_data_store* data, data_channel* channel, data_download_channel* download_channel)
 : nc_impl_(nc_impl)
 , sid_(std::move(sid))
 , expected_modes_(expected_modes)
@@ -15,9 +15,10 @@ comm::comm(network_connection_impl* nc_impl, storage_id sid, record_storage& s, 
 , progress_(p)
 , data_(data)
 {
-	if(data && !channel) {
+	if(data && (!channel || !download_channel)) {
 		own_channel_ = std::make_unique<net_data_channel>(nc_impl_->context(), tickets());
-		channel = own_channel_.get();
+		channel = channel ? channel : own_channel_.get();
+		download_channel = download_channel ? download_channel : own_channel_.get();
 	}
 	if(data) {
 		uploader_ = std::make_unique<data_uploader>(*data, *channel, data_upload_config{}
@@ -25,13 +26,19 @@ comm::comm(network_connection_impl* nc_impl, storage_id sid, record_storage& s, 
 			, [this](data_id const& id, std::uint64_t transferred, std::uint64_t total) {
 				progress_.emit<progress_events::on_data_progress>(id, transferred, total, true);
 			});
+		downloader_ = std::make_unique<data_downloader>(*data, *download_channel, data_download_config{}
+			, [this](data_id const& id, std::optional<error> err) { on_download_done(id, std::move(err)); }
+			, [this](data_id const& id, std::uint64_t transferred, std::uint64_t total) {
+				progress_.emit<progress_events::on_data_progress>(id, transferred, total, false);
+			});
 	}
 }
 
 comm::~comm()
 {
-	// the uploader first, then the channel whose ticket source is this object
+	// the transfers first, then the channel whose ticket source is this object
 	uploader_.reset();
+	downloader_.reset();
 	own_channel_.reset();
 	fail_ticket_requests(make_error(securepath::errc::invalid_state, "storage connection closed"));
 }
@@ -48,12 +55,15 @@ void comm::on_connected() {
 void comm::on_disconnected(error const& err) {
 	assert(output_);
 	if(uploader_) {
-		// what the server got stays there; the engine asks again after the reconnect
+		// what the server got stays there, what arrived here too; the engine asks again
+		// after the reconnect
 		uploader_->reset();
+		downloader_->reset();
 	}
 	{
 		std::unique_lock lock{upload_mutex_};
 		uploads_.clear();
+		downloads_.clear();
 	}
 	fail_ticket_requests(err ? err : make_error(securepath::errc::invalid_state, "disconnected from the record server"));
 	std::optional<error> opt_err;
@@ -158,6 +168,11 @@ void comm::fail_ticket_requests(error const& err) {
 	}
 }
 
+void comm::handle(protocol::notify_data const& p) {
+	assert(output_);
+	output_->emit<comm_events::on_data_available>(p.data_id, p.complete);
+}
+
 void comm::handle(protocol::notify_record const& p) {
 	assert(output_);
 	output_->emit<comm_events::on_record_received>(p.record, p.envelope);
@@ -171,50 +186,65 @@ request_handle comm::fetch_records(sequence_number start, sequence_number end) {
 	return nc_impl_->fetch_records(sid_, start, end);
 }
 
-request_handle comm::fetch_data(sequence_number record) {
-	assert(0);
-	return request_handle{};
+request_handle comm::fetch_data(data_id const& id) {
+	assert(output_);
+	bool is_new = false;
+	auto const handle = start_transfer(downloads_, id, is_new);
+	if(is_new && downloader_) {
+		downloader_->enqueue(id);
+	} else if(is_new) {
+		on_download_done(id, make_error(securepath::errc::not_supported, "the storage keeps no record data"));
+	}
+	return handle;
 }
 
 request_handle comm::commit_record(record_handle h) {
 	return nc_impl_->commit_record(sid_, h->record());
 }
 
+/// the handle of the data's transfer: the running one, or a new one (is_new)
+request_handle comm::start_transfer(transfers& running, data_id const& id, bool& is_new) {
+	std::unique_lock lock{upload_mutex_};
+	auto it = running.find(id);
+	is_new = it == running.end();
+	if(is_new) {
+		it = running.emplace(id, ++nc_impl_->call_id).first;
+	}
+	return it->second;
+}
+
+std::optional<request_handle> comm::end_transfer(transfers& running, data_id const& id) {
+	std::optional<request_handle> handle;
+	std::unique_lock lock{upload_mutex_};
+	auto it = running.find(id);
+	if(it != running.end()) {
+		handle = it->second;
+		running.erase(it);
+	}
+	return handle;
+}
+
 request_handle comm::upload_data(data_id const& id) {
 	assert(output_);
-	request_handle handle{};
 	bool is_new = false;
-	{
-		std::unique_lock lock{upload_mutex_};
-		auto it = uploads_.find(id);
-		is_new = it == uploads_.end();
-		if(is_new) {
-			it = uploads_.emplace(id, ++nc_impl_->call_id).first;
-		}
-		handle = it->second;
-	}
-	if(is_new) {
-		if(uploader_) {
-			uploader_->enqueue(id);
-		} else {
-			on_upload_done(id, make_error(securepath::errc::not_supported, "the storage has no data channel"));
-		}
+	auto const handle = start_transfer(uploads_, id, is_new);
+	if(is_new && uploader_) {
+		uploader_->enqueue(id);
+	} else if(is_new) {
+		on_upload_done(id, make_error(securepath::errc::not_supported, "the storage keeps no record data"));
 	}
 	return handle;
 }
 
 void comm::on_upload_done(data_id const& id, std::optional<error> err) {
-	std::optional<request_handle> handle;
-	{
-		std::unique_lock lock{upload_mutex_};
-		auto it = uploads_.find(id);
-		if(it != uploads_.end()) {
-			handle = it->second;
-			uploads_.erase(it);
-		}
-	}
-	if(handle) {
+	if(auto const handle = end_transfer(uploads_, id)) {
 		output_->emit<comm_events::on_data_uploaded>(*handle, std::move(err));
+	}
+}
+
+void comm::on_download_done(data_id const& id, std::optional<error> err) {
+	if(auto const handle = end_transfer(downloads_, id)) {
+		output_->emit<comm_events::on_data_downloaded>(*handle, std::move(err));
 	}
 }
 

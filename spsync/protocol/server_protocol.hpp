@@ -177,6 +177,28 @@ struct notify_record {
 	}
 };
 
+/**
+ * To the listeners of a storage when a data server announced a data of it (RD4/RD13), so
+ * a client waiting for the data (remote_not_complete) fetches without polling
+ */
+struct notify_data {
+	notify_data(storage_id sid = {}, octet_vector data_id = {}, bool complete = false)
+	: sid(std::move(sid))
+	, data_id(std::move(data_id))
+	, complete(complete)
+	{}
+
+	storage_id sid;
+	octet_vector data_id;
+	bool complete{};
+
+	template<typename S>
+	void serialise(S& s) {
+		serialisation::sequence<S> seq(s);
+		seq & sid & data_id & complete;
+	}
+};
+
 using serialisation::type_tag;
 using s2c_types =
 	typelist<type_tag<server_hello, 1>,
@@ -188,7 +210,8 @@ using s2c_types =
 			type_tag<response_data, 7>,
 			type_tag<response_commit, 8>,
 			type_tag<notify_record, 9>,
-			type_tag<response_data_ticket, 10> >;
+			type_tag<response_data_ticket, 10>,
+			type_tag<notify_data, 11> >;
 
 }
 }

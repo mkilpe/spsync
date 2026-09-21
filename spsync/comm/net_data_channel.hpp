@@ -32,20 +32,23 @@ using ticket_source = std::function<void(data_descriptor const&, data_right
 	, std::move_only_function<void(util::result<data_grant>)>)>;
 
 /**
- * The data_channel over the network (RD12: clients move data directly with the data
- * servers). An upload is opened with a fresh grant at the first holder that can be
- * reached - a holder that is down is the next entry (RD13), a holder that answers with a
- * refusal is the answer. Connections are made on demand, one per data server, and
+ * The data channels over the network (RD12: clients move data directly with the data
+ * servers). A transfer is opened with a fresh grant at the first holder that can be
+ * reached - a holder that is down is the next entry (RD13), and so is, for a download,
+ * one that does not hold the data; any other refusal by a holder is the answer. Connections are made on demand, one per data server, and
  * shared by the uploads going there; the server must authenticate with the key the
  * grant names. A lost connection answers the calls still out on it with an error.
  */
-class net_data_channel : public data_channel {
+class net_data_channel : public data_channel, public data_download_channel {
 public:
 	net_data_channel(network::context&, ticket_source, std::chrono::seconds timeout = std::chrono::seconds{10});
 	~net_data_channel();
 
 	void open_upload(data_descriptor const&, data_manifest const&, open_callback) override;
 	void send_piece(data_id const&, std::uint64_t chunk_no, std::uint64_t offset, octet_vector bytes, piece_callback) override;
+
+	void open_download(data_descriptor const&, download_callback) override;
+	void fetch_piece(data_id const&, std::uint64_t chunk_no, std::uint64_t offset, std::uint32_t size, fetch_callback) override;
 
 	/// drop every data connection; the calls still out are answered with an error
 	void close();

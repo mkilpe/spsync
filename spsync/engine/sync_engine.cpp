@@ -214,6 +214,27 @@ public:
 		}
 	}
 
+	/// the server refused the commit: what kind of refusal decides what happens to the record
+	void on_commit_rejected(record_tag const& committed_tag, commit_response const& res) {
+		LINFO("committing failed: error={}", res.data.get_error());
+		//t: handle correctly:
+		//  + 1. bring us up-to-date with server state
+		//  - 2. see if there are conflicts and notify higher level if there are
+		//  + 3. recreate the records with correct previous tag/last seen seq for non-conflicting records
+		//  + 4. try to commit again
+
+		update_server_seq(res.server_max_sequence);
+		if(check_result_error(res.data, protocol::errc::record_out_of_sync)) {
+			on_out_of_sync_rejected(committed_tag);
+		} else if(check_result_error(res.data, protocol::errc::record_already_committed)) {
+			on_duplicate_rejected(committed_tag);
+		} else if(permanent_commit_rejection(res.data.get_error())) {
+			drop_rejected(committed_tag, res.data.get_error());
+		} else {
+			hold_rejected(committed_tag, res.data.get_error());
+		}
+	}
+
 	/// something changed in the server side view: every rejected pending gets another try
 	void clear_rejections() {
 		rejected_pending.clear();
@@ -990,6 +1011,99 @@ public:
 	}
 
 	/**
+	 * Ask comm for the downloads that are wanted: the download_pending data of server
+	 * confirmed records. A data already asked for, or whose fetch failed during this
+	 * connection, is left alone (a failed one until it is asked for again).
+	 */
+	void request_downloads() {
+		if(data) {
+			for(auto const& id : records.confirmed_data_in_state(record_data_state::download_pending)) {
+				bool const asked = std::any_of(downloads.begin(), downloads.end(), [&](auto const& d) { return d.second == id; });
+				if(!asked && !failed_downloads.contains(id)) {
+					auto const handle = comm.fetch_data(id);
+					downloads[handle] = id;
+					LINFO("requested record data download [data_id = {}, request handle = {}]", to_hex(id), handle);
+				}
+			}
+		}
+	}
+
+	/// RD6 fetch policy: small enough data of others is wanted as soon as its record is here
+	void mark_auto_fetch() {
+		if(data && config.auto_fetch_max_size != 0) {
+			for(auto const& id : records.confirmed_data_in_state(record_data_state::deferred)) {
+				auto const row = data->find(id);
+				if(row && row->descriptor.enc_size <= config.auto_fetch_max_size) {
+					set_data_state(id, record_data_state::download_pending);
+				}
+			}
+		}
+	}
+
+	/// every transfer the storage owes or wants, after anything that may have changed that
+	void request_transfers() {
+		request_uploads();
+		mark_auto_fetch();
+		request_downloads();
+	}
+
+	void set_data_state(data_id const& id, record_data_state state) {
+		data->set_state(id, state);
+		if(output) {
+			output->emit<engine_events::on_data_state_changed>(id, state);
+		}
+	}
+
+	void on_download_answer(request_handle handle, std::optional<error> const& err) {
+		auto it = downloads.find(handle);
+		if(it != downloads.end()) {
+			data_id const id = it->second;
+			downloads.erase(it);
+			auto const row = data->find(id);
+			if(!err && row && row->state == record_data_state::in_sync) {
+				// the store flipped the state with the last chunk
+				LINFO("record data downloaded [data_id = {}]", to_hex(id));
+				if(output) {
+					output->emit<engine_events::on_data_state_changed>(id, record_data_state::in_sync);
+				}
+			} else if(err && err->code() == make_error_code(protocol::errc::data_not_held)) {
+				// the upload is still in progress over there: notify_data brings us back
+				LINFO("record data not complete at the holders yet [data_id = {}]", to_hex(id));
+				set_data_state(id, record_data_state::remote_not_complete);
+			} else {
+				auto const failure = err.value_or(make_error(securepath::errc::invalid_state, "download ended incomplete"));
+				LWARN("record data download failed [data_id = {}]: {}", to_hex(id), failure);
+				failed_downloads.insert(id);
+				if(output) {
+					output->emit<engine_events::on_data_transfer_failed>(id, failure);
+				}
+			}
+		}
+	}
+
+	/// the server tells a data server holds the data now: what waited for it goes on
+	void on_data_announced(data_id const& id) {
+		auto const row = data ? data->find(id) : std::nullopt;
+		if(row && row->state == record_data_state::remote_not_complete) {
+			set_data_state(id, record_data_state::download_pending);
+		}
+		failed_downloads.erase(id);
+		request_downloads();
+	}
+
+	/// ask for a data that is not held: true when it is wanted now (or was already)
+	bool want_data(data_id const& id) {
+		auto const row = data->find(id);
+		bool const fetchable = row && (row->state == record_data_state::deferred
+			|| row->state == record_data_state::removed || row->state == record_data_state::remote_not_complete);
+		if(fetchable) {
+			set_data_state(id, record_data_state::download_pending);
+		}
+		failed_downloads.erase(id);
+		return fetchable || (row && row->state == record_data_state::download_pending);
+	}
+
+	/**
 	 * Drop the data no stored record references any more (RD9): records went with a
 	 * truncation or a history cut, or a record could not be created for its data. Runs
 	 * under the engine mutex like the creation of a data with its record.
@@ -1004,10 +1118,10 @@ public:
 		}
 	}
 
-	/// the record data of a change, null when there is none or it cannot be read
-	record_data_handle open_object_data(record_handle const& h, std::size_t change) const {
-		record_data_handle ret;
-		if(data && h && h->type() == data_change_record_tag) {
+	/// a change of a data change record, decrypted; nullopt when the record cannot be read
+	std::optional<data_change_record_verifier::single_data> read_change(record_handle const& h, std::size_t change) const {
+		std::optional<data_change_record_verifier::single_data> ret;
+		if(h && h->type() == data_change_record_tag) {
 			auto const block = h->record();
 			auto const rec = block.deserialise_to<data_change_record>();
 			auto const key = find_record_key(rec, block);
@@ -1015,9 +1129,77 @@ public:
 				data_change_record_verifier ver(*key, rec, block.auth());
 				auto const headers = ver.headers();
 				if(ver.is_authentic() && change < headers.size()) {
-					ret = open_change_data(headers[change]);
+					ret = headers[change];
 				}
 			}
+		}
+		return ret;
+	}
+
+	/// the record data of a change, null when there is none or it cannot be read
+	record_data_handle open_object_data(record_handle const& h, std::size_t change) const {
+		record_data_handle ret;
+		auto const read = data ? read_change(h, change) : std::nullopt;
+		if(read) {
+			ret = open_change_data(*read);
+		}
+		return ret;
+	}
+
+	/// what it takes to make a wanted data out of held content instead of downloading it
+	struct adoption {
+		/// the held data with the same content
+		record_data_handle source;
+		/// the group keys the wanted data may be encrypted with (D9 candidates)
+		std::vector<encryption_key> keys;
+		data_descriptor wanted;
+		data_header header;
+	};
+
+	/**
+	 * RDS 6: the content of the change's data is held under another data id (the same
+	 * file sent again, by anybody) and the data itself is not: it can be rebuilt locally.
+	 */
+	std::optional<adoption> plan_adoption(record_handle const& h, std::size_t change) const {
+		std::optional<adoption> ret;
+		auto const read = data ? read_change(h, change) : std::nullopt;
+		auto const info = read ? read->header.data_info() : std::nullopt;
+		if(info && read->data.data) {
+			auto const& wanted = *read->data.data;
+			auto const row = data->find(wanted.manifest_digest);
+			bool const held = row && row->have.complete();
+			auto const content = held ? std::nullopt : data->find_content(info->content_digest, wanted.manifest_digest);
+			auto const source_keys = content ? crypto.enc_keys().find_all(content->header.key_seq) : std::vector<encryption_key>{};
+			if(!source_keys.empty()) {
+				ret = adoption{data->open(source_keys, content->descriptor, content->header)
+					, crypto.enc_keys().find_all(info->key_seq), wanted, *info};
+			}
+		}
+		return ret;
+	}
+
+	/// encrypts the whole content again: call without the engine mutex. False = download it
+	bool adopt(adoption const& plan) const {
+		bool adopted = false;
+		try {
+			for(auto const& key : plan.keys) {
+				adopted = adopted || (plan.source && data->adopt_content(*plan.source, key, plan.wanted, plan.header));
+			}
+		} catch(std::exception const& e) {
+			LWARN("could not rebuild record data from held content: {}", e.what());
+		}
+		return adopted;
+	}
+
+	/// the same, fetching the data when it is not held
+	record_data_handle fetch_change_data(record_handle const& h, std::size_t change) {
+		record_data_handle ret;
+		auto const read = data ? read_change(h, change) : std::nullopt;
+		if(read) {
+			ret = open_change_data(*read);
+		}
+		if(ret && want_data(read->data.data->manifest_digest)) {
+			request_downloads();
 		}
 		return ret;
 	}
@@ -1100,6 +1282,9 @@ public:
 	std::map<request_handle, data_id> uploads;
 	/// data whose upload failed during this connection; tried again after the next connect
 	std::set<data_id> failed_uploads;
+	/// the same for the downloads; a failed one is also tried when it is asked for again
+	std::map<request_handle, data_id> downloads;
+	std::set<data_id> failed_downloads;
 	// set when the server is suspected of showing two histories; commits stop (plan 2.6)
 	bool fork_suspected{};
 };
@@ -1152,6 +1337,8 @@ void sync_engine::on_connected() {
 	impl_->clear_rejections();
 	impl_->uploads.clear();
 	impl_->failed_uploads.clear();
+	impl_->downloads.clear();
+	impl_->failed_downloads.clear();
 	auto handle = impl_->comm.fetch_sequence_number();
 	LTRACE("on_connected, requested sequence number (request handle {})", handle);
 }
@@ -1162,6 +1349,7 @@ void sync_engine::on_disconnected(std::optional<error> err) {
 	// the answers to these never come
 	impl_->in_flight_commits.clear();
 	impl_->uploads.clear();
+	impl_->downloads.clear();
 	LTRACE("on_disconnected [error = {}]", err.value_or(error()));
 	// nothing for sync_engine
 }
@@ -1178,8 +1366,8 @@ void sync_engine::on_sequence_number_response(request_handle req_handle, result<
 			//already up-to-date with server but perhaps we have some local pending commits
 			impl_->try_commit_pending();
 		}
-		// the uploads a lost connection interrupted (RD4: resume by manifest)
-		impl_->request_uploads();
+		// the transfers a lost connection interrupted (RD4: resume by manifest)
+		impl_->request_transfers();
 	} else {
 		LINFO("on_sequence_number_response with error: {} (request handle {})", res.get_error(), req_handle);
 	}
@@ -1203,7 +1391,7 @@ void sync_engine::on_record_response(request_handle req_handle, record_response 
 				impl_->on_fetch_complete();
 			}
 			// an own record may have been confirmed by the fetch instead of its commit answer
-			impl_->request_uploads();
+			impl_->request_transfers();
 		} else {
 			impl_->on_fetch_complete();
 		}
@@ -1213,8 +1401,17 @@ void sync_engine::on_record_response(request_handle req_handle, record_response 
 	}
 }
 
-void sync_engine::on_data_response(request_handle req_handle, result<record_data_handle> const&) {
-	assert(not "implemented");
+void sync_engine::on_data_downloaded(request_handle req_handle, std::optional<error> err) {
+	std::unique_lock lock{impl_->mutex};
+	LINFO("on_data_downloaded [request handle = {}]", req_handle);
+	impl_->on_download_answer(req_handle, err);
+}
+
+void sync_engine::on_data_available(data_id id, bool complete) {
+	std::unique_lock lock{impl_->mutex};
+	if(complete) {
+		impl_->on_data_announced(id);
+	}
 }
 
 void sync_engine::on_commit_response(request_handle req_handle, commit_response const& res) {
@@ -1239,7 +1436,7 @@ void sync_engine::on_commit_response(request_handle req_handle, commit_response 
 					handle->set_assignment(serialisation::asn_der_serialise(*res.envelope));
 				}
 				// the record exists on the server: its data may follow (RD4)
-				impl_->request_uploads();
+				impl_->request_transfers();
 				impl_->try_commit_pending();
 			} else {
 				LWARN("commit reply with unknown tag [block id = {}, tag = {}]", id, to_hex(block.tag()));
@@ -1250,23 +1447,7 @@ void sync_engine::on_commit_response(request_handle req_handle, commit_response 
 			// what to do here? try again or deem the server as bad behaving?
 		}
 	} else {
-		LINFO("committing failed: error={}", res.data.get_error());
-		//t: handle correctly:
-		//  + 1. bring us up-to-date with server state
-		//  - 2. see if there are conflicts and notify higher level if there are
-		//  + 3. recreate the records with correct previous tag/last seen seq for non-conflicting records
-		//  + 4. try to commit again
-
-		impl_->update_server_seq(res.server_max_sequence);
-		if(check_result_error(res.data, protocol::errc::record_out_of_sync)) {
-			impl_->on_out_of_sync_rejected(committed_tag);
-		} else if(check_result_error(res.data, protocol::errc::record_already_committed)) {
-			impl_->on_duplicate_rejected(committed_tag);
-		} else if(permanent_commit_rejection(res.data.get_error())) {
-			impl_->drop_rejected(committed_tag, res.data.get_error());
-		} else {
-			impl_->hold_rejected(committed_tag, res.data.get_error());
-		}
+		impl_->on_commit_rejected(committed_tag, res);
 	}
 }
 
@@ -1281,7 +1462,7 @@ void sync_engine::on_record_received(chain_block const& block, std::optional<blo
 	LINFO("on_record_received [seq = {}]", block.sequence());
 	impl_->handle_incoming_record(block, envelope);
 	// the server's push of an own record can beat its commit answer
-	impl_->request_uploads();
+	impl_->request_transfers();
 }
 
 
@@ -1315,6 +1496,23 @@ record_handle sync_engine::sync_object_change(object_id oid, metadata mdata, rec
 record_data_handle sync_engine::object_data(record_handle h, std::size_t change) {
 	std::unique_lock lock{impl_->mutex};
 	return impl_->open_object_data(h, change);
+}
+
+record_data_handle sync_engine::fetch_object_data(record_handle h, std::size_t change) {
+	std::unique_lock lock{impl_->mutex};
+	auto const plan = impl_->plan_adoption(h, change);
+	if(plan) {
+		// the content is held under another data id: rebuilt here instead of downloaded,
+		// without the engine mutex - it is as much work as creating the data was
+		lock.unlock();
+		bool const adopted = impl_->adopt(*plan);
+		lock.lock();
+		if(adopted && impl_->output) {
+			LINFO("record data made from held content [data_id = {}]", to_hex(plan->wanted.manifest_digest));
+			impl_->output->emit<engine_events::on_data_state_changed>(plan->wanted.manifest_digest, record_data_state::in_sync);
+		}
+	}
+	return impl_->fetch_change_data(h, change);
 }
 
 record_handle sync_engine::sync_user_change(plain_user_change_data change_data, metadata mdata) {

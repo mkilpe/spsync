@@ -41,4 +41,29 @@ struct data_channel {
 	virtual void send_piece(data_id const&, std::uint64_t chunk_no, std::uint64_t offset, octet_vector bytes, piece_callback) = 0;
 };
 
+/// what a holder answers the opening of a download with
+struct download_info {
+	/// to be checked against the descriptor the record commits to; every chunk against it
+	data_manifest manifest;
+	/// the chunks the holder has: a part while the upload is still in progress
+	have_bitmap have;
+};
+
+/**
+ * The other direction of the same way (RD4): a data comes down as its manifest and then
+ * pieces of the chunks the holder has, asked for one by one. Answers as for data_channel.
+ */
+struct data_download_channel {
+	virtual ~data_download_channel() = default;
+
+	using download_callback = std::move_only_function<void(util::result<download_info>)>;
+	using fetch_callback = std::move_only_function<void(util::result<octet_vector>)>;
+
+	/// open the download of a data at a holder that has it, or some of it
+	virtual void open_download(data_descriptor const&, download_callback) = 0;
+
+	/// size octets of a chunk from offset, of an opened download
+	virtual void fetch_piece(data_id const&, std::uint64_t chunk_no, std::uint64_t offset, std::uint32_t size, fetch_callback) = 0;
+};
+
 }

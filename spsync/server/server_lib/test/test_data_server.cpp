@@ -2,6 +2,7 @@
 #include <securepath/test_frame/test_utils.hpp>
 
 #include <spsync/server/server_lib/data_server.hpp>
+#include <spsync/comm/data_downloader.hpp>
 #include <spsync/comm/data_uploader.hpp>
 #include <spsync/comm/net_data_channel.hpp>
 #include <spsync/protocol/data_protocol.hpp>
@@ -17,6 +18,7 @@
 #include <filesystem>
 #include <future>
 #include <mutex>
+#include <thread>
 
 namespace securepath::sync {
 namespace {
@@ -26,11 +28,13 @@ using namespace std::chrono_literals;
 std::string const server_root = "data_server_test_root";
 std::string const client_db = "data_server_test_client.db";
 std::filesystem::path const client_root = "data_server_test_client";
+std::string const reader_db = "data_server_test_reader.db";
+std::filesystem::path const reader_root = "data_server_test_reader";
 
 /// a data server on an ephemeral port, a record server key it trusts, one client
 struct data_server_fixture {
-	data_server_fixture() {
-		net.add_client(1);
+	explicit data_server_fixture(transfer_quota transfer = {}) {
+		net.add_client(2);
 		net.add_client_keys_for_server();
 		net.server_context().public_keys().insert(record_server.public_key());
 
@@ -39,6 +43,7 @@ struct data_server_fixture {
 		params.data_endpoint = asio::ip::tcp::endpoint(asio::ip::address_v4::loopback(), 0);
 		params.storage_root = server_root;
 		params.record_servers = {record_server.id().in_hex()};
+		params.transfer = transfer;
 		server = std::make_unique<data_server>(net.server_context(), params);
 		server->set_complete_handler([this](protocol::storage_id const&, data_id const& id) {
 			std::unique_lock lock{mutex};
@@ -53,20 +58,39 @@ struct data_server_fixture {
 	}
 
 	/// the record server's part: a ticket for the client, the given holders
-	ticket_source tickets(std::vector<data_endpoint> holders, std::chrono::seconds validity = 600s) {
-		return [this, holders = std::move(holders), validity](data_descriptor const& d, data_right right
+	ticket_source tickets(std::vector<data_endpoint> holders, std::chrono::seconds validity = 600s, std::size_t client = 0) {
+		return [this, holders = std::move(holders), validity, client](data_descriptor const& d, data_right right
 			, std::move_only_function<void(util::result<data_grant>)> cb) {
-			data_ticket ticket{sid, d, net.key_id(0), right, clock_type::now() + validity};
+			data_ticket ticket{sid, d, net.key_id(client), right, clock_type::now() + validity};
 			ticket.sign(record_server);
 			cb(util::result<data_grant>{data_grant{std::move(ticket), holders}});
 		};
 	}
 
 	data_descriptor create_data(std::size_t size) {
-		encryption_key const key{sequence_number{1}, securepath::test::random_octet_vector(crypto::aes_gcm_key_size())};
-		auto writer = store.create(key, 4096);
-		writer.write(securepath::test::random_octet_vector(size));
-		return writer.finish().descriptor;
+		return create_full(size).descriptor;
+	}
+
+	/// both descriptor halves; the plaintext is kept for a reader to compare with
+	encrypted_data_result create_full(std::size_t size) {
+		plain = securepath::test::random_octet_vector(size);
+		auto writer = store.create(group_key, 4096);
+		writer.write(plain);
+		return writer.finish();
+	}
+
+	/// the author (client 0) puts the data on the server
+	void upload(data_descriptor const& d) {
+		net_data_channel channel{net.client_context(0), tickets({endpoint()})};
+		std::atomic<int> done{0};
+		std::atomic<bool> failed{false};
+		data_uploader uploader{store, channel, data_upload_config{}, [&](data_id const&, std::optional<error> err) {
+			failed = err.has_value();
+			++done;
+		}};
+		REQUIRE(uploader.enqueue(d.manifest_digest));
+		WAIT_REQUIRE(done == 1, 30s);
+		REQUIRE(!failed);
 	}
 
 	std::size_t completed_count() const {
@@ -79,6 +103,8 @@ struct data_server_fixture {
 		std::filesystem::remove_all(server_root);
 		std::filesystem::remove_all(client_root);
 		std::remove(client_db.c_str());
+		std::filesystem::remove_all(reader_root);
+		std::remove(reader_db.c_str());
 		return true;
 	}
 
@@ -87,7 +113,11 @@ struct data_server_fixture {
 	crypto::private_key record_server{crypto::generate_private_key()};
 	protocol::storage_id sid{securepath::test::random_octet_vector(16)};
 	std::unique_ptr<data_server> server;
+	encryption_key group_key{sequence_number{1}, securepath::test::random_octet_vector(crypto::aes_gcm_key_size())};
+	octet_vector plain;
 	record_data_store store{database::sqlite::create_sqlite_connection(client_db), client_root};
+	/// the store of the second client, the reader
+	record_data_store reader_store{database::sqlite::create_sqlite_connection(reader_db), reader_root};
 
 	mutable std::mutex mutex;
 	std::vector<data_id> completed;
@@ -365,6 +395,146 @@ TEST_CASE("data server expires incomplete uploads", "[unit]") {
 	restarted.start();
 	CHECK(!restarted.open_store(f.sid)->find(id));
 	CHECK(restarted.open_store(f.sid)->used_bytes() == 0);
+}
+
+namespace {
+
+/// what the downloader reported
+struct download_log {
+	data_downloader::done_callback done() {
+		return [this](data_id const&, std::optional<error> err) {
+			std::unique_lock lock{mutex};
+			finished.push_back(std::move(err));
+			++count;
+		};
+	}
+
+	std::atomic<std::size_t> count{0};
+	std::mutex mutex;
+	std::vector<std::optional<error>> finished;
+};
+
+octet_vector read_all(record_data& data) {
+	octet_vector ret(data.size());
+	ret.resize(data.read(0, ret.data(), ret.size()));
+	return ret;
+}
+
+}
+
+// RDS 6: the first whole way of a data - the author uploads, another member downloads
+// with its own ticket over its own connection, verifies every chunk and reads the plaintext
+TEST_CASE("data server download end to end", "[unit]") {
+	data_server_fixture f;
+	auto const data = f.create_full(700000);
+	auto const& id = data.descriptor.manifest_digest;
+	f.upload(data.descriptor);
+
+	// the reader's record named the data: known, nothing held
+	auto handle = f.reader_store.open({f.group_key}, data.descriptor, data.header);
+	REQUIRE(handle);
+	CHECK(handle->state() == record_data_state::deferred);
+
+	net_data_channel channel{f.net.client_context(1), f.tickets({f.endpoint()}, 600s, 1)};
+	download_log log;
+	data_downloader downloader{f.reader_store, channel, data_download_config{}, log.done()};
+	CHECK(downloader.enqueue(id));
+	WAIT_CHECK(log.count == 1, 30s);
+	REQUIRE(log.finished.size() == 1);
+	CHECK(!log.finished[0]);
+	CHECK(handle->state() == record_data_state::in_sync);
+	CHECK(read_all(*handle) == f.plain);
+	CHECK(f.reader_store.manifest(id) == data.manifest);
+}
+
+// RD13: a holder that is down is the next entry, for downloads too
+TEST_CASE("data server download failover", "[unit]") {
+	data_server_fixture f;
+	auto const data = f.create_full(60000);
+	f.upload(data.descriptor);
+	auto handle = f.reader_store.open({f.group_key}, data.descriptor, data.header);
+	REQUIRE(handle);
+
+	data_endpoint down = f.endpoint();
+	down.port = 1;
+	net_data_channel channel{f.net.client_context(1), f.tickets({down, f.endpoint()}, 600s, 1), 5s};
+	download_log log;
+	data_downloader downloader{f.reader_store, channel, data_download_config{}, log.done()};
+	CHECK(downloader.enqueue(data.descriptor.manifest_digest));
+	WAIT_CHECK(log.count == 1, 30s);
+	REQUIRE(log.finished.size() == 1);
+	CHECK(!log.finished[0]);
+	CHECK(read_all(*handle) == f.plain);
+}
+
+// the server's refusals of a download arrive as what they are
+TEST_CASE("data server download refusals", "[unit]") {
+	data_server_fixture f;
+	auto const data = f.create_full(60000);
+	auto handle = f.reader_store.open({f.group_key}, data.descriptor, data.header);
+	REQUIRE(handle);
+	download_log log;
+
+	SECTION("a data nobody uploaded") {
+		net_data_channel channel{f.net.client_context(1), f.tickets({f.endpoint()}, 600s, 1)};
+		data_downloader downloader{f.reader_store, channel, data_download_config{}, log.done()};
+		CHECK(downloader.enqueue(data.descriptor.manifest_digest));
+		WAIT_CHECK(log.count == 1, 10s);
+		REQUIRE(log.finished.size() == 1);
+		REQUIRE(log.finished[0]);
+		CHECK(log.finished[0]->code() == make_error_code(protocol::errc::data_not_held));
+		CHECK(handle->state() == record_data_state::deferred);
+	}
+
+	SECTION("somebody else's ticket") {
+		f.upload(data.descriptor);
+		// issued to client 0, presented by client 1
+		net_data_channel channel{f.net.client_context(1), f.tickets({f.endpoint()}, 600s, 0)};
+		data_downloader downloader{f.reader_store, channel, data_download_config{}, log.done()};
+		CHECK(downloader.enqueue(data.descriptor.manifest_digest));
+		WAIT_CHECK(log.count == 1, 10s);
+		REQUIRE(log.finished.size() == 1);
+		REQUIRE(log.finished[0]);
+		CHECK(log.finished[0]->code() == make_error_code(protocol::errc::invalid_data_ticket));
+		CHECK(handle->available_size() == 0);
+	}
+}
+
+// RD10: a fetch that runs into the transfer quota keeps what it got and goes on in the next window
+TEST_CASE("data server transfer quota window", "[unit]") {
+	// a window of two seconds that serves a bit more than half of the data
+	data_server_fixture f{transfer_quota{40000, 2s}};
+	auto const data = f.create_full(60000);
+	auto const& id = data.descriptor.manifest_digest;
+	f.upload(data.descriptor);
+	auto handle = f.reader_store.open({f.group_key}, data.descriptor, data.header);
+	REQUIRE(handle);
+
+	net_data_channel channel{f.net.client_context(1), f.tickets({f.endpoint()}, 600s, 1)};
+	download_log log;
+	data_downloader downloader{f.reader_store, channel, data_download_config{2, 2, 4096}, log.done()};
+
+	std::size_t tries = 0;
+	bool complete = false;
+	std::uint64_t held_after_first = 0;
+	while(!complete && tries != 6) {
+		CHECK(downloader.enqueue(id));
+		++tries;
+		WAIT_REQUIRE(log.count == tries, 30s);
+		complete = !log.finished.back().has_value();
+		if(!complete) {
+			CHECK(log.finished.back()->code() == make_error_code(protocol::errc::data_transfer_quota_exceeded));
+			held_after_first = held_after_first == 0 ? f.reader_store.find(id)->have.count() : held_after_first;
+			// the next window
+			std::this_thread::sleep_for(2s);
+		}
+	}
+	CHECK(complete);
+	// it took more than one window, and the first one left whole chunks behind
+	CHECK(tries >= 2);
+	CHECK(held_after_first > 0);
+	CHECK(held_after_first < data.descriptor.chunk_count());
+	CHECK(read_all(*handle) == f.plain);
 }
 
 // RD12: the all-in-one deployment - the same server has the record and the data role and

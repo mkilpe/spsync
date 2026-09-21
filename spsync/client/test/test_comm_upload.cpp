@@ -44,7 +44,7 @@ struct upload_output : comm_output {
 	void on_disconnected(std::optional<error>) override {}
 	void on_sequence_number_response(request_handle, result<sequence_info> const&) override {}
 	void on_record_response(request_handle, record_response const&) override {}
-	void on_data_response(request_handle, result<record_data_handle> const&) override {}
+	void on_data_downloaded(request_handle, std::optional<error>) override {}
 	void on_commit_response(request_handle, commit_response const&) override {}
 	void on_record_received(chain_block const&, std::optional<block_envelope> const&) override {}
 

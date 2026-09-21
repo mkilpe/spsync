@@ -66,12 +66,30 @@ public:
 		// remove_unreferenced, never chunk files nothing knows of
 		auto const local_id = table.ensure(result.descriptor);
 		table.set_manifest(local_id, result.manifest);
+		table.set_header(local_id, result.header);
 		table.set_state(local_id, record_data_state::upload_pending);
 		files.commit_staging(stage, result.descriptor.manifest_digest);
 
 		have_bitmap have{result.descriptor.chunk_count()};
 		have.set_all();
 		table.set_have(local_id, have);
+	}
+
+	/// the staged chunks of a data rebuilt from held content (they verified against the
+	/// descriptor) become the data, in place of whatever part of it was held
+	void register_adopted(std::string const& stage, encrypted_data_result const& result) {
+		std::unique_lock lock{mutex};
+		auto const& id = result.descriptor.manifest_digest;
+		auto const local_id = table.ensure(result.descriptor);
+		files.remove(id);
+		files.commit_staging(stage, id);
+		table.set_manifest(local_id, result.manifest);
+		table.set_header(local_id, result.header);
+
+		have_bitmap have{result.descriptor.chunk_count()};
+		have.set_all();
+		table.set_have(local_id, have);
+		table.set_state(local_id, record_data_state::in_sync);
 	}
 
 	/// keep a chunk that verified against the manifest
@@ -404,7 +422,10 @@ bool incoming_chunk::finish() {
 	return ok;
 }
 
-void copy_record_data(record_data& source, data_writer& writer) {
+namespace {
+
+/// a whole source in pieces, never more than one piece in memory
+void stream_record_data(record_data& source, std::function<void(octet_span)> const& write) {
 	std::uint64_t const size = source.size();
 	octet_vector piece(static_cast<std::size_t>(std::min<std::uint64_t>(size, 256 * 1024)));
 	std::uint64_t pos = 0;
@@ -413,9 +434,15 @@ void copy_record_data(record_data& source, data_writer& writer) {
 		if(n == 0) {
 			throw make_error(securepath::errc::invalid_data, "record data source ended before its size");
 		}
-		writer.write(octet_span{piece}.first(static_cast<std::size_t>(n)));
+		write(octet_span{piece}.first(static_cast<std::size_t>(n)));
 		pos += n;
 	}
+}
+
+}
+
+void copy_record_data(record_data& source, data_writer& writer) {
+	stream_record_data(source, [&](octet_span piece) { writer.write(piece); });
 }
 
 // -- record_data_store --
@@ -438,6 +465,10 @@ record_data_handle record_data_store::open(std::vector<encryption_key> const& gr
 	auto const local_id = impl_->table.ensure(descriptor);
 	auto const row = impl_->table.find(local_id);
 	if(row && row->descriptor == descriptor) {
+		if(!impl_->table.header(local_id)) {
+			// the content index learns of the data the first time its header is seen
+			impl_->table.set_header(local_id, header);
+		}
 		std::vector<data_decryptor> decryptors;
 		for(auto const& key : group_keys) {
 			decryptors.emplace_back(key, descriptor, header);
@@ -451,6 +482,45 @@ record_data_handle record_data_store::open(std::vector<encryption_key> const& gr
 
 std::optional<data_state_row> record_data_store::find(data_id const& id) const {
 	return impl_->table.find(id);
+}
+
+std::optional<held_content> record_data_store::find_content(octet_vector const& content_digest, data_id const& other_than) const {
+	std::optional<held_content> ret;
+	for(auto const& row : impl_->table.find_by_content(content_digest)) {
+		auto header = impl_->table.header(row.local_id);
+		bool const usable = !ret && header && row.have.complete() && row.descriptor.manifest_digest != other_than
+			&& row.state != record_data_state::invalid;
+		if(usable) {
+			ret = held_content{row.descriptor, std::move(*header)};
+		}
+	}
+	return ret;
+}
+
+bool record_data_store::adopt_content(record_data& source, encryption_key const& group_key, data_descriptor const& wanted
+	, data_header const& wanted_header) {
+	bool ok = source.size() == wanted_header.plain_size && wanted.chunk_size != 0;
+	if(ok) {
+		auto const stage = impl_->files.begin_staging();
+		try {
+			data_encryptor encryptor(group_key, wanted.chunk_size, [&](std::uint64_t chunk_no, octet_vector const& encrypted) {
+				impl_->files.write_staged(stage, chunk_no, encrypted);
+			}, wanted_header.nonce);
+			stream_record_data(source, [&](octet_span piece) { encryptor.write(piece); });
+			auto const result = encryptor.finish();
+			// the same chunks only when the key and the content are the wanted data's
+			ok = result.descriptor == wanted && result.header.content_digest == wanted_header.content_digest;
+			if(ok) {
+				impl_->register_adopted(stage, result);
+			} else {
+				impl_->files.discard_staging(stage);
+			}
+		} catch(...) {
+			impl_->files.discard_staging(stage);
+			throw;
+		}
+	}
+	return ok;
 }
 
 void record_data_store::set_state(data_id const& id, record_data_state state) {

@@ -18,6 +18,7 @@ public:
 
 	record_data_store* data_store{};
 	std::vector<data_id> upload_requests;
+	std::vector<data_id> fetch_requests;
 
 	// generic actions which are handled before the above specific ones
 	std::deque<std::move_only_function<void(comm_output&)>> action_queue;
@@ -57,6 +58,10 @@ void comm_test_interface::add_upload_data_response(std::move_only_function<uploa
 
 std::vector<data_id> const& comm_test_interface::upload_requests() const {
 	return impl_->upload_requests;
+}
+
+std::vector<data_id> const& comm_test_interface::fetch_requests() const {
+	return impl_->fetch_requests;
 }
 
 record_data_store* comm_test_interface::data() const {
@@ -115,13 +120,14 @@ request_handle comm_test_interface::fetch_records(sequence_number start, sequenc
 	return ret;
 }
 
-request_handle comm_test_interface::fetch_data(sequence_number record){
+request_handle comm_test_interface::fetch_data(data_id const& id) {
 	request_handle ret = ++impl_->req_handle;
+	impl_->fetch_requests.push_back(id);
 	impl_->event_queue.push_back([=, this] {
 		if(!impl_->fetch_data_queue.empty()) {
-			auto res = impl_->fetch_data_queue.front()(record);
+			auto res = impl_->fetch_data_queue.front()(id);
 			impl_->fetch_data_queue.pop_front();
-			impl_->output->on_data_response(ret, res);
+			impl_->output->on_data_downloaded(ret, res);
 		} else {
 			LOG_TRACE("empty fetch queue");
 		}

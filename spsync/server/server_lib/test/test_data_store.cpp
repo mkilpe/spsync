@@ -257,4 +257,32 @@ TEST_CASE("server data store expiry", "[unit]") {
 	CHECK(store.expire_incomplete(t0 + 100h) == 0);
 }
 
+// RD10: served octets per window, windows fixed to the clock
+TEST_CASE("transfer budget", "[unit]") {
+	auto const t0 = time_point{std::chrono::seconds{1000000}};
+
+	transfer_budget unlimited;
+	CHECK(unlimited.charge(std::uint64_t{1} << 40, t0));
+
+	transfer_budget budget{transfer_quota{1000, 100s}};
+	CHECK(budget.used(t0) == 0);
+	CHECK(budget.charge(600, t0));
+	CHECK(budget.charge(400, t0 + 50s));
+	CHECK(budget.used(t0 + 50s) == 1000);
+	// full: nothing more fits, and what does not fit is not counted
+	CHECK(!budget.charge(1, t0 + 60s));
+	CHECK(!budget.charge(5000, t0 + 60s));
+	CHECK(budget.used(t0 + 60s) == 1000);
+	CHECK(budget.retry_after(t0 + 60s) == 40);
+	CHECK(budget.retry_after(t0) == 100);
+
+	// the next window starts empty
+	CHECK(budget.used(t0 + 100s) == 0);
+	CHECK(budget.charge(1000, t0 + 100s));
+	CHECK(!budget.charge(1, t0 + 199s));
+	CHECK(budget.retry_after(t0 + 199s) == 1);
+	// more than a whole window is never served at once
+	CHECK(!budget.charge(1001, t0 + 200s));
+}
+
 }

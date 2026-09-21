@@ -336,16 +336,25 @@ void storage::add_listener(std::shared_ptr<connection> const& p) {
 	listeners_[&*p] = p;
 }
 
-void storage::notify_listeners(chain_block const& c, std::optional<block_envelope> const& env) {
+void storage::for_each_listener(std::function<void(connection&)> const& f) {
 	for(auto it = listeners_.begin(); it != listeners_.end(); ) {
 		auto p = it->second.lock();
 		if(p) {
-			p->notify(id_, c, env);
+			f(*p);
 			++it;
 		} else {
 			it = listeners_.erase(it);
 		}
 	}
+}
+
+void storage::notify_listeners(chain_block const& c, std::optional<block_envelope> const& env) {
+	for_each_listener([&](connection& conn) { conn.notify(id_, c, env); });
+}
+
+void storage::notify_data(data_id const& id, bool complete) {
+	std::unique_lock l{mutex_};
+	for_each_listener([&](connection& conn) { conn.notify_data(id_, id, complete); });
 }
 
 }

@@ -40,6 +40,9 @@ struct data_server_params {
 	/// resource quota of every storage on this server (RD10), 0 = no limit
 	data_quota quota;
 
+	/// transfer quota of every storage on this server: served octets per window (RD10)
+	transfer_quota transfer;
+
 	/**
 	 * Public key ids (hex) of the record servers whose tickets this server accepts
 	 * (RD12). The server's own key always is one: an all-in-one server issues tickets to

@@ -33,6 +33,7 @@ public:
 	void handle(protocol::request_data_ticket const&);
 
 	void notify(protocol::storage_id const& sid, chain_block const&, std::optional<block_envelope> const&);
+	void notify_data(protocol::storage_id const& sid, data_id const&, bool complete);
 
 private:
 	virtual void send(octet_span s) = 0;

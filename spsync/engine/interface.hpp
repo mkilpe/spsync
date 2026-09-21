@@ -41,6 +41,16 @@ struct engine_input {
 	 */
 	virtual record_data_handle object_data(record_handle, std::size_t change = 0) = 0;
 
+	/**
+	 * The same, and the data is fetched when it is not held (RD6: lazy by default, this
+	 * is the asking): deferred, removed or remote_not_complete becomes download_pending
+	 * and the download runs in the background - on_data_state_changed tells when it is
+	 * in_sync, or remote_not_complete when the holders have only a part yet (the engine
+	 * fetches the rest when the server tells it is there). A data whose content is held
+	 * already under another data id is made locally instead of downloaded.
+	 */
+	virtual record_data_handle fetch_object_data(record_handle, std::size_t change = 0) = 0;
+
 	/// synchronise user change
 	virtual record_handle sync_user_change(plain_user_change_data, metadata = {}) = 0;
 
@@ -106,8 +116,9 @@ struct engine_output : event_system::event_handler {
 
 	/**
 	 * Called when the transfer of a record data ended with an error (refused by the
-	 * server, quota, no data server). The state stays as it was (upload_pending); the
-	 * engine tries again after the next connect.
+	 * server, quota, no data server). The state stays as it was (upload_pending,
+	 * download_pending - what was received is kept); the engine tries again after the
+	 * next connect, a download also when it is asked for again.
 	 */
 	virtual void on_data_transfer_failed(data_id, error) {}
 

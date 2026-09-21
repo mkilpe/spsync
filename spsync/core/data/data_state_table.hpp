@@ -54,6 +54,17 @@ public:
 	void set_manifest(std::uint64_t local_id, data_manifest const&);
 	std::optional<data_manifest> manifest(std::uint64_t local_id) const;
 
+	/**
+	 * The members-only half of the descriptor, once a record was read that carries it
+	 * (clients only; it lives in the local database like the group keys do). Its content
+	 * digest is indexed: the same content under another data id need not be downloaded.
+	 */
+	void set_header(std::uint64_t local_id, data_header const&);
+	std::optional<data_header> header(std::uint64_t local_id) const;
+
+	/// the rows whose header has the given content digest, ascending by id
+	std::vector<data_state_row> find_by_content(octet_vector const& content_digest) const;
+
 	void remove(std::uint64_t local_id);
 
 private:

@@ -1,5 +1,7 @@
 #include "data_state_table.hpp"
 
+#include <spsync/core/database_util.hpp>
+
 #include <securepath/database/util.hpp>
 #include <securepath/serialisation/util.hpp>
 
@@ -43,6 +45,8 @@ std::optional<data_state_row> extract_row(database::query const& q) {
 		state: record_data_state as integer
 		have: bitmap of the held chunks as blob (have_bitmap)
 		manifest: serialised data_manifest as blob, null until known
+		header: serialised data_header as blob, null until a record carrying it was read
+		content_digest: the header's content digest as blob (indexed), null like the header
 */
 
 data_state_table::data_state_table(database::connection_ptr db)
@@ -56,8 +60,15 @@ data_state_table::data_state_table(database::connection_ptr db)
 			"chunk_size INTEGER,"
 			"state INTEGER,"
 			"have BLOB,"
-			"manifest BLOB);").execute();
+			"manifest BLOB,"
+			"header BLOB,"
+			"content_digest BLOB);").execute();
+	} else if(!has_column(*db_, "record_data", "header")) {
+		// a database from before RDS 6
+		db_->prepare("ALTER TABLE record_data ADD COLUMN header BLOB;").execute();
+		db_->prepare("ALTER TABLE record_data ADD COLUMN content_digest BLOB;").execute();
 	}
+	db_->prepare("CREATE INDEX IF NOT EXISTS record_data_content ON record_data(content_digest);").execute();
 }
 
 std::uint64_t data_state_table::ensure(data_descriptor const& d) {
@@ -134,6 +145,37 @@ std::optional<data_manifest> data_state_table::manifest(std::uint64_t local_id) 
 	auto res = q.execute();
 	if(res && res.value<octet_vector>(0)) {
 		ret = database::extract_column_type<data_manifest>(res, 0);
+	}
+	return ret;
+}
+
+void data_state_table::set_header(std::uint64_t local_id, data_header const& header) {
+	auto q = db_->prepare("UPDATE record_data SET header = :h, content_digest = :c WHERE key = :k;");
+	q.bind(":h", serialisation::asn_der_serialise(header));
+	q.bind(":c", header.content_digest);
+	q.bind(":k", static_cast<std::int64_t>(local_id));
+	q.execute();
+}
+
+std::optional<data_header> data_state_table::header(std::uint64_t local_id) const {
+	auto q = db_->prepare("SELECT header FROM record_data WHERE key = :k;");
+	q.bind(":k", static_cast<std::int64_t>(local_id));
+	std::optional<data_header> ret;
+	auto res = q.execute();
+	if(res && res.value<octet_vector>(0)) {
+		ret = database::extract_column_type<data_header>(res, 0);
+	}
+	return ret;
+}
+
+std::vector<data_state_row> data_state_table::find_by_content(octet_vector const& content_digest) const {
+	auto q = db_->prepare(std::string("SELECT ") + row_columns + " FROM record_data WHERE content_digest = :c ORDER BY key ASC;");
+	q.bind(":c", content_digest);
+	std::vector<data_state_row> ret;
+	for(auto res = q.execute(); res; res.next()) {
+		if(auto row = extract_row(res)) {
+			ret.push_back(std::move(*row));
+		}
 	}
 	return ret;
 }

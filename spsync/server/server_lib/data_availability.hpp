@@ -39,8 +39,9 @@ struct holder_load {
  */
 class data_availability {
 public:
-	/// what the holder has of the data now; replaces its earlier announcement
-	void announce(protocol::storage_id const&, data_id const&, data_holding const&);
+	/// what the holder has of the data now; replaces its earlier announcement. True when
+	/// this is news of a complete copy: the holder was not known to hold all of it
+	bool announce(protocol::storage_id const&, data_id const&, data_holding const&);
 
 	void set_load(crypto::public_key_id const& holder, holder_load const&);
 

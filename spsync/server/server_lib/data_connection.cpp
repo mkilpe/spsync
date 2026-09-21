@@ -141,4 +141,58 @@ void data_connection::handle(protocol::upload_data_chunk const& p) {
 	}
 }
 
+void data_connection::handle(protocol::download_data_open const& p) {
+	auto const& sid = p.ticket.storage_id();
+	auto const& id = p.ticket.data();
+	LOG_TRACE("download_data_open of user {} [sid={}, data_id={}]", id_, to_hex(sid), to_hex(id));
+	util::result<served_data> served{check_ticket(p.ticket, data_right::download)};
+	try {
+		if(!served.get_error()) {
+			auto store = context_.acquire_store(sid);
+			served = store->open_download(p.ticket.descriptor());
+			if(served) {
+				downloads_[upload_key{sid, id}] = std::move(store);
+			}
+		}
+	} catch(securepath::error const& err) {
+		LOG_WARN("exception while opening a download: {} (sid={})", err, to_hex(sid));
+		served = err;
+	} catch(std::exception const& ex) {
+		LOG_WARN("exception while opening a download: {} (sid={})", ex.what(), to_hex(sid));
+		served = make_error(securepath::errc::unknown_error);
+	}
+	if(served) {
+		send_packet(protocol::download_data_open_reply{p.cid, sid, std::move(served->manifest), served->have.octets()});
+	} else {
+		send_packet(protocol::download_data_open_reply{p.cid, sid, served.get_error()});
+	}
+}
+
+void data_connection::handle(protocol::download_data_piece const& p) {
+	util::result<octet_vector> piece{make_error(protocol::errc::data_not_held)};
+	std::uint32_t retry_after = 0;
+	try {
+		auto it = downloads_.find(upload_key{p.sid, p.data_id});
+		if(it != downloads_.end()) {
+			piece = it->second->serve_piece(p.data_id, p.chunk_no, p.offset, p.size, context_.now());
+			if(piece.get_error().code() == make_error_code(protocol::errc::data_transfer_quota_exceeded)) {
+				retry_after = it->second->retry_after(context_.now());
+			}
+		}
+	} catch(securepath::error const& err) {
+		LOG_WARN("exception while serving a piece: {} (sid={})", err, to_hex(p.sid));
+		piece = err;
+	} catch(std::exception const& ex) {
+		LOG_WARN("exception while serving a piece: {} (sid={})", ex.what(), to_hex(p.sid));
+		piece = make_error(securepath::errc::unknown_error);
+	}
+	if(piece) {
+		send_packet(protocol::download_data_piece_reply{p, std::move(piece.value())});
+	} else {
+		protocol::download_data_piece_reply reply{p, piece.get_error()};
+		reply.retry_after = retry_after;
+		send_packet(reply);
+	}
+}
+
 }

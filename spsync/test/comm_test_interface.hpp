@@ -21,11 +21,13 @@ public:
 public:
 	// the test drive interface
 	using fetch_record_sig = result<std::deque<chain_block>>(sequence_number, sequence_number);
-	using fetch_data_sig = result<record_data_handle>(sequence_number);
+	using fetch_data_sig = std::optional<error>(data_id const&);
 	using commit_sig = result<chain_block>(record_handle);
 	using upload_sig = std::optional<error>(data_id const&);
 
 	void add_fetch_records_response(std::move_only_function<fetch_record_sig>);
+	/// the answer to the next fetch_data (it may put the data into the store first); a
+	/// fetch without a queued answer stays on its way
 	void add_fetch_data_response(std::move_only_function<fetch_data_sig>);
 	void add_commit_record_response(std::move_only_function<commit_sig>);
 	/// the answer to the next upload_data; an upload without a queued answer stays on its way
@@ -34,6 +36,9 @@ public:
 
 	/// every upload_data call so far, in order
 	std::vector<data_id> const& upload_requests() const;
+
+	/// every fetch_data call so far, in order
+	std::vector<data_id> const& fetch_requests() const;
 
 	sequence_number next_sequence_number();
 	octet_vector previous_block_hash() const;
@@ -51,7 +56,7 @@ public:
 	// -- comm_input interface, see interface.hpp --
 	virtual request_handle fetch_sequence_number();
 	virtual request_handle fetch_records(sequence_number start, sequence_number end);
-	virtual request_handle fetch_data(sequence_number record);
+	virtual request_handle fetch_data(data_id const&);
 	virtual request_handle commit_record(record_handle);
 	virtual request_handle upload_data(data_id const&);
 	virtual sync::progress& progress() const { return progress_; }

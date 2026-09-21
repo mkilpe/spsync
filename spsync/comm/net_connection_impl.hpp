@@ -124,12 +124,6 @@ struct network_connection_impl : network::encrypted_connection {
 		return h;
 	}
 
-	request_handle fetch_data(storage_id id, sequence_number record) {
-		auto h = ++call_id;
-		//todo
-		return h;
-	}
-
 	request_handle request_data_ticket(storage_id id, octet_vector data_id, data_right right) {
 		auto h = ++call_id;
 		send(protocol::request_data_ticket{h, std::move(id), std::move(data_id), static_cast<std::uint32_t>(right)});

@@ -1,4 +1,5 @@
 #include "data_uploader.hpp"
+#include "action_pump.hpp"
 
 #include <securepath/log/log.hpp>
 #include <securepath/util/conversions.hpp>
@@ -30,18 +31,7 @@ struct upload {
 	bool opened{};
 };
 
-using action = std::move_only_function<void()>;
-
-/// the exception being handled as an error, keeping the code of an error that was thrown
-error current_error() {
-	try {
-		throw;
-	} catch(error const& e) {
-		return e;
-	} catch(...) {
-		return error(std::current_exception());
-	}
-}
+using action = action_pump::action;
 
 }
 
@@ -90,38 +80,12 @@ public:
 	}
 
 private:
-	/**
-	 * Do what the state asks for. The channel calls and the callbacks run without the
-	 * lock; an answer arriving meanwhile (another thread, or the channel answering
-	 * inside the call) only flags another round, so rounds never nest.
-	 */
+	/// do what the state asks for, outside the lock (see action_pump)
 	void pump() {
-		bool run = false;
-		{
+		pump_.run([this] {
 			std::unique_lock lock{mutex_};
-			if(pumping_) {
-				again_ = true;
-			} else {
-				pumping_ = true;
-				run = true;
-			}
-		}
-		while(run) {
-			std::vector<action> actions;
-			{
-				std::unique_lock lock{mutex_};
-				actions = collect();
-			}
-			for(auto& act : actions) {
-				act();
-			}
-			std::unique_lock lock{mutex_};
-			run = again_;
-			again_ = false;
-			if(!run) {
-				pumping_ = false;
-			}
-		}
+			return collect();
+		});
 	}
 
 	// requires the mutex, as everything below down to the channel answers
@@ -192,7 +156,7 @@ private:
 					}
 				});
 			} catch(...) {
-				self->on_opened(generation, id, util::result<have_bitmap>{current_error()});
+				self->on_opened(generation, id, util::result<have_bitmap>{util::current_exception_error()});
 			}
 		};
 	}
@@ -212,7 +176,7 @@ private:
 					}
 				});
 			} catch(...) {
-				self->on_piece_sent(generation, id, chunk_no, size, current_error());
+				self->on_piece_sent(generation, id, chunk_no, size, util::current_exception_error());
 			}
 		};
 	}
@@ -305,8 +269,7 @@ private:
 	std::vector<action> notifications_;
 	/// answers to calls made before a reset carry an older generation and are ignored
 	std::uint64_t generation_{};
-	bool pumping_{};
-	bool again_{};
+	action_pump pump_;
 };
 
 data_uploader::data_uploader(record_data_store& store, data_channel& channel, data_upload_config config

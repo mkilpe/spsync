@@ -87,6 +87,9 @@ public:
 
 	void add_listener(std::shared_ptr<connection> const&);
 
+	/// tell the listeners that a data server holds a data of this storage (RD4 notify_data)
+	void notify_data(data_id const&, bool complete);
+
 	/**
 	 * The descriptor of a data a record of this storage names, from the record data index
 	 * the record storage keeps (record_data.txt RDS 2); nullopt for a data no stored
@@ -116,6 +119,8 @@ public:
 private:
 	std::optional<block_envelope> make_envelope(chain_block const&) const;
 	void notify_listeners(chain_block const& c, std::optional<block_envelope> const&);
+	/// requires the mutex; listeners that went away are dropped on the way
+	void for_each_listener(std::function<void(connection&)> const&);
 
 private:
 	mutable std::mutex mutex_;

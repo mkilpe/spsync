@@ -11,7 +11,12 @@
 namespace securepath::sync {
 
 data_encryptor::data_encryptor(encryption_key const& group_key, std::uint32_t chunk_size, chunk_sink sink)
-: nonce_(crypto::random_octet_vector(data_nonce_size))
+: data_encryptor(group_key, chunk_size, std::move(sink), crypto::random_octet_vector(data_nonce_size))
+{
+}
+
+data_encryptor::data_encryptor(encryption_key const& group_key, std::uint32_t chunk_size, chunk_sink sink, octet_vector nonce)
+: nonce_(std::move(nonce))
 , data_key_(derive_data_key(group_key.key, nonce_))
 , chunk_size_(chunk_size)
 , key_seq_(group_key.key_seq)

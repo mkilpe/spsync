@@ -19,8 +19,14 @@ struct comm_input {
 	/// Fetches records for specific range of sequence numbers [start, end]. If end is invalid, the server max sequence is used.
 	virtual request_handle fetch_records(sequence_number start, sequence_number end) = 0;
 
-	/// Fetches record data for given record
-	virtual request_handle fetch_data(sequence_number record) = 0;
+	/**
+	 * Downloads a data a stored record names from the storage's data servers into the
+	 * data store (RD7). Answered with on_data_downloaded: no error when the data is
+	 * complete here, data_not_held when the holders have only a part yet (the chunks they
+	 * had are kept). Asking again for a data on its way returns the running download's
+	 * handle; a lost connection ends it without an answer, what was received stays.
+	 */
+	virtual request_handle fetch_data(data_id const&) = 0;
 
 	/// Tries to commit to a record
 	virtual request_handle commit_record(record_handle) = 0;
@@ -64,8 +70,12 @@ struct comm_output : event_system::event_handler {
 	/// called when record is received as a response to fetch_records call
 	virtual void on_record_response(request_handle, record_response const&) = 0;
 
-	/// called when record data is fully received as a response to fetch_data call
-	virtual void on_data_response(request_handle, result<record_data_handle> const&) = 0;
+	/// called when a fetch_data ended: the data is complete in the data store, or the error
+	virtual void on_data_downloaded(request_handle, std::optional<error>) = 0;
+
+	/// called when the server tells that a data server holds a data of the storage
+	/// (notify_data): a data that was remote_not_complete may be fetched now
+	virtual void on_data_available(data_id, bool complete) {}
 
 	/// called when getting response to a commit attempt from the server
 	virtual void on_commit_response(request_handle, commit_response const&) = 0;
@@ -95,8 +105,11 @@ struct on_sequence_number_response {
 struct on_record_response {
 	typedef void type(request_handle, record_response const&);
 };
-struct on_data_response {
-	typedef void type(request_handle, result<record_data_handle> const&);
+struct on_data_downloaded {
+	typedef void type(request_handle, std::optional<error>);
+};
+struct on_data_available {
+	typedef void type(data_id, bool);
 };
 struct on_commit_response {
 	typedef void type(request_handle, commit_response const&);

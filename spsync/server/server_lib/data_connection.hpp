@@ -35,9 +35,10 @@ public:
 
 /**
  * One client on the data listener (record_data.txt RD4/RD12), transport left out: the
- * uploads the client opened with a ticket and the chunks it sends for them. Every upload
- * starts with a ticket that must be signed by a trusted record server, unexpired, for
- * uploading, and issued to the key this connection authenticated with.
+ * uploads and downloads the client opened with a ticket and the pieces that move for
+ * them. Every transfer starts with a ticket that must be signed by a trusted record
+ * server, unexpired, for the right direction, and issued to the key this connection
+ * authenticated with.
  */
 class data_connection {
 public:
@@ -48,6 +49,8 @@ public:
 
 	void handle(protocol::upload_data_manifest const&);
 	void handle(protocol::upload_data_chunk const&);
+	void handle(protocol::download_data_open const&);
+	void handle(protocol::download_data_piece const&);
 
 private:
 	virtual void send(octet_span s) = 0;
@@ -75,6 +78,8 @@ private:
 	data_server_context& context_;
 	crypto::public_key_id id_;
 	std::map<upload_key, upload> uploads_;
+	/// the downloads a ticket opened on this connection
+	std::map<upload_key, std::shared_ptr<server_data_store>> downloads_;
 };
 
 }

@@ -36,7 +36,8 @@ public:
 	virtual void on_disconnected(std::optional<error>);
 	virtual void on_sequence_number_response(request_handle, result<sequence_info> const&);
 	virtual void on_record_response(request_handle, record_response const&);
-	virtual void on_data_response(request_handle, result<record_data_handle> const&);
+	virtual void on_data_downloaded(request_handle, std::optional<error>);
+	virtual void on_data_available(data_id, bool complete);
 	virtual void on_commit_response(request_handle, commit_response const&);
 	virtual void on_data_uploaded(request_handle, std::optional<error>);
 	virtual void on_record_received(chain_block const&, std::optional<block_envelope> const& = {});
@@ -44,6 +45,7 @@ public:
 	// --- engine_input interface, see interface.hpp ---
 	virtual record_handle sync_object_change(object_id, metadata, record_data_handle = {});
 	virtual record_data_handle object_data(record_handle, std::size_t change = 0);
+	virtual record_data_handle fetch_object_data(record_handle, std::size_t change = 0);
 	virtual record_handle sync_user_change(plain_user_change_data change_data, metadata = {});
 	virtual record_handle sync_segment_end(metadata = {});
 

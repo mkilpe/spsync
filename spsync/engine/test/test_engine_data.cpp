@@ -5,6 +5,8 @@
 #include <spsync/core/records/segment_record.hpp>
 #include <spsync/core/records/user_change_record.hpp>
 
+#include <spsync/protocol/error.hpp>
+
 #include <securepath/test_frame/test_suite.hpp>
 #include <securepath/test_frame/test_utils.hpp>
 
@@ -57,6 +59,20 @@ struct data_context : test::engine_context {
 	data_id data_of(record_handle const& h) const {
 		auto const rec = h->record().deserialise_to<data_change_record>();
 		return rec.begin()->data.data.value().manifest_digest;
+	}
+
+	data_observer observer{single_thread_event_loop};
+};
+
+/// a member that joins somebody else's chain: the group key, no records of its own
+struct reader_context : test::engine_context {
+	reader_context() {
+		enc_keys.insert(encryption_key{sequence_number{1}, to_octet_vector("12345678901234567890123456789012")});
+		engine.set_output(&observer);
+	}
+
+	~reader_context() {
+		engine.set_output(nullptr);
 	}
 
 	data_observer observer{single_thread_event_loop};
@@ -287,6 +303,201 @@ TEST_CASE("engine without a data store", "[unit]") {
 	io.set_output(engine);
 	CHECK_THROWS(engine.sync_object_change(create_object_id(), metadata{}
 		, std::make_shared<memory_record_data>(securepath::test::random_octet_vector(100))));
+}
+
+// RDS 6: data of others is deferred until asked for (lazy, RD6); asking fetches it and
+// the state tells how it went
+TEST_CASE("engine fetches record data", "[unit]") {
+	auto const content = securepath::test::random_octet_vector(300000);
+
+	// the author's side first: the test contexts share a database file name, so the
+	// reader is made when the author is done, from what the author left in memory
+	std::deque<chain_block> blocks;
+	data_manifest manifest;
+	std::vector<octet_vector> chunks;
+	data_id id;
+	record_tag sent_tag;
+	record_tag again_tag;
+	{
+		data_context author;
+		author.add_default_commit_response();
+		auto sent = author.engine.sync_object_change(create_object_id(), metadata{}, std::make_shared<memory_record_data>(content));
+		author.io.process_events();
+		REQUIRE(sent->state() == record_state::in_sync);
+		id = author.data_of(sent);
+		sent_tag = sent->tag();
+		manifest = author.data_store.manifest(id).value();
+		for(std::uint64_t no = 0; no != manifest.chunk_digests.size(); ++no) {
+			chunks.push_back(author.data_store.read_chunk(id, no).value());
+		}
+		// the same content once more, as another object
+		author.add_default_commit_response();
+		auto again = author.engine.sync_object_change(create_object_id(), metadata{}, std::make_shared<memory_record_data>(content));
+		author.io.process_events();
+		REQUIRE(again->state() == record_state::in_sync);
+		REQUIRE(author.data_of(again) != id);
+		again_tag = again->tag();
+		for(sequence_number seq{1}; seq <= author.storage.last_block().sequence; ++seq) {
+			auto const h = author.storage.find(seq);
+			auto block = h->record();
+			block.set_sequence_and_parent_hash(h->block_id().sequence, h->parent_block_hash());
+			blocks.push_back(block);
+		}
+	}
+
+	reader_context reader;
+	for(auto const& block : blocks) {
+		reader.engine.on_record_received(block);
+	}
+	auto received = reader.storage.find_tag(sent_tag);
+	REQUIRE(received);
+	REQUIRE(received->state() == record_state::in_sync);
+
+	// lazy: known, not asked for
+	auto data = reader.engine.object_data(received);
+	REQUIRE(data);
+	CHECK(data->state() == record_data_state::deferred);
+	CHECK(data->size() == content.size());
+	CHECK(reader.io.fetch_requests().empty());
+
+	/// what comm does for a fetch: the first n chunks of the ciphertext into the reader's store
+	auto const copy_chunks = [&](std::uint64_t n) {
+		return [&, n](data_id const& wanted) -> std::optional<error> {
+			bool ok = reader.data_store.set_manifest(wanted, manifest);
+			for(std::uint64_t no = 0; ok && no != n; ++no) {
+				ok = reader.data_store.store_chunk(wanted, no, chunks[no]);
+			}
+			auto const complete = reader.data_store.find(wanted)->state == record_data_state::in_sync;
+			return complete ? std::nullopt : std::optional<error>{make_error(protocol::errc::data_not_held)};
+		};
+	};
+	auto const chunk_count = chunks.size();
+
+	SECTION("fetched") {
+		reader.io.add_fetch_data_response(copy_chunks(chunk_count));
+		auto fetched = reader.engine.fetch_object_data(received);
+		REQUIRE(fetched);
+		CHECK(fetched->state() == record_data_state::download_pending);
+		CHECK(reader.io.fetch_requests() == std::vector<data_id>{id});
+		// asking again while it is on its way asks nothing new
+		reader.engine.fetch_object_data(received);
+		CHECK(reader.io.fetch_requests().size() == 1);
+
+		reader.io.process_events();
+		CHECK(fetched->state() == record_data_state::in_sync);
+		octet_vector read_back(content.size());
+		CHECK(fetched->read(0, read_back.data(), read_back.size()) == content.size());
+		CHECK(read_back == content);
+		WAIT_CHECK(reader.observer.state_changes == 2, 2s);
+		REQUIRE(reader.observer.states.size() == 2);
+		CHECK(reader.observer.states[0] == std::pair{id, record_data_state::download_pending});
+		CHECK(reader.observer.states[1] == std::pair{id, record_data_state::in_sync});
+
+		// held: nothing to fetch
+		reader.engine.fetch_object_data(received);
+		CHECK(reader.io.fetch_requests().size() == 1);
+	}
+
+	SECTION("remote not complete, then notified") {
+		// the author's upload is still in progress: the holders have nothing of it yet
+		reader.io.add_fetch_data_response(copy_chunks(0));
+		auto fetched = reader.engine.fetch_object_data(received);
+		reader.io.process_events();
+		CHECK(fetched->state() == record_data_state::remote_not_complete);
+		CHECK(reader.io.fetch_requests().size() == 1);
+
+		// a notification for some other data changes nothing
+		reader.engine.on_data_available(securepath::test::random_octet_vector(64), true);
+		CHECK(reader.io.fetch_requests().size() == 1);
+
+		// notify_data: the data is there now
+		reader.io.add_fetch_data_response(copy_chunks(chunk_count));
+		reader.engine.on_data_available(id, true);
+		CHECK(fetched->state() == record_data_state::download_pending);
+		CHECK(reader.io.fetch_requests() == std::vector<data_id>{id, id});
+		reader.io.process_events();
+		CHECK(fetched->state() == record_data_state::in_sync);
+	}
+
+	SECTION("failed, asked again") {
+		reader.io.add_fetch_data_response([](data_id const&) {
+			return make_error(protocol::errc::data_transfer_quota_exceeded); });
+		auto fetched = reader.engine.fetch_object_data(received);
+		reader.io.process_events();
+		CHECK(fetched->state() == record_data_state::download_pending);
+		WAIT_CHECK(reader.observer.failures == 1, 2s);
+
+		// left alone while connected...
+		reader.add_default_commit_response();
+		reader.engine.sync_object_change(create_object_id(), metadata{});
+		reader.io.process_events();
+		CHECK(reader.io.fetch_requests().size() == 1);
+
+		// ...until it is asked for again
+		reader.io.add_fetch_data_response(copy_chunks(chunk_count));
+		reader.engine.fetch_object_data(received);
+		CHECK(reader.io.fetch_requests().size() == 2);
+		reader.io.process_events();
+		CHECK(fetched->state() == record_data_state::in_sync);
+	}
+
+	SECTION("a lost connection resumes the download") {
+		auto fetched = reader.engine.fetch_object_data(received);
+		reader.io.process_events();
+		CHECK(reader.io.fetch_requests().size() == 1);
+
+		reader.io.add_fetch_data_response(copy_chunks(chunk_count));
+		reader.engine.on_disconnected({});
+		reader.engine.on_connected();
+		reader.io.process_events();
+		CHECK(reader.io.fetch_requests().size() == 2);
+		CHECK(fetched->state() == record_data_state::in_sync);
+	}
+
+	SECTION("the same content under another data id is not downloaded") {
+		// the first copy comes down the usual way
+		reader.io.add_fetch_data_response(copy_chunks(chunk_count));
+		auto first = reader.engine.fetch_object_data(received);
+		reader.io.process_events();
+		REQUIRE(first->state() == record_data_state::in_sync);
+		// download_pending and in_sync of the first one, delivered on the loop thread
+		WAIT_REQUIRE(reader.observer.state_changes == 2, 2s);
+
+		// the author sends the same file again: another nonce, another data id
+		auto const again_received = reader.storage.find_tag(again_tag);
+		REQUIRE(again_received);
+		auto known = reader.engine.object_data(again_received);
+		REQUIRE(known);
+		CHECK(known->state() == record_data_state::deferred);
+
+		auto fetched = reader.engine.fetch_object_data(again_received);
+		REQUIRE(fetched);
+		// made from what is held: nothing was asked from anybody
+		CHECK(fetched->state() == record_data_state::in_sync);
+		CHECK(reader.io.fetch_requests().size() == 1);
+		octet_vector read_back(content.size());
+		CHECK(fetched->read(0, read_back.data(), read_back.size()) == content.size());
+		CHECK(read_back == content);
+		WAIT_CHECK(reader.observer.state_changes == 3, 2s);
+		REQUIRE(reader.observer.states.size() == 3);
+		CHECK(reader.observer.states[2].second == record_data_state::in_sync);
+		CHECK(reader.observer.states[2].first != id);
+	}
+
+	SECTION("evicted data is fetched again") {
+		reader.io.add_fetch_data_response(copy_chunks(chunk_count));
+		auto fetched = reader.engine.fetch_object_data(received);
+		reader.io.process_events();
+		REQUIRE(fetched->state() == record_data_state::in_sync);
+
+		fetched->remove_data();
+		CHECK(fetched->state() == record_data_state::removed);
+		reader.io.add_fetch_data_response(copy_chunks(chunk_count));
+		reader.engine.fetch_object_data(received);
+		CHECK(reader.io.fetch_requests().size() == 2);
+		reader.io.process_events();
+		CHECK(fetched->state() == record_data_state::in_sync);
+	}
 }
 
 }

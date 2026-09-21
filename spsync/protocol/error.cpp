@@ -28,6 +28,8 @@ namespace {
 		, "data too big"
 		, "unknown data"
 		, "no data servers"
+		, "data not held"
+		, "data transfer quota exceeded"
 		};
 
 	using category_type = def_error_category<errc>;

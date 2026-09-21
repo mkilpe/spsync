@@ -21,6 +21,7 @@ struct spsync_server_commands : sync::spsync_server_params, command_parser {
 	int anti_entropy{};
 	int upload_expiry{};
 	int ticket_validity{};
+	int transfer_window{};
 
 	spsync_server_commands() {
 		add(help, "help", "h", "show help");
@@ -44,6 +45,8 @@ struct spsync_server_commands : sync::spsync_server_params, command_parser {
 		add(data_params.quota.max_data_size, "max_data_size", "", "biggest single record data (encrypted bytes) this server takes, 0 = no limit");
 		add(data_params.quota.max_storage_bytes, "max_storage_data", "", "record data bytes one storage may take on this server, 0 = no limit");
 		add(upload_expiry, "upload_expiry", "", "seconds after which an untouched incomplete upload is dropped");
+		add(data_params.transfer.bytes_per_window, "transfer_quota", "", "record data bytes served per storage and window, 0 = no limit");
+		add(transfer_window, "transfer_window", "", "seconds of a transfer quota window");
 	}
 
 	void handle_inputs() {
@@ -59,6 +62,9 @@ struct spsync_server_commands : sync::spsync_server_params, command_parser {
 		}
 		if(ticket_validity) {
 			storage_params.ticket_validity = std::chrono::seconds(ticket_validity);
+		}
+		if(transfer_window) {
+			data_params.transfer.window = std::chrono::seconds(transfer_window);
 		}
 		if(upload_expiry) {
 			data_params.incomplete_upload_expiry = std::chrono::seconds(upload_expiry);

@@ -4,6 +4,7 @@
 
 #include <securepath/util/octet_vector.hpp>
 
+#include <cstdint>
 #include <filesystem>
 #include <string>
 
@@ -68,6 +69,14 @@ struct sync_engine_config {
 	 * Used by the owner of the engine (client_sync) to set up the data store.
 	 */
 	std::filesystem::path data_root;
+
+	/**
+	 * Fetch policy for the record data of others (record_data.txt RD6): data up to this
+	 * many (encrypted) octets is fetched as soon as its record arrives, bigger data waits
+	 * until it is asked for (engine_input::fetch_object_data). 0 = lazy, nothing is
+	 * fetched unasked - the mobile default.
+	 */
+	std::uint64_t auto_fetch_max_size{};
 
 	/// this is id for the repository, it is only used for logging to help trace/debug things if set
 	std::string log_id;

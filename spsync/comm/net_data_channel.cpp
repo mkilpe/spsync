@@ -5,6 +5,7 @@
 
 #include <securepath/log/log.hpp>
 #include <securepath/network/encryption/encrypted_connection.hpp>
+#include <securepath/network/encryption/framing.hpp>
 #include <securepath/serialisation/util.hpp>
 #include <securepath/util/conversions.hpp>
 
@@ -19,6 +20,14 @@ namespace {
 /// the transport that failed (try the next holder) or the holder that refused (final)
 using manifest_handler = std::move_only_function<void(util::result<octet_vector>, bool transport_failure)>;
 using chunk_handler = data_channel::piece_callback;
+
+/// the answer to the opening of a download as it comes off the wire
+struct opened_download {
+	data_manifest manifest;
+	octet_vector have;
+};
+using open_download_handler = std::move_only_function<void(util::result<opened_download>, bool transport_failure)>;
+using fetch_handler = data_download_channel::fetch_callback;
 
 std::string endpoint_name(data_endpoint const& e) {
 	return e.host + ":" + std::to_string(e.port);
@@ -61,6 +70,18 @@ public:
 		auto const cid = ++call_id_;
 		post(cid, protocol::upload_data_chunk{cid, sid, id, chunk_no, offset, std::move(bytes)}, chunks_, std::move(handler)
 			, [](chunk_handler& h, error const& err) { h(err); });
+	}
+
+	void send_download_open(data_ticket const& ticket, open_download_handler handler) {
+		auto const cid = ++call_id_;
+		post(cid, protocol::download_data_open{cid, ticket}, downloads_, std::move(handler)
+			, [](open_download_handler& h, error const& err) { h(util::result<opened_download>{err}, true); });
+	}
+
+	void send_fetch(octet_vector const& sid, data_id const& id, std::uint64_t chunk_no, std::uint64_t offset, std::uint32_t size, fetch_handler handler) {
+		auto const cid = ++call_id_;
+		post(cid, protocol::download_data_piece{cid, sid, id, chunk_no, offset, size}, fetches_, std::move(handler)
+			, [](fetch_handler& h, error const& err) { h(util::result<octet_vector>{err}); });
 	}
 
 private:
@@ -145,6 +166,24 @@ private:
 		}
 	}
 
+	void handle(protocol::download_data_open_reply const& p) {
+		auto handler = take(downloads_, p.cid);
+		if(handler && p.error) {
+			handler(util::result<opened_download>{protocol::to_error(p.error)}, false);
+		} else if(handler) {
+			handler(util::result<opened_download>{opened_download{p.manifest, p.have}}, false);
+		}
+	}
+
+	void handle(protocol::download_data_piece_reply const& p) {
+		auto handler = take(fetches_, p.cid);
+		if(handler && p.error) {
+			handler(util::result<octet_vector>{protocol::to_error(p.error)});
+		} else if(handler) {
+			handler(util::result<octet_vector>{p.bytes});
+		}
+	}
+
 	template<typename Handler>
 	Handler take(std::map<protocol::call_id, Handler>& calls, protocol::call_id cid) {
 		Handler ret;
@@ -161,6 +200,8 @@ private:
 	void fail_all(error const& err) {
 		std::map<protocol::call_id, manifest_handler> manifests;
 		std::map<protocol::call_id, chunk_handler> chunks;
+		std::map<protocol::call_id, open_download_handler> downloads;
+		std::map<protocol::call_id, fetch_handler> fetches;
 		{
 			std::unique_lock lock{mutex_};
 			if(!dead_) {
@@ -169,6 +210,8 @@ private:
 			}
 			manifests.swap(manifests_);
 			chunks.swap(chunks_);
+			downloads.swap(downloads_);
+			fetches.swap(fetches_);
 			outbox_.clear();
 		}
 		for(auto& [cid, handler] : manifests) {
@@ -177,16 +220,25 @@ private:
 		for(auto& [cid, handler] : chunks) {
 			handler(err);
 		}
+		for(auto& [cid, handler] : downloads) {
+			handler(util::result<opened_download>{err}, true);
+		}
+		for(auto& [cid, handler] : fetches) {
+			handler(util::result<octet_vector>{err});
+		}
 	}
 
 private:
 	data_endpoint const endpoint_;
 	std::atomic<protocol::call_id> call_id_{0};
-	serialisation::packet_deserialiser<protocol::d2c_types> deser_;
+	// a manifest reply names up to max_data_chunks digests: the transport frame is the bound
+	serialisation::packet_deserialiser<protocol::d2c_types> deser_{network::max_frame_size};
 
 	mutable std::mutex mutex_;
 	std::map<protocol::call_id, manifest_handler> manifests_;
 	std::map<protocol::call_id, chunk_handler> chunks_;
+	std::map<protocol::call_id, open_download_handler> downloads_;
+	std::map<protocol::call_id, fetch_handler> fetches_;
 	/// packets waiting for the hello to be answered
 	std::vector<octet_vector> outbox_;
 	error failure_;
@@ -271,12 +323,79 @@ public:
 		}
 	}
 
+	/// one attempt to open a download, as for an upload
+	struct download_attempt {
+		data_descriptor descriptor;
+		data_grant grant;
+		download_callback callback;
+		std::size_t holder{};
+	};
+
+	void open_download(data_descriptor const& descriptor, download_callback cb) {
+		auto att = std::make_shared<download_attempt>(download_attempt{descriptor, {}, std::move(cb)});
+		std::weak_ptr<impl> weak = shared_from_this();
+		tickets_(descriptor, data_right::download, [weak, att](util::result<data_grant> grant) {
+			auto self = weak.lock();
+			if(!self) {
+				att->callback(util::result<download_info>{make_error(securepath::errc::invalid_state, "data channel closed")});
+			} else if(!grant) {
+				att->callback(util::result<download_info>{grant.get_error()});
+			} else {
+				att->grant = std::move(grant.value());
+				self->try_download_holder(att, make_error(protocol::errc::data_not_held, "the grant names no data server"));
+			}
+		});
+	}
+
+	/// a holder that is down or does not hold the data is the next entry (RD13)
+	void try_download_holder(std::shared_ptr<download_attempt> const& att, error const& last_error) {
+		if(att->holder >= att->grant.holders.size()) {
+			att->callback(util::result<download_info>{last_error});
+		} else {
+			auto link = acquire_link(att->grant.holders[att->holder]);
+			std::weak_ptr<impl> weak = shared_from_this();
+			link->send_download_open(att->grant.ticket, [weak, att, link](util::result<opened_download> opened, bool transport_failure) {
+				auto self = weak.lock();
+				bool const not_held = !opened && opened.get_error().code() == make_error_code(protocol::errc::data_not_held);
+				if(opened && self) {
+					self->remember_download(att->grant.ticket, link);
+					att->callback(util::result<download_info>{download_info{std::move(opened->manifest)
+						, have_bitmap{att->descriptor.chunk_count(), std::move(opened->have)}}});
+				} else if((transport_failure || not_held) && self) {
+					++att->holder;
+					self->try_download_holder(att, opened.get_error());
+				} else {
+					att->callback(util::result<download_info>{opened ? make_error(securepath::errc::invalid_state, "data channel closed") : opened.get_error()});
+				}
+			});
+		}
+	}
+
+	void fetch_piece(data_id const& id, std::uint64_t chunk_no, std::uint64_t offset, std::uint32_t size, fetch_callback cb) {
+		std::shared_ptr<data_link> link;
+		octet_vector sid;
+		{
+			std::unique_lock lock{mutex_};
+			auto it = downloads_.find(id);
+			if(it != downloads_.end()) {
+				link = it->second.link;
+				sid = it->second.sid;
+			}
+		}
+		if(link) {
+			link->send_fetch(sid, id, chunk_no, offset, size, std::move(cb));
+		} else {
+			cb(util::result<octet_vector>{make_error(protocol::errc::data_not_held, "no download opened for the data")});
+		}
+	}
+
 	void close() {
 		std::map<std::string, std::shared_ptr<data_link>> links;
 		{
 			std::unique_lock lock{mutex_};
 			links.swap(links_);
 			uploads_.clear();
+			downloads_.clear();
 		}
 		for(auto& [name, link] : links) {
 			link->shutdown();
@@ -308,6 +427,11 @@ private:
 		uploads_[ticket.data()] = upload{ticket.storage_id(), std::move(link)};
 	}
 
+	void remember_download(data_ticket const& ticket, std::shared_ptr<data_link> link) {
+		std::unique_lock lock{mutex_};
+		downloads_[ticket.data()] = upload{ticket.storage_id(), std::move(link)};
+	}
+
 private:
 	struct upload {
 		octet_vector sid;
@@ -323,6 +447,8 @@ private:
 	std::map<std::string, std::shared_ptr<data_link>> links_;
 	/// where the chunks of an opened upload go
 	std::map<data_id, upload> uploads_;
+	/// where the pieces of an opened download come from
+	std::map<data_id, upload> downloads_;
 };
 
 net_data_channel::net_data_channel(network::context& context, ticket_source tickets, std::chrono::seconds timeout)
@@ -340,6 +466,14 @@ void net_data_channel::open_upload(data_descriptor const& descriptor, data_manif
 
 void net_data_channel::send_piece(data_id const& id, std::uint64_t chunk_no, std::uint64_t offset, octet_vector bytes, piece_callback cb) {
 	impl_->send_piece(id, chunk_no, offset, std::move(bytes), std::move(cb));
+}
+
+void net_data_channel::open_download(data_descriptor const& descriptor, download_callback cb) {
+	impl_->open_download(descriptor, std::move(cb));
+}
+
+void net_data_channel::fetch_piece(data_id const& id, std::uint64_t chunk_no, std::uint64_t offset, std::uint32_t size, fetch_callback cb) {
+	impl_->fetch_piece(id, chunk_no, offset, size, std::move(cb));
 }
 
 void net_data_channel::close() {

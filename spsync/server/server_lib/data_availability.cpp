@@ -7,15 +7,17 @@
 
 namespace securepath::sync {
 
-void data_availability::announce(protocol::storage_id const& sid, data_id const& id, data_holding const& holding) {
+bool data_availability::announce(protocol::storage_id const& sid, data_id const& id, data_holding const& holding) {
 	std::unique_lock lock{mutex_};
 	auto& list = holdings_[data_key{sid, id}];
 	auto it = std::ranges::find(list, holding.holder, &data_holding::holder);
+	bool const was_complete = it != list.end() && it->complete;
 	if(it == list.end()) {
 		list.push_back(holding);
 	} else {
 		*it = holding;
 	}
+	return holding.complete && !was_complete;
 }
 
 void data_availability::set_load(crypto::public_key_id const& holder, holder_load const& load) {

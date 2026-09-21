@@ -1,4 +1,5 @@
 #include "test_sync_server.hpp"
+#include <spsync/protocol/error.hpp>
 #include <spsync/client/record_util.hpp>
 #include <spsync/core/user_merge.hpp>
 #include <spsync/core/records/segment_record.hpp>
@@ -27,6 +28,8 @@ void test_sync_server_client::connect(test_sync_server& server) {
 	LOG_INFO("Client connected");
 	server_ = &server;
 	last_pushed_record_ = server_->sync.current_sequence_number();
+	// like the real server: what was announced before the connection is not replayed
+	seen_announcements_ = server_->announced.size();
 	output_->on_connected();
 }
 
@@ -48,6 +51,11 @@ bool test_sync_server_client::handle_events() {
 				ret = true;
 			}
 			last_pushed_record_ += recs.size();
+		}
+		// notify_data: what became complete at the data servers since the last look
+		while(seen_announcements_ < server_->announced.size()) {
+			output_->on_data_available(server_->announced[seen_announcements_++], true);
+			ret = true;
 		}
 	}
 	// take the events out in case handling an event adds another event
@@ -84,13 +92,24 @@ request_handle test_sync_server_client::fetch_records(sequence_number start, seq
 	return ret;
 }
 
-request_handle test_sync_server_client::fetch_data(sequence_number record) {
+request_handle test_sync_server_client::fetch_data(data_id const& id) {
 	assert(output_);
 	request_handle ret = ++req_handle;
-	events_.push_back([=, this] {
-		//t: implement when data handling is done
-		//virtual void on_data_response(request_handle, result<record_data_handle> const&) = 0;
-	});
+	fetch_requests_.push_back(id);
+	if(server_) {
+		events_.push_back([=, this] {
+			std::optional<error> err;
+			auto it = server_->holdings.find(id);
+			bool ok = it != server_->holdings.end() && data_store_.set_manifest(id, it->second.manifest);
+			for(std::uint64_t no = 0; ok && no != it->second.chunks.size(); ++no) {
+				ok = data_store_.store_chunk(id, no, it->second.chunks[no]);
+			}
+			if(!ok) {
+				err = make_error(protocol::errc::data_not_held);
+			}
+			output_->on_data_downloaded(ret, err);
+		});
+	}
 	return ret;
 }
 
@@ -100,6 +119,13 @@ request_handle test_sync_server_client::upload_data(data_id const& id) {
 	upload_requests_.push_back(id);
 	if(server_) {
 		events_.push_back([=, this] {
+			test_sync_server::held_data held;
+			held.manifest = data_store_.manifest(id).value_or(data_manifest{});
+			for(std::uint64_t no = 0; no != held.manifest.chunk_digests.size(); ++no) {
+				held.chunks.push_back(data_store_.read_chunk(id, no).value_or(octet_vector{}));
+			}
+			server_->holdings[id] = std::move(held);
+			server_->announced.push_back(id);
 			output_->on_data_uploaded(ret, std::nullopt);
 		});
 	}

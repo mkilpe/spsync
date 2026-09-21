@@ -211,5 +211,8 @@ void connection::notify(protocol::storage_id const& sid, chain_block const& c, s
 	send_packet(protocol::notify_record{sid, c, env});
 }
 
+void connection::notify_data(protocol::storage_id const& sid, data_id const& id, bool complete) {
+	send_packet(protocol::notify_data{sid, id, complete});
 }
 
+}

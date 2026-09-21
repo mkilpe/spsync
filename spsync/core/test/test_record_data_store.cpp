@@ -766,4 +766,108 @@ TEST_CASE("record data store chunk pieces", "[unit]") {
 	}
 }
 
+// (RDS 6) the same content under another data id - the same file sent again - is rebuilt
+// from what is held instead of downloaded: the wanted data's nonce and key give the same
+// chunks again, and only chunks that hash to the wanted manifest digest are taken
+TEST_CASE("record data store adopts held content", "[unit]") {
+	std::string const other_db = "record_data_store_test_b.db";
+	std::filesystem::path const other_root = "record_data_store_test_b";
+	record_data_store origin{fresh_database(other_db, other_root), other_root};
+	record_data_store store{fresh_database(), data_root};
+	auto const key = test_group_key();
+	std::uint64_t const size = 250000;
+
+	// the same plaintext twice: another nonce, so another data id
+	auto const first = write_pattern(origin, key, size, 100000, 7777);
+	auto const second = write_pattern(origin, key, size, 100000, 5000);
+	REQUIRE(first.descriptor.manifest_digest != second.descriptor.manifest_digest);
+	REQUIRE(first.header.content_digest == second.header.content_digest);
+	auto const& wanted = second.descriptor;
+
+	// here: the first is held (downloaded and opened once), the second only known
+	auto const remote = copy_of(origin, first);
+	auto held = store.open({key}, first.descriptor, first.header);
+	REQUIRE(held);
+	REQUIRE(store.set_manifest(first.descriptor.manifest_digest, remote.manifest));
+	CHECK(!store.find_content(first.header.content_digest, wanted.manifest_digest));
+	for(auto const& [no, chunk] : remote.chunks) {
+		REQUIRE(store.store_chunk(first.descriptor.manifest_digest, no, chunk));
+	}
+	auto handle = store.open({key}, wanted, second.header);
+	REQUIRE(handle);
+	CHECK(handle->state() == record_data_state::deferred);
+
+	// the index: a complete data with that content, other than the wanted one
+	auto const content = store.find_content(second.header.content_digest, wanted.manifest_digest);
+	REQUIRE(content);
+	CHECK(content->descriptor == first.descriptor);
+	CHECK(content->header == first.header);
+	CHECK(!store.find_content(second.header.content_digest, first.descriptor.manifest_digest));
+	CHECK(!store.find_content(securepath::test::random_octet_vector(64), wanted.manifest_digest));
+
+	SECTION("rebuilt") {
+		CHECK(store.adopt_content(*held, key, wanted, second.header));
+		CHECK(handle->state() == record_data_state::in_sync);
+		CHECK(handle->available_size() == size);
+		CHECK(read_bytes(*handle, 0, size) == pattern_bytes(0, size));
+		// bit for bit what the author uploaded
+		for(std::uint64_t no = 0; no != wanted.chunk_count(); ++no) {
+			CHECK(store.read_chunk(wanted.manifest_digest, no) == origin.read_chunk(wanted.manifest_digest, no));
+		}
+		CHECK(store.manifest(wanted.manifest_digest) == second.manifest);
+		CHECK(std::filesystem::is_empty(data_root / ".staging"));
+		// both are sources for a third now
+		CHECK(store.find_content(second.header.content_digest, securepath::test::random_octet_vector(64)));
+	}
+
+	SECTION("a part that was downloaded already is replaced") {
+		REQUIRE(store.set_manifest(wanted.manifest_digest, second.manifest));
+		REQUIRE(store.store_chunk(wanted.manifest_digest, 1, origin.read_chunk(wanted.manifest_digest, 1).value()));
+		CHECK(store.adopt_content(*held, key, wanted, second.header));
+		CHECK(handle->state() == record_data_state::in_sync);
+		CHECK(read_bytes(*handle, 0, size) == pattern_bytes(0, size));
+	}
+
+	SECTION("not the key, not the content") {
+		CHECK(!store.adopt_content(*held, test_group_key(), wanted, second.header));
+		memory_record_data other{pattern_bytes(1, size)};
+		CHECK(!store.adopt_content(other, key, wanted, second.header));
+		memory_record_data shorter{pattern_bytes(0, size - 1)};
+		CHECK(!store.adopt_content(shorter, key, wanted, second.header));
+		CHECK(handle->state() == record_data_state::deferred);
+		CHECK(handle->available_size() == 0);
+		CHECK(std::filesystem::is_empty(data_root / ".staging"));
+	}
+
+	SECTION("an evicted data is no source") {
+		held->remove_data();
+		CHECK(!store.find_content(second.header.content_digest, wanted.manifest_digest));
+	}
+}
+
+// (RDS 6) a data table from before the content index gets its columns
+TEST_CASE("data state table upgrades", "[unit]") {
+	auto db = fresh_database();
+	db->prepare("CREATE TABLE record_data("
+		"key INTEGER PRIMARY KEY,"
+		"data_id BLOB UNIQUE,"
+		"enc_size INTEGER,"
+		"chunk_size INTEGER,"
+		"state INTEGER,"
+		"have BLOB,"
+		"manifest BLOB);").execute();
+
+	data_state_table table{db};
+	data_descriptor const d{5080, 1000, securepath::test::random_octet_vector(64)};
+	auto const local_id = table.ensure(d);
+	CHECK(!table.header(local_id));
+	data_header const header{4500, securepath::test::random_octet_vector(64), securepath::test::random_octet_vector(16), sequence_number{3}, 0};
+	table.set_header(local_id, header);
+	CHECK(table.header(local_id) == header);
+	auto const rows = table.find_by_content(header.content_digest);
+	REQUIRE(rows.size() == 1);
+	CHECK(rows[0].local_id == local_id);
+	CHECK(table.find_by_content(securepath::test::random_octet_vector(64)).empty());
+}
+
 }

@@ -56,6 +56,18 @@ private:
 	std::optional<data_type> data_;
 };
 
+/// the exception being handled as an error, keeping the code of an error that was thrown;
+/// call inside a catch block
+inline error current_exception_error() {
+	try {
+		throw;
+	} catch(error const& e) {
+		return e;
+	} catch(...) {
+		return error(std::current_exception());
+	}
+}
+
 template<typename ResultType, typename Enum>
 inline bool check_result_error(util::result<ResultType> const& res, Enum value) {
 	auto err = make_error_code(value);

@@ -1,5 +1,7 @@
 #pragma once
 
+#include "transfer_budget.hpp"
+
 #include <spsync/core/data/record_data_store.hpp>
 #include <spsync/util/result.hpp>
 
@@ -31,9 +33,15 @@ struct data_quota {
  *
  * Thread safe.
  */
+/// what a download is opened with: the manifest to verify against and the chunks held here
+struct served_data {
+	data_manifest manifest;
+	have_bitmap have;
+};
+
 class server_data_store {
 public:
-	server_data_store(database::connection_ptr, std::filesystem::path data_root, data_quota = {});
+	server_data_store(database::connection_ptr, std::filesystem::path data_root, data_quota = {}, transfer_quota = {});
 
 	/**
 	 * Open the upload of a data or resume it: the chunks already held. Errors (protocol
@@ -57,6 +65,25 @@ public:
 	 */
 	util::result<incoming_chunk> begin_chunk(data_id const&, std::uint64_t chunk_no, time_point now);
 	util::result<bool> finish_chunk(data_id const&, incoming_chunk&, time_point now);
+
+	// -- serving (RD4, RDS 6) --
+
+	/**
+	 * Open the download of a data: its manifest and what is held of it, which may be a
+	 * part while the upload is in progress. Error: data_not_held (unknown here, or the
+	 * descriptor is not the one this data was uploaded with).
+	 */
+	util::result<served_data> open_download(data_descriptor const&) const;
+
+	/**
+	 * A piece of a held chunk, counted against the transfer quota of the window. Errors:
+	 * data_not_held (the chunk is not held, the range is not inside it or above a
+	 * piece), data_transfer_quota_exceeded (see retry_after).
+	 */
+	util::result<octet_vector> serve_piece(data_id const&, std::uint64_t chunk_no, std::uint64_t offset, std::uint32_t size, time_point now);
+
+	/// seconds until the transfer quota window of the time ends
+	std::uint32_t retry_after(time_point now) const { return budget_.retry_after(now); }
 
 	/// what is known of the data; in_sync = complete
 	std::optional<data_state_row> find(data_id const&) const;
@@ -90,6 +117,7 @@ private:
 	record_data_store store_;
 	data_state_table table_;
 	data_quota const quota_;
+	transfer_budget budget_;
 };
 
 }

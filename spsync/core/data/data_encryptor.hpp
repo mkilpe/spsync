@@ -30,6 +30,14 @@ public:
 
 	data_encryptor(encryption_key const& group_key, std::uint32_t chunk_size, chunk_sink sink);
 
+	/**
+	 * With the nonce of an existing data instead of a fresh one: the same plaintext gives
+	 * the same chunks again, so a data whose content is held under another data id can be
+	 * rebuilt locally and checked against its manifest digest instead of downloaded. Never
+	 * for new data: a nonce is used for one content only.
+	 */
+	data_encryptor(encryption_key const& group_key, std::uint32_t chunk_size, chunk_sink sink, octet_vector nonce);
+
 	/// append plaintext
 	void write(octet_span plain);
 

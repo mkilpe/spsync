@@ -3,6 +3,7 @@
 #include <spsync/core/data/record_data_store.hpp>
 
 #include <filesystem>
+#include <map>
 
 #include "test_progress.hpp"
 #include "test_sync_engine.hpp"
@@ -49,13 +50,14 @@ public:
 	/// Fetches records for specific range of sequence numbers [start, end]
 	virtual request_handle fetch_records(sequence_number start, sequence_number end);
 
-	/// Fetches record data for given record
-	virtual request_handle fetch_data(sequence_number record);
+	/// copies the data out of the test server's holdings into this client's store
+	virtual request_handle fetch_data(data_id const&);
 
 	/// Tries to commit to a record and uploads the record data if committing was successful
 	virtual request_handle commit_record(record_handle);
 
-	/// the data servers of this harness take everything: answered with success while connected
+	/// the data servers of this harness take everything: the data goes into the test
+	/// server's holdings, answered with success while connected
 	virtual request_handle upload_data(data_id const&);
 
 	/// Accessors to common, shared infrastructure
@@ -65,6 +67,9 @@ public:
 
 	/// every upload_data call so far, in order
 	std::vector<data_id> const& upload_requests() const { return upload_requests_; }
+
+	/// every fetch_data call so far, in order
+	std::vector<data_id> const& fetch_requests() const { return fetch_requests_; }
 
 	/// number of requests the engine issued through this client (sequence/fetch/commit)
 	std::uint64_t request_count() const { return req_handle; }
@@ -77,6 +82,8 @@ private:
 	mutable record_storage storage_;
 	mutable record_data_store data_store_;
 	std::vector<data_id> upload_requests_;
+	std::vector<data_id> fetch_requests_;
+	std::size_t seen_announcements_{};
 	comm_output* output_{};
 	test_sync_server* server_{};
 	sequence_number last_pushed_record_;
@@ -120,6 +127,16 @@ public:
 	crypto::public_key_id id;
 	/// the validity limits reported with the sequence answer (RDS 8); 0 = not reported
 	storage_limits limits;
+
+	/// a data as the data servers of this harness hold it: ciphertext only
+	struct held_data {
+		data_manifest manifest;
+		std::vector<octet_vector> chunks;
+	};
+	/// what the clients uploaded
+	std::map<data_id, held_data> holdings;
+	/// the data that became complete, in order: the clients hear of it as notify_data
+	std::vector<data_id> announced;
 };
 
 /**

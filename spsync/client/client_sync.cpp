@@ -321,6 +321,13 @@ record_data_handle client_sync::object_data(record_handle rec, std::size_t chang
 	return impl_->engine->object_data(std::move(rec), change);
 }
 
+record_data_handle client_sync::fetch_object_data(record_handle rec, std::size_t change) {
+	if(!impl_->engine) {
+		throw make_error(securepath::errc::invalid_state, "client sync engine not initialised yet");
+	}
+	return impl_->engine->fetch_object_data(std::move(rec), change);
+}
+
 record_handle client_sync::send_user_change(users us, metadata mdata) {
 	if(!impl_->engine) {
 		throw make_error(securepath::errc::invalid_state, "client sync engine not initialised yet");

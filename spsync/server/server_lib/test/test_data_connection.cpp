@@ -54,7 +54,7 @@ struct test_data_context : data_server_context {
 			auto const dir = test_root / to_hex(sid);
 			std::filesystem::create_directories(dir);
 			auto db = database::sqlite::create_sqlite_connection((dir / "data.db").string());
-			it = stores.emplace(sid, std::make_shared<server_data_store>(db, dir / "data", quota)).first;
+			it = stores.emplace(sid, std::make_shared<server_data_store>(db, dir / "data", quota, transfer)).first;
 		}
 		return it->second;
 	}
@@ -68,6 +68,15 @@ struct test_data_context : data_server_context {
 
 	time_point now() const override { return clock; }
 
+	/// a complete data in the storage's store, as an upload left it
+	void hold(protocol::storage_id const& sid, client_data const& data, std::uint64_t chunks) {
+		auto store = acquire_store(sid);
+		REQUIRE(store->open_upload(data.descriptor, data.manifest, clock));
+		for(std::uint64_t no = 0; no != chunks; ++no) {
+			REQUIRE(store->store_chunk(data.descriptor.manifest_digest, no, data.chunks.at(no), clock));
+		}
+	}
+
 	data_ticket ticket(protocol::storage_id const& sid, data_descriptor const& d, crypto::public_key_id const& member
 		, data_right right = data_right::upload) const {
 		data_ticket t{sid, d, member, right, clock + 10min};
@@ -79,6 +88,7 @@ struct test_data_context : data_server_context {
 	crypto::public_key_cache public_keys;
 	std::set<crypto::public_key_id> issuers;
 	data_quota quota;
+	transfer_quota transfer;
 	time_point clock{clock_type::now()};
 	std::map<protocol::storage_id, std::shared_ptr<server_data_store>> stores;
 	std::vector<std::pair<protocol::storage_id, data_id>> announced;
@@ -88,7 +98,8 @@ struct test_data_context : data_server_context {
 struct test_connection : data_connection {
 	using data_connection::data_connection;
 
-	using reply = std::variant<protocol::data_hello_reply, protocol::upload_data_manifest_reply, protocol::upload_data_chunk_reply>;
+	using reply = std::variant<protocol::data_hello_reply, protocol::upload_data_manifest_reply, protocol::upload_data_chunk_reply
+		, protocol::download_data_open_reply, protocol::download_data_piece_reply>;
 
 	void send(octet_span s) override {
 		serialisation::packet_deserialiser<protocol::d2c_types> deser;
@@ -393,6 +404,126 @@ TEST_CASE("data connection quota errors", "[unit]") {
 	auto const other_sid = securepath::test::random_octet_vector(16);
 	conn.handle(protocol::upload_data_manifest{4, context.ticket(other_sid, another.descriptor, member), another.manifest});
 	CHECK(!conn.take<protocol::upload_data_manifest_reply>().error);
+}
+
+// RDS 6: a download is opened with a download ticket and answered with the manifest and
+// what is held; the pieces come from the held chunks only
+TEST_CASE("data connection download", "[unit]") {
+	test_data_context context;
+	auto const member = crypto::generate_private_key().id();
+	auto const sid = securepath::test::random_octet_vector(16);
+	auto const data = make_data(4500);
+	auto const& id = data.descriptor.manifest_digest;
+	// an upload in progress: three of the five chunks are here
+	context.hold(sid, data, 3);
+
+	test_connection conn{context};
+	REQUIRE(!conn.on_connect(protocol::data_hello{}, member));
+	conn.replies.clear();
+	auto const chunk_size = static_cast<std::uint32_t>(data.chunks.at(0).size());
+
+	// nothing without an opened download
+	conn.handle(protocol::download_data_piece{1, sid, id, 0, 0, 100});
+	CHECK(is_error(conn.take<protocol::download_data_piece_reply>().error, protocol::errc::data_not_held));
+
+	// an upload ticket opens no download, a download ticket no upload
+	conn.handle(protocol::download_data_open{2, context.ticket(sid, data.descriptor, member, data_right::upload)});
+	CHECK(is_error(conn.take<protocol::download_data_open_reply>().error, protocol::errc::invalid_data_ticket));
+	auto const ticket = context.ticket(sid, data.descriptor, member, data_right::download);
+	conn.handle(protocol::upload_data_manifest{3, ticket, data.manifest});
+	CHECK(is_error(conn.take<protocol::upload_data_manifest_reply>().error, protocol::errc::invalid_data_ticket));
+
+	// a data that is not here, a descriptor that is not the one it was uploaded with
+	auto const other = make_data(100);
+	conn.handle(protocol::download_data_open{4, context.ticket(sid, other.descriptor, member, data_right::download)});
+	CHECK(is_error(conn.take<protocol::download_data_open_reply>().error, protocol::errc::data_not_held));
+	auto contradicting = data.descriptor;
+	contradicting.enc_size += 1;
+	conn.handle(protocol::download_data_open{5, context.ticket(sid, contradicting, member, data_right::download)});
+	CHECK(is_error(conn.take<protocol::download_data_open_reply>().error, protocol::errc::data_not_held));
+
+	conn.handle(protocol::download_data_open{6, ticket});
+	auto const opened = conn.take<protocol::download_data_open_reply>();
+	REQUIRE(!opened.error);
+	CHECK(opened.cid == 6);
+	CHECK(opened.sid == sid);
+	CHECK(opened.manifest == data.manifest);
+	have_bitmap const have{5, opened.have};
+	CHECK(have.count() == 3);
+	CHECK(have.first_missing() == 3);
+
+	auto const piece = [&](std::uint64_t chunk_no, std::uint64_t offset, std::uint32_t size) {
+		conn.handle(protocol::download_data_piece{7, sid, id, chunk_no, offset, size});
+		return conn.take<protocol::download_data_piece_reply>();
+	};
+
+	// a whole chunk in pieces
+	octet_vector assembled;
+	for(std::uint32_t offset = 0; offset < chunk_size; offset += 400) {
+		auto const reply = piece(1, offset, std::min<std::uint32_t>(400, chunk_size - offset));
+		REQUIRE(!reply.error);
+		assembled.insert(assembled.end(), reply.bytes.begin(), reply.bytes.end());
+	}
+	CHECK(assembled == data.chunks.at(1));
+
+	// a chunk that is not here yet, ranges outside a chunk, no octets, more than a piece
+	CHECK(is_error(piece(3, 0, 100).error, protocol::errc::data_not_held));
+	CHECK(is_error(piece(9, 0, 100).error, protocol::errc::data_not_held));
+	CHECK(is_error(piece(0, chunk_size - 10, 11).error, protocol::errc::data_not_held));
+	CHECK(is_error(piece(0, chunk_size, 1).error, protocol::errc::data_not_held));
+	CHECK(is_error(piece(0, 0, 0).error, protocol::errc::data_not_held));
+	CHECK(is_error(piece(0, 0, protocol::max_data_piece_size + 1).error, protocol::errc::data_not_held));
+	CHECK(!piece(0, chunk_size - 10, 10).error);
+
+	// the download is of this storage
+	conn.handle(protocol::download_data_piece{8, securepath::test::random_octet_vector(16), id, 0, 0, 100});
+	CHECK(is_error(conn.take<protocol::download_data_piece_reply>().error, protocol::errc::data_not_held));
+}
+
+// RD10: the transfer quota - served octets per storage and window; a refusal names the wait
+TEST_CASE("data connection transfer quota", "[unit]") {
+	test_data_context context;
+	context.transfer = transfer_quota{2500, 600s};
+	auto const member = crypto::generate_private_key().id();
+	auto const sid = securepath::test::random_octet_vector(16);
+	auto const data = make_data(4500);
+	auto const& id = data.descriptor.manifest_digest;
+	context.hold(sid, data, 5);
+
+	test_connection conn{context};
+	REQUIRE(!conn.on_connect(protocol::data_hello{}, member));
+	conn.handle(protocol::download_data_open{1, context.ticket(sid, data.descriptor, member, data_right::download)});
+	REQUIRE(!conn.take<protocol::data_hello_reply>().error);
+	REQUIRE(!conn.take<protocol::download_data_open_reply>().error);
+
+	auto const piece = [&](std::uint64_t chunk_no) {
+		conn.handle(protocol::download_data_piece{2, sid, id, chunk_no, 0, 1000});
+		return conn.take<protocol::download_data_piece_reply>();
+	};
+	CHECK(!piece(0).error);
+	CHECK(!piece(1).error);
+	auto const refused = piece(2);
+	CHECK(is_error(refused.error, protocol::errc::data_transfer_quota_exceeded));
+	CHECK(refused.bytes.empty());
+	CHECK(refused.retry_after > 0);
+	CHECK(refused.retry_after <= 600);
+	// what does not fit is not counted: a smaller piece still goes
+	conn.handle(protocol::download_data_piece{3, sid, id, 2, 0, 500});
+	CHECK(!conn.take<protocol::download_data_piece_reply>().error);
+
+	// the next window serves again
+	context.clock += std::chrono::seconds{refused.retry_after};
+	CHECK(!piece(2).error);
+	CHECK(!piece(3).error);
+	CHECK(is_error(piece(0).error, protocol::errc::data_transfer_quota_exceeded));
+
+	// another storage has its own budget
+	auto const other_sid = securepath::test::random_octet_vector(16);
+	context.hold(other_sid, data, 5);
+	conn.handle(protocol::download_data_open{4, context.ticket(other_sid, data.descriptor, member, data_right::download)});
+	REQUIRE(!conn.take<protocol::download_data_open_reply>().error);
+	conn.handle(protocol::download_data_piece{5, other_sid, id, 0, 0, 1000});
+	CHECK(!conn.take<protocol::download_data_piece_reply>().error);
 }
 
 }

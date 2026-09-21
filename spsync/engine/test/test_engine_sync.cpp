@@ -457,6 +457,68 @@ TEST_CASE("engine sync rebases a change with record data", "[unit]") {
 	CHECK(server_index.all_ids().size() == 2);
 }
 
+// (RDS 6) record data from one member to another through the engines: the author's data
+// is uploaded when its record is confirmed, the other member fetches it on demand (lazy)
+// or as soon as the record arrives (auto fetch up to a size), and reads the plaintext
+TEST_CASE("engine sync transfers record data", "[unit]") {
+	test::test_sync_context context(chain_sync_config{sync_mode::require_all_seen});
+	context.add_client(true, 3);
+	context.create_initial_record();
+	while(context.handle_events()) {}
+
+	// client 2 fetches small data unasked
+	auto eager = context.client(2).engine_config;
+	eager.auto_fetch_max_size = 1024 * 1024;
+	context.client(2).engine.set_config(eager);
+
+	auto const small = securepath::test::random_octet_vector(70000);
+	auto const big = securepath::test::random_octet_vector(2 * 1024 * 1024 + 5000);
+	auto h_small = context.client(0).engine.sync_object_change(create_object_id(), metadata{}, std::make_shared<memory_record_data>(small));
+	while(context.handle_events()) {}
+	auto h_big = context.client(0).engine.sync_object_change(create_object_id(), metadata{}, std::make_shared<memory_record_data>(big));
+	while(context.handle_events()) {}
+	CHECK(context.compare_record_storages(sequence_number{3}));
+
+	auto const read_all = [](record_data& data) {
+		octet_vector ret(data.size());
+		ret.resize(data.read(0, ret.data(), ret.size()));
+		return ret;
+	};
+	auto const data_of = [&](int client, record_handle const& h) {
+		auto& io = context.client(client).io;
+		return context.client(client).engine.object_data(io.records().find_tag(h->tag()));
+	};
+
+	// lazy: client 1 knows both datas and holds neither
+	CHECK(context.client(1).io.fetch_requests().empty());
+	REQUIRE(data_of(1, h_small));
+	CHECK(data_of(1, h_small)->state() == record_data_state::deferred);
+	CHECK(data_of(1, h_big)->state() == record_data_state::deferred);
+
+	// auto fetch: client 2 has the small one already - asked for when the record came, and
+	// again after the notification when that was before the author's upload had landed
+	CHECK(!context.client(2).io.fetch_requests().empty());
+	CHECK(context.client(2).io.fetch_requests().size() <= 2);
+	REQUIRE(data_of(2, h_small)->state() == record_data_state::in_sync);
+	CHECK(read_all(*data_of(2, h_small)) == small);
+	CHECK(data_of(2, h_big)->state() == record_data_state::deferred);
+
+	// asked for
+	auto& io1 = context.client(1).io;
+	auto fetched = context.client(1).engine.fetch_object_data(io1.records().find_tag(h_big->tag()));
+	REQUIRE(fetched);
+	CHECK(fetched->state() == record_data_state::download_pending);
+	while(context.handle_events()) {}
+	CHECK(fetched->state() == record_data_state::in_sync);
+	CHECK(read_all(*fetched) == big);
+	CHECK(io1.fetch_requests().size() == 1);
+	CHECK(data_of(1, h_small)->state() == record_data_state::deferred);
+
+	// the author never fetches its own
+	CHECK(context.client(0).io.fetch_requests().empty());
+	CHECK(read_all(*data_of(0, h_big)) == big);
+}
+
 // (13b) the same client changes an object twice before the first change is confirmed:
 // in strict mode the second is stacked on the first, so once the first lands its last
 // seen block is the head and only its previous object tag is stale. The rebase must not

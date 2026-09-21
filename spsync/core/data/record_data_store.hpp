@@ -89,6 +89,12 @@ private:
  */
 void copy_record_data(record_data& source, data_writer& writer);
 
+/// a data held completely, as the content index knows it
+struct held_content {
+	data_descriptor descriptor;
+	data_header header;
+};
+
 /**
  * The client data store (RD6): record data as encrypted chunk files (chunk_files)
  * plus the data table (data_state_table) in the storage database. Data is identified
@@ -121,6 +127,22 @@ public:
 
 	/// what is known of the data, nullopt when no record or writer named it
 	std::optional<data_state_row> find(data_id const&) const;
+
+	/**
+	 * A data held completely whose content has the digest, other than the named one: the
+	 * same content was sent under another data id (another nonce or key). Known for data
+	 * that was created here or opened once - the digest is in the members-only header.
+	 */
+	std::optional<held_content> find_content(octet_vector const& content_digest, data_id const& other_than) const;
+
+	/**
+	 * Make the wanted data out of a source with the same content instead of downloading
+	 * it: the source is encrypted again with the wanted data's nonce and the group key,
+	 * which gives the same chunks when key and content are the right ones - only then,
+	 * checked against the descriptor's manifest digest, the data is held (in_sync). False
+	 * and nothing changed otherwise (try another key candidate, or download).
+	 */
+	bool adopt_content(record_data& source, encryption_key const& group_key, data_descriptor const& wanted, data_header const& wanted_header);
 
 	void set_state(data_id const&, record_data_state);
 

@@ -697,28 +697,110 @@ Implementation steps
       - locality: the region label travels, the ordering does not use it yet
         (the record server does not know where a client is).
 
-- RDS 6  Download path                                                         [1d]
++ RDS 6  Download path -- done 2026-09-19                                     [1d]
       Client data connections to the holders, request_data/response_data ranges
       with parallel ranges across holders, notify_data, lazy/auto fetch policy,
       verification on fetch, redirect handling and failover down the holder
-      list - chunks come in the same wire pieces as they go up (RD4; the client
-      side receives with record_data_store::begin_chunk), transfer quota windows
-      (RD10) on serving (all of the transfer quota:
-      nothing is counted at ticket issue, see RDS 5); the manifest is fetched
-      before the chunks (the store verifies every chunk against it, RDS 2); the
-      skip of a download whose content_digest is already held (moved here from
-      RDS 3). Tests: second client
-      fetches while upload in progress (remote_not_complete), completes after
-      notify, holder down -> next holder, quota-exceeded fetch resumes in the
-      next window.
+      list, transfer quota windows (RD10) on serving, the manifest before the
+      chunks, the skip of a download whose content_digest is already held.
+      Tests: second client fetches while upload in progress
+      (remote_not_complete), completes after notify, holder down -> next
+      holder, quota-exceeded fetch resumes in the next window.
+      With this step a data goes the whole way: one member uploads, another
+      downloads with its own ticket, verifies every chunk and reads the
+      plaintext (tests: over TLS, between engines, and three real clients over
+      an all-in-one server).
+      + data protocol: download_data_open {ticket (download right)} -> reply
+        {manifest, have octets}; download_data_piece {sid, data_id, chunk no,
+        offset, size} -> reply {bytes, retry_after}. Pull per piece, the same
+        wire pieces as uploads (RD4), so serving is stateless beyond the opened
+        download and the client's window is the flow control. New errors:
+        data_not_held (the data, or that chunk of it, is not here - an upload
+        in progress), data_transfer_quota_exceeded. The c2s request_data /
+        response_data stubs are dead (RD12: no data through record servers).
+      + serving: server_data_store open_download (descriptor must be the one
+        the data was uploaded with) and serve_piece (held chunk, range inside
+        it, at most a piece); data_connection checks the ticket for the
+        download right and the presenting key as for uploads. Transfer quota
+        (RD10, all of it here): transfer_budget, served octets per storage and
+        window (--transfer_quota, --transfer_window, 0 = none), fixed windows
+        aligned to the clock, kept in memory (a restart opens a fresh window);
+        what does not fit is not counted, the refusal names retry_after.
+      + notify_data (s2c {sid, data_id, complete}): the record role sends it to
+        the listeners of a storage when an announcement brings NEWS of a
+        complete copy (data_availability::announce says so) - its own data
+        role's completion or a peer's.
+      + client: data_download_channel (open_download, fetch_piece) next to the
+        upload channel, both implemented by net_data_channel (download ticket,
+        holders in the record server's order; a holder that is down OR does
+        not hold the data is the next entry). data_downloader (comm), the
+        mirror of the uploader on the shared action_pump (extracted; the
+        uploader uses it too): manifest first - kept only when it is the
+        descriptor's - then the chunks missing here and held there, pieces in
+        order into record_data_store::begin_chunk, verified when whole. It ends
+        with no error when the data is complete here, data_not_held when the
+        holder lacked chunks, else with what stopped it; whole chunks are kept
+        in every case, so the next fetch goes on from there.
+      + comm: fetch_data(data_id) / on_data_downloaded replace the old stubs,
+        on_data_available relays notify_data, progress events with upload =
+        false. The real channel is made by comm as for uploads.
+      + engine: object data of others is deferred until asked for (RD6 lazy):
+        engine_input::fetch_object_data(record, change) makes it
+        download_pending and asks comm. sync_engine_config::auto_fetch_max_size
+        (0 = lazy) marks small enough data wanted when its record arrives.
+        Downloads are asked like uploads - confirmed_data_in_state(
+        download_pending) after every record event and after a (re)connect, so
+        a lost connection resumes. Answers: complete -> in_sync (the store flips
+        it with the last chunk) + on_data_state_changed; data_not_held ->
+        remote_not_complete, and notify_data makes it download_pending again;
+        anything else -> on_data_transfer_failed, left alone until the next
+        connect or until it is asked for again.
+      + content_digest skip: the data table keeps the members-only header once
+        a record carrying it was read (it lives in the local database like the
+        group keys) and indexes its content digest. fetch_object_data looks for
+        a complete data with the same content under another data id and
+        rebuilds the wanted one from it - data_encryptor with the wanted nonce
+        and group key gives the same chunks again, taken only when they hash to
+        the wanted manifest digest (record_data_store::adopt_content; D9 key
+        candidates tried in turn) - outside the engine mutex, like the create
+        path. No request leaves the client.
+      + tests: server_lib data connection download (wrong right, unknown data,
+        contradicting descriptor, pieces of a held chunk, chunk not here yet,
+        ranges) and transfer quota (window, retry_after, per storage),
+        transfer_budget; comm test_data_downloader (whole data, window and
+        piece order, partial holder then the rest, quota and lost connection
+        half way, forged manifest, junk chunk, refusal, queue); TLS
+        test_data_server (upload by one client and download by another, read
+        back; failover; nobody uploaded; somebody else's ticket; a two second
+        quota window that takes more than one try); engine fetch (on demand,
+        remote_not_complete then notified, failed then asked again, reconnect,
+        evicted, same content not downloaded) and engine sync "transfers
+        record data" (three engines: lazy, auto fetch through
+        remote_not_complete + notify, author never fetches); client "transfers
+        record data" (three clients, real server: upload, lazy fetch, auto
+        fetch with the server's notify_data - seen in the log); core content
+        adoption and table upgrade.
+      Not done, with the reason:
+      - parallel ranges of one data from several holders: one holder per
+        download with failover for now. It needs a per-holder piece scheduler
+        in the downloader and deployments with several complete holders to
+        matter (RDS 10 replication).
+      - automatic retry after a transfer quota refusal: the fetch ends with the
+        error and what it got, the next fetch goes on; a timer that uses
+        retry_after belongs with the upload retry of RDS 7.
+      - auto fetched data does not try the content skip (there is no header at
+        hand without decrypting the record; it applies to data that is asked
+        for).
 
 - RDS 7  End to end                                                            [1d]
       System test: multi-hundred-MB object between two clients over the test
       server incl. kill/resume both directions; mobile-style lazy fetch of one
       object among many; the two deployment shapes of RD12 (record servers +
       separate data server, all-in-one replicas) - the separate shape needs the
-      data server's announcement link to the record servers (left by RDS 5) and
-      a retry of uploads whose data connection dropped (left by RDS 4).
+      data server's announcement link to the record servers (left by RDS 5);
+      transfers need a retry that does not wait for a record server reconnect:
+      uploads whose data connection dropped (left by RDS 4) and fetches refused
+      by the transfer quota, after retry_after (left by RDS 6).
 
 + RDS 8  Chain validity limits -- done 2026-09-07                          [0.5d]
       max_record_size and chunk_size as per-storage creation parameters (RD10

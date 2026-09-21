@@ -1,5 +1,6 @@
 #include "data_store.hpp"
 
+#include <spsync/protocol/data_protocol.hpp>
 #include <spsync/protocol/error.hpp>
 
 #include <securepath/log/log.hpp>
@@ -24,11 +25,12 @@ std::int64_t seconds_since_epoch(time_point t) {
 		touched: seconds since epoch of the last manifest or chunk
 */
 
-server_data_store::server_data_store(database::connection_ptr db, std::filesystem::path data_root, data_quota quota)
+server_data_store::server_data_store(database::connection_ptr db, std::filesystem::path data_root, data_quota quota, transfer_quota transfer)
 : db_(db)
 , store_(db, std::move(data_root))
 , table_(db)
 , quota_(quota)
+, budget_(transfer)
 {
 	if(!db_->has_table("data_activity")) {
 		db_->prepare("CREATE TABLE data_activity("
@@ -111,6 +113,32 @@ util::result<bool> server_data_store::chunk_kept(data_id const& id, time_point n
 		touch(id, now);
 	}
 	return complete;
+}
+
+util::result<served_data> server_data_store::open_download(data_descriptor const& descriptor) const {
+	util::result<served_data> ret{make_error(protocol::errc::data_not_held)};
+	auto const row = store_.find(descriptor.manifest_digest);
+	auto manifest = store_.manifest(descriptor.manifest_digest);
+	if(row && manifest && row->descriptor == descriptor) {
+		ret = served_data{std::move(*manifest), row->have};
+	}
+	return ret;
+}
+
+util::result<octet_vector> server_data_store::serve_piece(data_id const& id, std::uint64_t chunk_no, std::uint64_t offset, std::uint32_t size, time_point now) {
+	util::result<octet_vector> ret{make_error(protocol::errc::data_not_held)};
+	auto const row = store_.find(id);
+	bool const held = row && row->have.test(chunk_no) && size != 0 && size <= protocol::max_data_piece_size
+		&& offset + size <= row->descriptor.chunk_enc_size(chunk_no);
+	if(held && !budget_.charge(size, now)) {
+		ret = make_error(protocol::errc::data_transfer_quota_exceeded);
+	} else if(held) {
+		auto piece = store_.read_chunk_piece(id, chunk_no, offset, size);
+		if(piece) {
+			ret = std::move(*piece);
+		}
+	}
+	return ret;
 }
 
 std::optional<data_state_row> server_data_store::find(data_id const& id) const {

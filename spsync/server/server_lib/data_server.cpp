@@ -161,7 +161,7 @@ public:
 			std::filesystem::create_directories(dir);
 			LOG_TRACE("opening data store (sid={})", to_hex(sid));
 			auto db = database::sqlite::create_sqlite_connection((dir / "data.db").string());
-			it = stores_.emplace(sid, std::make_shared<server_data_store>(db, dir / "data", params_.quota)).first;
+			it = stores_.emplace(sid, std::make_shared<server_data_store>(db, dir / "data", params_.quota, params_.transfer)).first;
 		}
 		return it->second;
 	}

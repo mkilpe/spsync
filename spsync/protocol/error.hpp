@@ -42,6 +42,12 @@ enum class errc {
 	unknown_data,
 	/// the storage has no data-role servers configured: it carries no record data
 	no_data_servers,
+	/// the data server does not hold what was asked for: the data, or that chunk of it
+	/// (an upload still in progress, RD7 remote_not_complete) - another holder may
+	data_not_held,
+	/// the data server's transfer quota for the storage is used up for this window
+	/// (RD10): what was fetched is kept, the rest goes on in a later window
+	data_transfer_quota_exceeded,
 	end_of_list
 };
 

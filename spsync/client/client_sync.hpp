@@ -35,6 +35,9 @@ public:
 
 	/// the record data of a change of a data change record (engine_input::object_data)
 	record_data_handle object_data(record_handle, std::size_t change = 0);
+
+	/// the same, fetched from the data servers when it is not held (engine_input::fetch_object_data)
+	record_data_handle fetch_object_data(record_handle, std::size_t change = 0);
 	record_handle send_user_change(users user_change, metadata = {});
 
 	std::deque<std::unique_ptr<member>> members() const;

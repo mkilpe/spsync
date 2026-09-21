@@ -15,7 +15,6 @@ inline namespace v1 {
  * The packets between a client and a data-role server (record_data.txt RD4/RD12), on the
  * data listener's own port and inside the encrypted transport like everything else. The
  * data server knows no chain: every transfer starts with a ticket a record server signed.
- * Uploads here; the download packets come with the download path (RDS 6).
  */
 
 /// always the first packet, negotiates the version
@@ -92,6 +91,50 @@ struct upload_data_chunk : storage_request_base {
 	}
 };
 
+/**
+ * Open the download of a data: a ticket with the download right. The reply carries the
+ * manifest - the client checks it against the descriptor its record commits to and every
+ * chunk against the manifest - and the chunks this holder has.
+ */
+struct download_data_open : protocol_base {
+	download_data_open(call_id cid = 0, data_ticket ticket = {})
+	: protocol_base(cid)
+	, ticket(std::move(ticket))
+	{}
+
+	data_ticket ticket;
+
+	template<typename S>
+	void serialise(S& s) {
+		serialisation::sequence<S> seq(s);
+		seq & static_cast<protocol_base&>(*this) & ticket;
+	}
+};
+
+/// ask for size octets of a chunk from offset, of a download opened on this connection;
+/// chunks come down in the same pieces they went up in
+struct download_data_piece : storage_request_base {
+	download_data_piece(call_id cid = 0, storage_id sid = {}, octet_vector data_id = {}, std::uint64_t chunk_no = 0
+		, std::uint64_t offset = 0, std::uint32_t size = 0)
+	: storage_request_base(cid, std::move(sid))
+	, data_id(std::move(data_id))
+	, chunk_no(chunk_no)
+	, offset(offset)
+	, size(size)
+	{}
+
+	octet_vector data_id;
+	std::uint64_t chunk_no{};
+	std::uint64_t offset{};
+	std::uint32_t size{};
+
+	template<typename S>
+	void serialise(S& s) {
+		serialisation::sequence<S> seq(s);
+		seq & static_cast<storage_request_base&>(*this) & data_id & chunk_no & offset & size;
+	}
+};
+
 struct data_hello_reply : reply_base {
 	using reply_base::reply_base;
 
@@ -140,16 +183,59 @@ struct upload_data_chunk_reply : reply_base {
 	}
 };
 
+struct download_data_open_reply : reply_base {
+	using reply_base::reply_base;
+
+	download_data_open_reply(call_id cid, storage_id sid, data_manifest m, octet_vector have)
+	: reply_base(cid, std::move(sid))
+	, manifest(std::move(m))
+	, have(std::move(have))
+	{}
+
+	data_manifest manifest;
+	/// the chunks the server holds (have_bitmap octets)
+	octet_vector have;
+
+	template<typename S>
+	void serialise(S& s) {
+		serialisation::sequence<S> seq(s);
+		seq & static_cast<reply_base&>(*this) & manifest & have;
+	}
+};
+
+struct download_data_piece_reply : reply_base {
+	using reply_base::reply_base;
+
+	download_data_piece_reply(storage_request_base const& p, octet_vector bytes)
+	: reply_base(p)
+	, bytes(std::move(bytes))
+	{}
+
+	octet_vector bytes;
+	/// with data_transfer_quota_exceeded: seconds until the next window opens
+	std::uint32_t retry_after{};
+
+	template<typename S>
+	void serialise(S& s) {
+		serialisation::sequence<S> seq(s);
+		seq & static_cast<reply_base&>(*this) & bytes & retry_after;
+	}
+};
+
 using serialisation::type_tag;
 using c2d_types =
 	typelist<type_tag<data_hello, 1>,
 			type_tag<upload_data_manifest, 2>,
-			type_tag<upload_data_chunk, 3> >;
+			type_tag<upload_data_chunk, 3>,
+			type_tag<download_data_open, 4>,
+			type_tag<download_data_piece, 5> >;
 
 using d2c_types =
 	typelist<type_tag<data_hello_reply, 1>,
 			type_tag<upload_data_manifest_reply, 2>,
-			type_tag<upload_data_chunk_reply, 3> >;
+			type_tag<upload_data_chunk_reply, 3>,
+			type_tag<download_data_open_reply, 4>,
+			type_tag<download_data_piece_reply, 5> >;
 
 }
 }

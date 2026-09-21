@@ -406,7 +406,12 @@ public:
 		LOG_TRACE("data announcement of holder {} [{} entries]", p.holder, p.entries.size());
 		availability_.set_load(p.holder, holder_load{p.stored_bytes, p.uploads_in_progress});
 		for(auto const& e : p.entries) {
-			availability_.announce(e.sid, e.data_id, data_holding{p.holder, e.have_chunks, e.total_chunks, e.complete});
+			bool const news = availability_.announce(e.sid, e.data_id, data_holding{p.holder, e.have_chunks, e.total_chunks, e.complete});
+			auto const handle = news ? find_open_sync(e.sid) : nullptr;
+			if(handle) {
+				// RD4: clients waiting for the data fetch without polling
+				handle->notify_data(e.data_id, true);
+			}
 		}
 	}
 

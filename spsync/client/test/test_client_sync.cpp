@@ -361,15 +361,18 @@ TEST_CASE("client_sync data change with record data", "[unit]") {
 	CHECK(c2.failed_transfer_count() == 0);
 }
 
-// (RDS 5) record data end to end over an all-in-one server: the author's engine asks
+// (RDS 5/6) record data end to end over an all-in-one server: the author's engine asks
 // for the upload once the record is confirmed, comm gets the ticket from the record role
 // and moves the chunks to the data role, the data becomes in_sync, the record role's
-// availability table knows the holder and both clients persist the data server list
-TEST_CASE("client_sync uploads record data", "[unit]") {
+// availability table knows the holder and the clients persist the data server list.
+// Another member fetches the data when it asks for it (lazy), a third one as soon as the
+// record arrives (auto fetch) - when that is before the upload has landed it is
+// remote_not_complete until the server's notify_data brings it back
+TEST_CASE("client_sync transfers record data", "[unit]") {
 	event_system::single_thread_event_loop single_thread_event_loop;
 	sync::test::test_context net_context;
 
-	net_context.add_client(2);
+	net_context.add_client(3);
 	net_context.add_client_keys_for_server();
 	net_context.share_client_keys();
 
@@ -386,35 +389,46 @@ TEST_CASE("client_sync uploads record data", "[unit]") {
 	WAIT_REQUIRE(server.data().local_endpoint().has_value(), 10s);
 	std::this_thread::sleep_for(1s);
 
-	std::filesystem::remove_all("client_sync_upload_c1");
-	std::filesystem::remove_all("client_sync_upload_c2");
-	sync_engine_config config1;
-	config1.data_root = "client_sync_upload_c1";
-	sync_engine_config config2;
-	config2.data_root = "client_sync_upload_c2";
-	test_client c1(single_thread_event_loop, net_context.client_context(0), "client_sync_upload_c1.db", config1);
-	test_client c2(single_thread_event_loop, net_context.client_context(1), "client_sync_upload_c2.db", config2);
+	std::vector<std::unique_ptr<test_client>> clients;
+	for(int i = 0; i != 3; ++i) {
+		auto const name = "client_sync_upload_c" + std::to_string(i + 1);
+		std::filesystem::remove_all(name);
+		sync_engine_config config;
+		config.data_root = name;
+		// the third member fetches what is small enough unasked
+		config.auto_fetch_max_size = i == 2 ? 16 * 1024 * 1024 : 0;
+		clients.push_back(std::make_unique<test_client>(single_thread_event_loop, net_context.client_context(i), name + ".db", config));
+	}
+	auto& c1 = *clients[0];
+	auto& c2 = *clients[1];
+	auto& c3 = *clients[2];
 
 	c1.connect();
 	c2.connect();
+	c3.connect();
 	c1.wait_for_connection();
 	auto sid = c1.create_remote_storage();
 	c1.wait_for_storage_created();
 	c2.wait_for_connection();
 	c2.connect_to_storage(sid);
+	c3.wait_for_connection();
+	c3.connect_to_storage(sid);
 
 	users us(users_change_mode::full);
-	us.add(util::user_access{net_context.key_id(0), util::access_type::user_management_access});
-	us.add(util::user_access{net_context.key_id(1), util::access_type::user_management_access});
+	for(int i = 0; i != 3; ++i) {
+		us.add(util::user_access{net_context.key_id(i), util::access_type::user_management_access});
+	}
 	c1.send_user_change(us);
 	WAIT_CHECK(c1.user_changes().size() == 1, 2s);
 	WAIT_CHECK(c2.user_changes().size() == 1, 2s);
+	WAIT_CHECK(c3.user_changes().size() == 1, 2s);
 
 	auto const content = securepath::test::random_octet_vector(3 * 1024 * 1024);
 	auto sent = c1.send_data_change(util::create_object_id(), util::metadata{}, std::make_shared<memory_record_data>(content));
 	REQUIRE(sent);
 	WAIT_CHECK(c1.data_changes().size() == 1, 5s);
 	WAIT_CHECK(c2.data_changes().size() == 1, 5s);
+	WAIT_CHECK(c3.data_changes().size() == 1, 5s);
 
 	// uploaded
 	WAIT_CHECK(c1.data_state_count() == 1, 20s);
@@ -435,9 +449,31 @@ TEST_CASE("client_sync uploads record data", "[unit]") {
 	CHECK(holdings[0].holder == server_key.id());
 	CHECK(holdings[0].complete);
 
-	// both learned the storage's data servers on attach
-	for(auto const* db : {"client_sync_upload_c1.db", "client_sync_upload_c2.db"}) {
-		record_storage records{sync::test::create_test_database(db, false)};
+	auto const reads_content = [&](record_data& data) {
+		octet_vector read_back(content.size());
+		return data.read(0, read_back.data(), read_back.size()) == content.size() && read_back == content;
+	};
+
+	// lazy: the second member holds nothing until it asks
+	auto lazy = c2.object_data(c2.data_records().front());
+	REQUIRE(lazy);
+	CHECK(lazy->state() == record_data_state::deferred);
+	CHECK(lazy->available_size() == 0);
+	auto fetched = c2.fetch_object_data(c2.data_records().front());
+	REQUIRE(fetched);
+	WAIT_CHECK(fetched->state() == record_data_state::in_sync, 20s);
+	CHECK(reads_content(*fetched));
+	CHECK(c2.failed_transfer_count() == 0);
+
+	// auto fetch: the third member has it without asking
+	auto automatic = c3.object_data(c3.data_records().front());
+	REQUIRE(automatic);
+	WAIT_CHECK(automatic->state() == record_data_state::in_sync, 20s);
+	CHECK(reads_content(*automatic));
+
+	// all of them learned the storage's data servers on attach
+	for(int i = 0; i != 3; ++i) {
+		record_storage records{sync::test::create_test_database("client_sync_upload_c" + std::to_string(i + 1) + ".db", false)};
 		CHECK(records.data_endpoints() == std::vector<data_endpoint>{data_server});
 	}
 }
