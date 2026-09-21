@@ -2,6 +2,7 @@
 #include <securepath/test_frame/test_utils.hpp>
 
 #include <spsync/protocol/error.hpp>
+#include <spsync/util/result.hpp>
 #include <spsync/server/server_lib/storage.hpp>
 #include <spsync/test/test_block_creator.hpp>
 
@@ -54,13 +55,14 @@ TEST_CASE("storage limits are persisted and immutable", "[unit]") {
 	storage_config cfg{root};
 	cfg.set_default_limits(storage_limits{16 * 1024, 512 * 1024});
 
+	// (the retention policy the server's defaults leave open is the compiled one)
 	{
 		storage s(sid, cfg, storage_modes{sync_mode::allow_all, auth_mode::sign_records});
-		CHECK(s.modes().limits == storage_limits{16 * 1024, 512 * 1024});
+		CHECK(s.modes().limits == storage_limits{16 * 1024, 512 * 1024, default_kept_data_versions});
 	}
 	{
 		storage s(sid, cfg);
-		CHECK(s.modes().limits == storage_limits{16 * 1024, 512 * 1024});
+		CHECK(s.modes().limits == storage_limits{16 * 1024, 512 * 1024, default_kept_data_versions});
 	}
 	// stating the persisted limits (or none) is fine, different ones are a mismatch
 	CHECK_NOTHROW(storage(sid, cfg, storage_modes{sync_mode::allow_all, auth_mode::sign_records,
@@ -73,7 +75,7 @@ TEST_CASE("storage limits are persisted and immutable", "[unit]") {
 	{
 		storage s(sid2, cfg, storage_modes{sync_mode::allow_all, auth_mode::sign_records,
 			replication_mode::none, storage_limits{64 * 1024, 1024 * 1024}});
-		CHECK(s.modes().limits == storage_limits{64 * 1024, 1024 * 1024});
+		CHECK(s.modes().limits == storage_limits{64 * 1024, 1024 * 1024, default_kept_data_versions});
 	}
 	protocol::storage_id sid3 = securepath::test::random_octet_vector(8);
 	CHECK_THROWS(storage(sid3, cfg, storage_modes{sync_mode::allow_all, auth_mode::sign_records,
@@ -96,6 +98,46 @@ TEST_CASE("storage limits are persisted and immutable", "[unit]") {
 			replication_mode::none, storage_limits{max_record_size_range.highest, 0}});
 		CHECK(s.modes().limits.max_record_size == max_record_size_range.highest);
 	}
+
+	std::filesystem::remove_all(root);
+}
+
+// (RDS 9) the retention policy at a history cut is a creation parameter like the limits
+TEST_CASE("storage retention policy is persisted and immutable", "[unit]") {
+	std::string const root = "test-storage-root-retention";
+	std::filesystem::remove_all(root);
+	storage_config cfg{root};
+	auto const modes = [](std::uint32_t kept) {
+		return storage_modes{sync_mode::allow_all, auth_mode::sign_records, replication_mode::none, storage_limits{0, 0, kept}};
+	};
+	static_assert(default_kept_data_versions == 1);
+	static_assert(default_storage_limits.kept_data_versions == default_kept_data_versions);
+	static_assert(valid_storage_limits(storage_limits{0, 0, keep_all_data_versions}));
+	static_assert(valid_storage_limits(default_storage_limits));
+	static_assert(modes_match(storage_modes{}, storage_modes{sync_mode::require_all_seen, auth_mode::only_tag, replication_mode::none, default_storage_limits}));
+	static_assert(limits_or(storage_limits{1, 0, 3}, storage_limits{7, 8, 9}) == storage_limits{1, 8, 3});
+
+	// the newest version only, unless the server's defaults or the creation say otherwise
+	protocol::storage_id const plain = securepath::test::random_octet_vector(8);
+	CHECK(storage(plain, cfg, modes(0)).modes().limits.kept_data_versions == 1);
+
+	cfg.set_default_limits(storage_limits{0, 0, 5});
+	protocol::storage_id const by_default = securepath::test::random_octet_vector(8);
+	CHECK(storage(by_default, cfg, modes(0)).modes().limits.kept_data_versions == 5);
+	CHECK(storage(plain, cfg).modes().limits.kept_data_versions == 1);
+
+	protocol::storage_id const stated = securepath::test::random_octet_vector(8);
+	CHECK(storage(stated, cfg, modes(keep_all_data_versions)).modes().limits.kept_data_versions == keep_all_data_versions);
+	CHECK(storage(stated, cfg).modes().limits.kept_data_versions == keep_all_data_versions);
+	CHECK_NOTHROW(storage(stated, cfg, modes(keep_all_data_versions)));
+	CHECK_NOTHROW(storage(stated, cfg, modes(0)));
+	CHECK_THROWS(storage(stated, cfg, modes(2)));
+
+	// a storage from before the policy was promised nothing else than that data lives as
+	// long as its record
+	database::sqlite::create_sqlite_connection(root + "/" + to_hex(plain) + "/storage.db")
+		->prepare("ALTER TABLE storage_config DROP COLUMN kept_data_versions;").execute();
+	CHECK(storage(plain, cfg).modes().limits.kept_data_versions == keep_all_data_versions);
 
 	std::filesystem::remove_all(root);
 }
@@ -278,7 +320,7 @@ TEST_CASE("storage committed data", "[unit]") {
 	data_descriptor const committed{3 * 1024 * 1024 + 48, 1024 * 1024, securepath::test::random_octet_vector(64)};
 	CHECK(!s.committed_data(committed.manifest_digest));
 	REQUIRE(s.commit_block(creator.test_data_change_with_data(committed)).block);
-	CHECK(s.committed_data(committed.manifest_digest) == committed);
+	CHECK(s.committed_data(committed.manifest_digest).value() == committed);
 
 	// a refused record names nothing
 	data_descriptor const refused{4112, 100, securepath::test::random_octet_vector(64)};
@@ -286,6 +328,143 @@ TEST_CASE("storage committed data", "[unit]") {
 	CHECK(!s.committed_data(refused.manifest_digest));
 	CHECK(!s.committed_data(securepath::test::random_octet_vector(64)));
 	CHECK(!s.committed_data({}));
+}
+
+// (RDS 9) record data follows its records: a history cut keeps the data of the records it
+// retains - today that is every object's whole chain - a rollback releases the data of
+// the records it takes, unless a record that stays names the same data
+TEST_CASE("storage releases the data of removed records", "[unit]") {
+	std::string const root = "test-storage-root";
+	std::filesystem::remove_all(root);
+	protocol::storage_id sid = securepath::test::random_octet_vector(8);
+	storage s(sid, storage_config{root}, storage_modes{sync_mode::allow_all, auth_mode::only_tag});
+
+	std::vector<std::pair<protocol::storage_id, std::vector<data_id>>> released;
+	s.set_data_release([&](protocol::storage_id const& id, std::vector<data_id> const& ids) {
+		// called without the storage's mutex (asking it back would never return) and
+		// after the index forgot the data
+		for(auto const& dead : ids) {
+			CHECK(!s.committed_data(dead));
+		}
+		released.emplace_back(id, ids);
+	});
+
+	auto const descriptor = [] {
+		return data_descriptor{3 * 1024 * 1024 + 48, 1024 * 1024, securepath::test::random_octet_vector(64)};
+	};
+	auto const first = descriptor();
+	auto const second = descriptor();
+	auto const shared = descriptor();
+	auto const late = descriptor();
+
+	test::test_block_creator creator;
+	REQUIRE(s.commit_block(creator.test_user_change()).block);
+	auto const object = creator.test_data_change_with_data(first);
+	REQUIRE(s.commit_block(object).block);
+	REQUIRE(s.commit_block(creator.test_data_change_with_data(second)).block);
+	REQUIRE(s.commit_block(creator.test_data_change_with_data(shared)).block);
+	auto const segment = creator.test_segment(plain_segment_data{sequence_number{1}, sequence_number{5}, creator.created_tags});
+	REQUIRE(s.commit_block(segment).block);
+	auto const after_cut = creator.test_data_change_with_data(shared);
+	REQUIRE(s.commit_block(after_cut).block);
+	REQUIRE(s.commit_block(creator.test_data_change_with_data(late)).block);
+
+	// the cut takes the root user change; every object is live, so is every data
+	auto const cut = s.cut_history(segment.tag());
+	CHECK(cut.size() == 1);
+	CHECK(released.empty());
+	for(auto const& d : {first, second, shared, late}) {
+		CHECK(s.committed_data(d.manifest_digest).value() == d);
+	}
+
+	// the rollback takes the last record: its data is named by nobody any more
+	auto rolled_back = s.truncate_from(sequence_number{7});
+	CHECK(rolled_back.size() == 1);
+	REQUIRE(released.size() == 1);
+	CHECK(released[0].first == sid);
+	CHECK(released[0].second == std::vector<data_id>{late.manifest_digest});
+	CHECK(!s.committed_data(late.manifest_digest));
+
+	// the next one names a data that a record below the cut names too: it stays
+	rolled_back = s.truncate_from(sequence_number{6});
+	CHECK(rolled_back.size() == 1);
+	CHECK(released.size() == 1);
+	CHECK(s.committed_data(shared.manifest_digest).value() == shared);
+
+	// nothing to release, nothing told
+	CHECK(s.truncate_from(sequence_number{100}).empty());
+	CHECK(released.size() == 1);
+}
+
+// (RDS 9) the retention policy at a cut: the records of superseded versions stay, their
+// data goes - no tickets for it any more, the data servers are told
+TEST_CASE("storage prunes the data of superseded versions at a cut", "[unit]") {
+	std::string const root = "test-storage-root";
+	std::filesystem::remove_all(root);
+	auto const descriptor = [] {
+		return data_descriptor{3 * 1024 * 1024 + 48, 1024 * 1024, securepath::test::random_octet_vector(64)};
+	};
+	auto const d1 = descriptor(), d2 = descriptor(), d3 = descriptor(), other = descriptor();
+	auto const oid = util::create_object_id();
+
+	struct history {
+		chain_block v1, segment;
+	};
+	auto const fill = [&](storage& s, test::test_block_creator& creator) {
+		REQUIRE(s.commit_block(creator.test_user_change()).block);
+		auto const v1 = creator.test_versions({{oid, {}, d1}});
+		REQUIRE(s.commit_block(v1).block);
+		auto const v2 = creator.test_versions({{oid, v1.tag(), d2}});
+		REQUIRE(s.commit_block(v2).block);
+		REQUIRE(s.commit_block(creator.test_data_change_with_data(other)).block);
+		auto const segment = creator.test_segment(plain_segment_data{sequence_number{1}, sequence_number{5}, creator.created_tags});
+		REQUIRE(s.commit_block(segment).block);
+		REQUIRE(s.commit_block(creator.test_versions({{oid, v2.tag(), d3}})).block);
+		return history{v1, segment};
+	};
+
+	SECTION("the newest version only") {
+		protocol::storage_id sid = securepath::test::random_octet_vector(8);
+		storage s(sid, storage_config{root}, storage_modes{sync_mode::allow_all, auth_mode::only_tag});
+		REQUIRE(s.modes().limits.kept_data_versions == 1);
+		std::vector<std::vector<data_id>> released;
+		s.set_data_release([&](protocol::storage_id const&, std::vector<data_id> const& ids) {
+			for(auto const& id : ids) {
+				CHECK(check_result_error(s.committed_data(id), protocol::errc::data_pruned));
+			}
+			released.push_back(ids);
+		});
+		test::test_block_creator creator;
+		auto const made = fill(s, creator);
+
+		// the cut removes the root user change, the versions of the object all stay
+		CHECK(s.cut_history(made.segment.tag()).size() == 1);
+		REQUIRE(released.size() == 1);
+		CHECK(released[0] == std::vector<data_id>{d1.manifest_digest});
+		// d2 is the newest below the segment; d3 above it supersedes nothing yet
+		for(auto const& d : {d2, d3, other}) {
+			CHECK(s.committed_data(d.manifest_digest).value() == d);
+		}
+		CHECK(check_result_error(s.committed_data(d1.manifest_digest), protocol::errc::data_pruned));
+		CHECK(s.get_records(made.v1.sequence(), made.v1.sequence()).size() == 1);
+
+		// a record that names the data again wants it again
+		REQUIRE(s.commit_block(creator.test_data_change_with_data(d1)).block);
+		CHECK(s.committed_data(d1.manifest_digest).value() == d1);
+	}
+
+	SECTION("a storage that keeps every version") {
+		protocol::storage_id sid = securepath::test::random_octet_vector(8);
+		storage s(sid, storage_config{root}, storage_modes{sync_mode::allow_all, auth_mode::only_tag
+			, replication_mode::none, storage_limits{0, 0, keep_all_data_versions}});
+		bool released = false;
+		s.set_data_release([&](protocol::storage_id const&, std::vector<data_id> const&) { released = true; });
+		test::test_block_creator creator;
+		auto const made = fill(s, creator);
+		CHECK(s.cut_history(made.segment.tag()).size() == 1);
+		CHECK(!released);
+		CHECK(s.committed_data(d1.manifest_digest).value() == d1);
+	}
 }
 
 }

@@ -3,6 +3,7 @@
 
 #include <flat_map>
 #include "connection.hpp"
+#include "data_release.hpp"
 #include "data_server.hpp"
 #include "peer_connection.hpp"
 #include "storage.hpp"
@@ -228,6 +229,11 @@ public:
 		if(it == storages_.end()) {
 			LOG_TRACE("creating storage object (id={})", to_hex(id));
 			std::shared_ptr<storage> p = std::make_shared<storage>(id, default_storage_config_, create_modes, &context_.public_keys(), &context_.private_data());
+			p->set_data_release([weak = weak_self()](protocol::storage_id const& sid, std::vector<data_id> const& ids) {
+					if(auto self = weak.lock()) {
+						self->release_data(sid, ids);
+					}
+				});
 			if(p->modes().replication != replication_mode::none) {
 				p->set_peer_push([this](protocol::storage_id const& sid, storage_modes const& modes, block_envelope const& env) {
 						push_to_peers(sid, modes, env);
@@ -445,6 +451,27 @@ public:
 			data_announced(*announcement);
 			for(auto const& conn : peer_connections()) {
 				conn->announce(*announcement);
+			}
+		}
+	}
+
+	/**
+	 * No record of the storage names these data any more (RD9): nobody is sent to a
+	 * holder for them again, the own data role drops them and the separate data servers
+	 * are told over their links. A data server that is not connected now keeps its
+	 * chunks: the release is not repeated (see record_data.txt RDS 9).
+	 */
+	void release_data(protocol::storage_id const& sid, std::vector<data_id> const& ids) {
+		for(auto const& id : ids) {
+			availability_.forget(sid, id);
+		}
+		if(data_role_) {
+			data_role_->release(sid, ids);
+		}
+		auto const connections = peer_connections();
+		for(auto const& packet : release_packets(sid, ids)) {
+			for(auto const& conn : connections) {
+				conn->release(packet);
 			}
 		}
 	}

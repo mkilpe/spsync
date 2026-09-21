@@ -2,6 +2,7 @@
 
 #include "peer_config.hpp"
 
+#include <spsync/core/data/data_descriptor.hpp>
 #include <spsync/protocol/s2s_protocol.hpp>
 
 #include <securepath/network/encryption/encrypted_connection.hpp>
@@ -30,6 +31,8 @@ public:
 		std::function<std::vector<protocol::announce_data>()> whole_view;
 		/// the record server's authenticated key
 		std::function<void(crypto::public_key const&)> trust;
+		/// the record server says no record names these data any more (RD9)
+		std::function<void(protocol::storage_id const&, std::vector<data_id> const&)> release;
 		/// the link went down (reconnect)
 		std::function<void()> disconnected;
 		/// the hello exchange succeeded
@@ -54,6 +57,7 @@ protected:
 public:
 	// s2s packet handlers (public for the deserialiser dispatch)
 	void operator()(protocol::peer_hello const&);
+	void operator()(protocol::release_data const&);
 
 	/// whatever else a record server says on this link is not for a data server
 	template<typename Packet>

@@ -69,6 +69,24 @@ struct test_block_creator {
 		return next_block(test_record);
 	}
 
+	/// one change of a data change record: the object, the record of its previous version
+	/// (empty for the first one) and the data this version carries, if any
+	struct version {
+		util::object_id oid;
+		record_tag previous;
+		std::optional<data_descriptor> data;
+	};
+
+	/// Create data change record with the given versions of objects
+	chain_block test_versions(std::vector<version> versions) {
+		record_tag tag = securepath::test::random_octet_vector(16);
+		auth_record<data_change_record> test_record{data_change_record{next_record_base()}, util::content_auth{tag}};
+		for(auto& v : versions) {
+			test_record.record.add(single_change{plain_single_change_data{std::move(v.oid), std::move(v.previous), std::move(v.data)}, {}});
+		}
+		return next_block(test_record);
+	}
+
 	/// Create data change record whose encrypted header makes the record about the given size
 	/// (the servers never read the header: any octets do)
 	chain_block test_big_data_change(std::size_t size) {

@@ -257,6 +257,49 @@ TEST_CASE("server data store expiry", "[unit]") {
 	CHECK(store.expire_incomplete(t0 + 100h) == 0);
 }
 
+// RD9: data no record names any more goes, rows and chunks, and its room is free again
+TEST_CASE("server data store release", "[unit]") {
+	auto const now = clock_type::now();
+	auto const kept = make_data(3000);
+	auto const dead = make_data(5000);
+	auto const half = make_data(5000);
+	auto const limit = kept.descriptor.enc_size + dead.descriptor.enc_size + half.descriptor.enc_size;
+	server_data_store store{fresh_database(), data_root, data_quota{0, limit}};
+
+	for(auto const* d : {&kept, &dead}) {
+		REQUIRE(store.open_upload(d->descriptor, d->manifest, now));
+		for(auto const& [no, chunk] : d->chunks) {
+			REQUIRE(store.store_chunk(d->descriptor.manifest_digest, no, chunk, now));
+		}
+	}
+	// an upload in progress
+	REQUIRE(store.open_upload(half.descriptor, half.manifest, now));
+	REQUIRE(store.store_chunk(half.descriptor.manifest_digest, 0, half.chunks.at(0), now));
+	CHECK(store.used_bytes() == limit);
+	CHECK(store.uploads_in_progress() == 1);
+
+	CHECK(store.release({}) == 0);
+	CHECK(store.release({securepath::test::random_octet_vector(64)}) == 0);
+	CHECK(store.release({dead.descriptor.manifest_digest, half.descriptor.manifest_digest
+		, securepath::test::random_octet_vector(64)}) == 2);
+
+	CHECK(!store.find(dead.descriptor.manifest_digest));
+	CHECK(!store.find(half.descriptor.manifest_digest));
+	CHECK(!std::filesystem::exists(data_root / to_hex(dead.descriptor.manifest_digest)));
+	CHECK(!std::filesystem::exists(data_root / to_hex(half.descriptor.manifest_digest)));
+	CHECK(store.uploads_in_progress() == 0);
+	CHECK(store.used_bytes() == kept.descriptor.enc_size);
+	// what was not released is untouched
+	CHECK(store.find(kept.descriptor.manifest_digest)->state == record_data_state::in_sync);
+	CHECK(store.read_chunk(kept.descriptor.manifest_digest, 0) == kept.chunks.at(0));
+
+	// a chunk of the released upload that was still on its way
+	CHECK(is_error(store.store_chunk(half.descriptor.manifest_digest, 1, half.chunks.at(1), now), protocol::errc::no_such_upload));
+	// the room is there again, and released again is nothing
+	CHECK(store.open_upload(dead.descriptor, dead.manifest, now));
+	CHECK(store.release({half.descriptor.manifest_digest}) == 0);
+}
+
 // RD10: served octets per window, windows fixed to the clock
 TEST_CASE("transfer budget", "[unit]") {
 	auto const t0 = time_point{std::chrono::seconds{1000000}};

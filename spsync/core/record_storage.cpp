@@ -18,12 +18,26 @@
 #include <mutex>
 #include <string_view>
 #include <unordered_map>
+#include <map>
 #include <unordered_set>
 
 namespace securepath::sync {
 namespace {
 
 std::int64_t const seq_selector_value(1);
+
+/// the row of the data a record that is being stored names: every record naming the data
+/// shares it (reference counting by data_id, RD9). A data the retention policy had let go
+/// is wanted again by its new record.
+std::uint64_t reference_data(database::connection_ptr const& db, data_descriptor const& descriptor) {
+	data_state_table table{db};
+	auto const local_id = table.ensure(descriptor);
+	auto const row = table.find(local_id);
+	if(row && row->state == record_data_state::pruned) {
+		table.set_state(local_id, record_data_state::deferred);
+	}
+	return local_id;
+}
 
 void create_object_records(database::connection_ptr db, octet_vector const& tag, data_change_record const& rec) {
 	for(auto& obj : rec) {
@@ -34,8 +48,7 @@ void create_object_records(database::connection_ptr db, octet_vector const& tag,
 		q.bind(":prev_tag", obj.data.previous_oid_record_tag);
 		q.bind(":oid", obj.data.id.value());
 		if(obj.data.data) {
-			// every record naming the data shares its row (reference counting by data_id, RD9)
-			q.bind(":data_ref", static_cast<std::int64_t>(data_state_table{db}.ensure(*obj.data.data)));
+			q.bind(":data_ref", static_cast<std::int64_t>(reference_data(db, *obj.data.data)));
 		} else {
 			q.bind(":data_ref");
 		}
@@ -316,10 +329,17 @@ struct record_storage::impl {
 				"cursor_owner BLOB,"
 				"max_record_size INTEGER,"
 				"chunk_size INTEGER,"
-				"data_endpoints BLOB);").execute();
-		} else if(!has_column(*db, "sync_state", "data_endpoints")) {
-			// a database from before RDS 5
-			db->prepare("ALTER TABLE sync_state ADD COLUMN data_endpoints BLOB;").execute();
+				"data_endpoints BLOB,"
+				"kept_data_versions INTEGER);").execute();
+		} else {
+			if(!has_column(*db, "sync_state", "data_endpoints")) {
+				// a database from before RDS 5
+				db->prepare("ALTER TABLE sync_state ADD COLUMN data_endpoints BLOB;").execute();
+			}
+			if(!has_column(*db, "sync_state", "kept_data_versions")) {
+				// from before the retention policy (RDS 9): not known until the server tells
+				db->prepare("ALTER TABLE sync_state ADD COLUMN kept_data_versions INTEGER;").execute();
+			}
 		}
 	}
 
@@ -425,13 +445,23 @@ struct record_storage::impl {
 		record_tag tag;
 		record_tag prev_tag;
 		std::uint64_t seq{};
+		/// row of the record data table when the change names a data
+		std::optional<std::uint64_t> data_ref;
+	};
+
+	/// one record of an object's previous-record chain
+	struct object_version {
+		record_tag tag;
+		record_tag prev_tag;
+		std::uint64_t seq{};
+		std::optional<std::uint64_t> data_ref;
 	};
 
 	/// the newest in sync record per object id with its previous-record link
 	std::vector<object_head_row> collect_object_heads() {
 		// sqlite: bare columns beside max() come from the matching row
 		auto q = db->prepare(
-			"SELECT record_objects.oid, record_objects.tag, record_objects.prev_tag, max(record.seq)"
+			"SELECT record_objects.oid, record_objects.tag, record_objects.prev_tag, max(record.seq), record_objects.data_ref"
 			" FROM record_objects JOIN record ON record.tag = record_objects.tag"
 			" WHERE record.state = :state GROUP BY record_objects.oid;");
 		q.bind(":state", std::to_underlying(record_state::in_sync));
@@ -447,42 +477,59 @@ struct record_storage::impl {
 			}
 			rows.push_back({std::move(*oid), std::move(*tag)
 				, res.value<octet_vector>(2).value_or(octet_vector{})
-				, res.value<std::uint64_t>(3).value_or(0)});
+				, res.value<std::uint64_t>(3).value_or(0)
+				, data_ref_of(res.value<std::int64_t>(4))});
 		}
 		return rows;
 	}
 
-	/// walk one object's previous-record chain from its newest record, collecting the
-	/// tags below the cut; seen keeps shared chain parts from being walked twice
+	static std::optional<std::uint64_t> data_ref_of(std::optional<std::int64_t> const& column) {
+		return column ? std::optional<std::uint64_t>{static_cast<std::uint64_t>(*column)} : std::nullopt;
+	}
+
+	/// the in sync record with the given tag as a version of the object
+	std::optional<object_version> find_object_version(octet_vector const& oid, record_tag const& tag) {
+		auto q = db->prepare(
+			"SELECT record.seq, record_objects.prev_tag, record_objects.data_ref FROM record_objects"
+			" JOIN record ON record.tag = record_objects.tag"
+			" WHERE record_objects.tag = :t AND record_objects.oid = :o AND record.state = :state;");
+		q.bind(":t", tag);
+		q.bind(":o", oid);
+		q.bind(":state", std::to_underlying(record_state::in_sync));
+		std::optional<object_version> ret;
+		if(auto res = q.execute()) {
+			ret = object_version{tag, res.value<octet_vector>(1).value_or(octet_vector{})
+				, res.value<std::uint64_t>(0).value_or(0), data_ref_of(res.value<std::int64_t>(2))};
+		} else {
+			LOG_WARN("object chain dangles [oid={}, missing tag={}]", to_hex(oid), to_hex(tag));
+		}
+		return ret;
+	}
+
+	/**
+	 * The in sync records of one object, from its newest one along the previous-record
+	 * links: its versions, newest first. Every object is walked on its own - a record
+	 * that changes several objects continues differently for each of them.
+	 */
+	std::vector<object_version> object_versions(object_head_row const& head) {
+		std::vector<object_version> ret;
+		std::unordered_set<record_tag> visited;
+		std::optional<object_version> version = object_version{head.tag, head.prev_tag, head.seq, head.data_ref};
+		while(version && visited.insert(version->tag).second) {
+			ret.push_back(*version);
+			auto const prev = version->prev_tag;
+			version = prev.empty() ? std::nullopt : find_object_version(head.oid, prev);
+		}
+		return ret;
+	}
+
+	/// the tags of one object's versions below the cut; seen keeps a record of several
+	/// objects from being listed twice
 	void collect_object_chain(object_head_row const& head, sequence_number below
 		, std::unordered_set<record_tag>& seen, std::vector<record_tag>& ret) {
-		record_tag tag = head.tag;
-		record_tag prev = head.prev_tag;
-		std::uint64_t seq = head.seq;
-		bool walking = true;
-		while(walking && !tag.empty() && seen.insert(tag).second) {
-			if(sequence_number{seq} < below) {
-				ret.push_back(tag);
-			}
-			if(prev.empty()) {
-				walking = false;
-			} else {
-				auto q = db->prepare(
-					"SELECT record.seq, record_objects.prev_tag FROM record_objects"
-					" JOIN record ON record.tag = record_objects.tag"
-					" WHERE record_objects.tag = :t AND record_objects.oid = :o AND record.state = :state;");
-				q.bind(":t", prev);
-				q.bind(":o", head.oid);
-				q.bind(":state", std::to_underlying(record_state::in_sync));
-				auto res = q.execute();
-				if(res) {
-					tag = prev;
-					seq = res.value<std::uint64_t>(0).value_or(0);
-					prev = res.value<octet_vector>(1).value_or(octet_vector{});
-				} else {
-					LOG_WARN("object chain dangles [oid={}, missing tag={}]", to_hex(head.oid), to_hex(prev));
-					walking = false;
-				}
+		for(auto const& version : object_versions(head)) {
+			if(sequence_number{version.seq} < below && seen.insert(version.tag).second) {
+				ret.push_back(version.tag);
 			}
 		}
 	}
@@ -875,22 +922,78 @@ void record_storage::set_cursor_owner(octet_vector const& owner) {
 }
 
 storage_limits record_storage::limits() const {
-	auto q = impl_->db->prepare("SELECT max_record_size, chunk_size FROM sync_state WHERE key = 1;");
+	auto q = impl_->db->prepare("SELECT max_record_size, chunk_size, kept_data_versions FROM sync_state WHERE key = 1;");
 	storage_limits ret;
 	if(auto res = q.execute()) {
 		ret.max_record_size = static_cast<std::uint32_t>(res.value<std::int64_t>(0).value_or(0));
 		ret.chunk_size = static_cast<std::uint32_t>(res.value<std::int64_t>(1).value_or(0));
+		ret.kept_data_versions = static_cast<std::uint32_t>(res.value<std::int64_t>(2).value_or(0));
 	}
 	return ret;
 }
 
 void record_storage::set_limits(storage_limits const& l) {
 	auto q = impl_->db->prepare(
-		"INSERT INTO sync_state(key, max_record_size, chunk_size) VALUES(1, :m, :c)"
-		" ON CONFLICT(key) DO UPDATE SET max_record_size = excluded.max_record_size, chunk_size = excluded.chunk_size;");
+		"INSERT INTO sync_state(key, max_record_size, chunk_size, kept_data_versions) VALUES(1, :m, :c, :k)"
+		" ON CONFLICT(key) DO UPDATE SET max_record_size = excluded.max_record_size, chunk_size = excluded.chunk_size"
+		", kept_data_versions = excluded.kept_data_versions;");
 	q.bind(":m", static_cast<std::int64_t>(l.max_record_size));
 	q.bind(":c", static_cast<std::int64_t>(l.chunk_size));
+	q.bind(":k", static_cast<std::int64_t>(l.kept_data_versions));
 	q.execute();
+}
+
+std::vector<data_id> record_storage::superseded_data_below(sequence_number below, std::uint32_t kept_versions) const {
+	std::vector<data_id> ret;
+	if(kept_versions != 0 && kept_versions != keep_all_data_versions) {
+		// row of the record data table -> references by versions beyond the kept ones
+		std::map<std::uint64_t, std::uint64_t> superseded;
+		for(auto const& head : impl_->collect_object_heads()) {
+			std::uint64_t carrying = 0;
+			for(auto const& version : impl_->object_versions(head)) {
+				if(version.data_ref && sequence_number{version.seq} < below && ++carrying > kept_versions) {
+					++superseded[*version.data_ref];
+				}
+			}
+		}
+		data_state_table table{impl_->db};
+		for(auto const& [data_ref, references] : superseded) {
+			auto const row = table.find(data_ref);
+			// somebody else naming the data keeps it: a kept version, a record above the
+			// cut, a record that is not in sync yet
+			if(row && row->state != record_data_state::pruned && data_reference_count(data_ref) == references) {
+				ret.push_back(row->descriptor.manifest_digest);
+			}
+		}
+	}
+	return ret;
+}
+
+std::vector<data_id> record_storage::prune_superseded_data(sequence_number below, std::uint32_t kept_versions) {
+	data_state_table table{impl_->db};
+	database::transaction tact(*impl_->db);
+	auto pruned = superseded_data_below(below, kept_versions);
+	for(auto const& id : pruned) {
+		if(auto const row = table.find(id)) {
+			table.set_state(row->local_id, record_data_state::pruned);
+		}
+	}
+	return pruned;
+}
+
+std::vector<data_id> record_storage::remove_unreferenced_data() {
+	data_state_table table{impl_->db};
+	std::vector<data_id> removed;
+	database::transaction tact(*impl_->db);
+	for(auto const local_id : table.all_ids()) {
+		if(data_reference_count(local_id) == 0) {
+			if(auto const row = table.find(local_id)) {
+				removed.push_back(row->descriptor.manifest_digest);
+			}
+			table.remove(local_id);
+		}
+	}
+	return removed;
 }
 
 std::vector<data_endpoint> record_storage::data_endpoints() const {

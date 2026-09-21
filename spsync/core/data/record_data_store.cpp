@@ -284,17 +284,21 @@ private:
 	octet_vector cached_;
 };
 
+/// the local chunks of a data go, the row and the manifest stay; the caller holds the lock
+void drop_chunks(record_data_store_impl& store, data_state_row& row, record_data_state state) {
+	store.files.remove(row.descriptor.manifest_digest);
+	row.have.clear();
+	store.table.set_have(row.local_id, row.have);
+	store.table.set_state(row.local_id, state);
+}
+
 bool evict_data(record_data_store_impl& store, data_id const& id) {
 	std::unique_lock lock{store.mutex};
 	auto row = store.table.find(id);
 	bool const ok = row && row->state != record_data_state::upload_pending;
 	if(ok) {
-		store.files.remove(id);
-		row->have.clear();
-		store.table.set_have(row->local_id, row->have);
-		if(row->state != record_data_state::invalid) {
-			store.table.set_state(row->local_id, record_data_state::removed);
-		}
+		bool const invalid = row->state == record_data_state::invalid;
+		drop_chunks(store, *row, invalid ? record_data_state::invalid : record_data_state::removed);
 	}
 	return ok;
 }
@@ -533,6 +537,15 @@ void record_data_store::set_state(data_id const& id, record_data_state state) {
 
 bool record_data_store::evict(data_id const& id) {
 	return evict_data(*impl_, id);
+}
+
+bool record_data_store::prune(data_id const& id) {
+	std::unique_lock lock{impl_->mutex};
+	auto row = impl_->table.find(id);
+	if(row) {
+		drop_chunks(*impl_, *row, record_data_state::pruned);
+	}
+	return row.has_value();
 }
 
 std::size_t record_data_store::remove_unreferenced(std::function<bool(std::uint64_t)> const& is_referenced) {

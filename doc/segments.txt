@@ -219,6 +219,15 @@ Implementation steps
       get_records, follow-up to retained object, backbone over the cut, reopen
       cursors), engine rejoin from anchor (sparse sync, promotion, fast/full
       verify counts, converging commit from the rejoined client).
+      Fixed 2026-09-21 (with record_data.txt RDS 9): the retained set walked
+      the object chains with one shared set of seen tags and stopped at a
+      record another object had already passed, so with a record of several
+      objects whose previous records differ the older chain of all but the
+      first walked object was not retained and went with the cut. Every object
+      is walked on its own now; test record_storage "superseded data below a
+      cut / every object is walked on its own". A cut also applies the
+      storage's data retention policy (kept_data_versions) since then: records
+      of superseded versions stay, their data goes.
 
 + SEG 6  Client local prune -- done 2026-09-02                                 [1d]
       The same prefix cut client side (storage-constrained devices) while the

@@ -93,4 +93,11 @@ void record_server_link::operator()(protocol::peer_hello const& p) {
 	}
 }
 
+void record_server_link::operator()(protocol::release_data const& p) {
+	// the link is to a configured record server whose key the handshake verified
+	if(ready() && hooks_.release) {
+		hooks_.release(p.sid, p.data_ids);
+	}
+}
+
 }

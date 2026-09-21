@@ -37,6 +37,8 @@ struct spsync_server_commands : sync::spsync_server_params, command_parser {
 		add(anti_entropy, "anti_entropy", "", "seconds between replicated head announcements to the peers");
 		add(storage_params.default_limits.max_record_size, "max_record_size", "", "default record content limit (bytes) of new storages");
 		add(storage_params.default_limits.chunk_size, "chunk_size", "", "default data chunk size (bytes) of new storages");
+		add(storage_params.default_limits.kept_data_versions, "kept_data_versions", ""
+			, "newest data versions of an object that keep their data at a history cut, new storages (4294967295 = all)");
 		add(storage_params.data_servers, "data_servers", "", "data-role servers of the storages as host:port/keyid-hex[/region]; an all-in-one server lists itself");
 		add(ticket_validity, "ticket_validity", "", "seconds an issued data ticket is valid");
 		add(data_params.enabled, "data_role", "", "serve record data: run the data listener");

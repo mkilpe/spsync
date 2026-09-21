@@ -11,7 +11,7 @@ ticket_issuer::ticket_issuer(std::vector<data_endpoint> data_servers, data_avail
 {
 }
 
-util::result<issued_ticket> ticket_issuer::issue(protocol::storage_id const& sid, std::optional<data_descriptor> const& committed
+util::result<issued_ticket> ticket_issuer::issue(protocol::storage_id const& sid, util::result<data_descriptor> const& committed
 	, crypto::public_key_id const& member, std::uint32_t right
 	, std::optional<crypto::private_key> const& server_key, time_point now) const {
 	util::result<issued_ticket> ret;
@@ -24,12 +24,12 @@ util::result<issued_ticket> ticket_issuer::issue(protocol::storage_id const& sid
 	} else if(data_servers_.empty()) {
 		ret = make_error(protocol::errc::no_data_servers);
 	} else if(!committed) {
-		ret = make_error(protocol::errc::unknown_data);
+		ret = committed.get_error();
 	} else {
 		issued_ticket issued;
-		issued.ticket = data_ticket{sid, *committed, member, static_cast<data_right>(right), now + validity_};
+		issued.ticket = data_ticket{sid, committed.value(), member, static_cast<data_right>(right), now + validity_};
 		issued.ticket.sign(*server_key);
-		auto const& id = committed->manifest_digest;
+		auto const& id = committed.value().manifest_digest;
 		issued.holders = upload ? upload_order(data_servers_, id)
 			: download_order(data_servers_, id, availability_.holdings(sid, id), availability_);
 		ret = std::move(issued);

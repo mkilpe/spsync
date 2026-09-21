@@ -38,7 +38,7 @@ struct storage_server_params {
 	std::string storage_root{"record-storages"};
 
 	/// the validity limits new storages get when the creator states none (RDS 8)
-	storage_limits default_limits{default_max_record_size, default_chunk_size};
+	storage_limits default_limits{default_storage_limits};
 
 	/**
 	 * Expected public key id (hex) of this server's signing key (plan 3.3); empty derives

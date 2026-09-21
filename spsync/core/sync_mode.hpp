@@ -43,6 +43,9 @@ struct storage_limits {
 	std::uint32_t max_record_size{};
 	/// the chunk size out of band data of this storage is cut into (RD3)
 	std::uint32_t chunk_size{};
+	/// retention at a history cut (RD9): how many of the newest data carrying versions of
+	/// an object below the cut keep their data; keep_all_data_versions = every one
+	std::uint32_t kept_data_versions{};
 
 	bool operator==(storage_limits const&) const = default;
 };
@@ -75,11 +78,38 @@ std::uint32_t constexpr default_max_record_size{1024 * 1024};
 inline constexpr limit_range chunk_size_range{256 * 1024, 8 * 1024 * 1024};
 std::uint32_t constexpr default_chunk_size{1024 * 1024};
 
+/**
+ * Not a validity rule like the two above - what a cut keeps never makes a record invalid -
+ * but a property of the storage all the same: replicas and clients cut alike, and members
+ * know what to expect of old versions. The records of superseded versions always stay (the
+ * chain needs them), only their data goes. The default keeps the newest version only.
+ */
+std::uint32_t constexpr keep_all_data_versions{0xFFFFFFFF};
+inline constexpr limit_range kept_data_versions_range{1, keep_all_data_versions};
+std::uint32_t constexpr default_kept_data_versions{1};
+
+inline constexpr storage_limits default_storage_limits{default_max_record_size, default_chunk_size, default_kept_data_versions};
+
 /// stated limits must be within the ranges; 0 = not stated
 [[nodiscard]] constexpr bool valid_storage_limits(storage_limits const& l) {
 	bool const record_ok = l.max_record_size == 0 || max_record_size_range.contains(l.max_record_size);
 	bool const chunk_ok = l.chunk_size == 0 || chunk_size_range.contains(l.chunk_size);
-	return record_ok && chunk_ok;
+	bool const kept_ok = l.kept_data_versions == 0 || kept_data_versions_range.contains(l.kept_data_versions);
+	return record_ok && chunk_ok && kept_ok;
+}
+
+/// the stated limits with every unstated one taken from the others
+[[nodiscard]] constexpr storage_limits limits_or(storage_limits stated, storage_limits const& others) {
+	if(stated.max_record_size == 0) {
+		stated.max_record_size = others.max_record_size;
+	}
+	if(stated.chunk_size == 0) {
+		stated.chunk_size = others.chunk_size;
+	}
+	if(stated.kept_data_versions == 0) {
+		stated.kept_data_versions = others.kept_data_versions;
+	}
+	return stated;
 }
 
 /// The modes a storage operates in; chosen at creation time and immutable afterwards
@@ -110,12 +140,7 @@ struct storage_modes {
 	if(stated.replication == replication_mode::none) {
 		stated.replication = actual.replication;
 	}
-	if(stated.limits.max_record_size == 0) {
-		stated.limits.max_record_size = actual.limits.max_record_size;
-	}
-	if(stated.limits.chunk_size == 0) {
-		stated.limits.chunk_size = actual.limits.chunk_size;
-	}
+	stated.limits = limits_or(stated.limits, actual.limits);
 	return stated == actual;
 }
 
@@ -131,15 +156,16 @@ struct wire_modes {
 	/// the limits travel as plain values (0 = not stated)
 	std::uint32_t max_record_size{};
 	std::uint32_t chunk_size{};
+	std::uint32_t kept_data_versions{};
 };
 
 inline wire_modes to_wire(std::optional<storage_modes> const& m) {
 	return m ? wire_modes{to_wire(m->mode), to_wire(m->auth), to_wire(m->replication),
-		m->limits.max_record_size, m->limits.chunk_size} : wire_modes{};
+		m->limits.max_record_size, m->limits.chunk_size, m->limits.kept_data_versions} : wire_modes{};
 }
 
 inline std::optional<storage_modes> modes_from_wire(std::uint32_t mode, std::uint32_t amode,
-	std::uint32_t repl = to_wire(replication_mode::none), std::uint32_t max_record_size = 0, std::uint32_t chunk_size = 0)
+	std::uint32_t repl = to_wire(replication_mode::none), storage_limits const& limits = {})
 {
 	std::optional<storage_modes> ret;
 	if(mode && amode && repl
@@ -147,14 +173,13 @@ inline std::optional<storage_modes> modes_from_wire(std::uint32_t mode, std::uin
 		&& amode-1 <= static_cast<std::uint32_t>(auth_mode::sign_records)
 		&& repl-1 <= static_cast<std::uint32_t>(replication_mode::strict))
 	{
-		ret = storage_modes{sync_mode(mode-1), auth_mode(amode-1), replication_mode(repl-1),
-			storage_limits{max_record_size, chunk_size}};
+		ret = storage_modes{sync_mode(mode-1), auth_mode(amode-1), replication_mode(repl-1), limits};
 	}
 	return ret;
 }
 
 inline std::optional<storage_modes> modes_from_wire(wire_modes const& w) {
-	return modes_from_wire(w.mode, w.amode, w.repl, w.max_record_size, w.chunk_size);
+	return modes_from_wire(w.mode, w.amode, w.repl, storage_limits{w.max_record_size, w.chunk_size, w.kept_data_versions});
 }
 
 }

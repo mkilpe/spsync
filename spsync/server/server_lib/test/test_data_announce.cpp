@@ -13,6 +13,9 @@
 
 #include <securepath/crypto/aes_gcm.hpp>
 #include <securepath/database/sqlite/connection.hpp>
+#include <spsync/protocol/error.hpp>
+#include <spsync/util/result.hpp>
+#include <securepath/util/conversions.hpp>
 #include <securepath/network/encryption/handshake/pk_handshake.hpp>
 
 #include <atomic>
@@ -279,8 +282,90 @@ TEST_CASE("separate data server", "[unit]") {
 	restarted.start();
 	WAIT_CHECK(restarted.availability().holdings(sid, made.descriptor.manifest_digest).size() == 1, 30s);
 
+	// (RDS 9) the record naming the data is rolled back: the record server forgets the
+	// holder, refuses tickets, and tells the data server over its link to drop the chunks
+	auto reopened = restarted.open_storage(sid);
+	REQUIRE(reopened);
+	REQUIRE(reopened->committed_data(made.descriptor.manifest_digest));
+	CHECK(data.find(sid, made.descriptor.manifest_digest));
+	CHECK(reopened->truncate_from(sequence_number{2}).size() == 1);
+	CHECK(!reopened->committed_data(made.descriptor.manifest_digest));
+	CHECK(restarted.availability().holdings(sid, made.descriptor.manifest_digest).empty());
+	WAIT_CHECK(!data.find(sid, made.descriptor.manifest_digest), 10s);
+	CHECK(!std::filesystem::exists(std::filesystem::path{"test-separate-data"} / to_hex(sid) / "data" / to_hex(made.descriptor.manifest_digest)));
+	CHECK(data.stored_bytes() == 0);
+
+	reopened.reset();
 	restarted.close();
 	data.close();
+}
+
+// (RDS 9) the same in the all-in-one shape: the record role tells its own data role
+// directly; data a record that stays still names is kept
+TEST_CASE("all in one server releases the data of removed records", "[unit]") {
+	std::filesystem::remove_all("test-release-a");
+	std::filesystem::remove_all("test-announce-client");
+	std::remove("test-announce-client.db");
+
+	test::test_context tctx;
+	tctx.add_client(2);
+	tctx.share_client_keys();
+	network::enable_pk_handshake(tctx.client_context(0));
+	all_in_one server{tctx.client_context(0), "test-release-a", 42772, 42782, {}};
+	server.start();
+
+	record_data_store store{database::sqlite::create_sqlite_connection("test-announce-client.db"), "test-announce-client"};
+	auto const sid = securepath::test::random_octet_vector(16);
+	auto const kept = upload_to(server, tctx.client_context(0), tctx.client_context(1), tctx.key_id(1), sid, store, 30000);
+	auto const dead = upload_to(server, tctx.client_context(0), tctx.client_context(1), tctx.key_id(1), sid, store, 50000);
+	REQUIRE(server.records.availability().holdings(sid, dead.manifest_digest).size() == 1);
+
+	// the chain that names them. The descriptors of this test have small chunks, which
+	// the chain would refuse: the records name data of the same ids with valid sizes
+	auto const named = [](data_descriptor const& d) {
+		return data_descriptor{3 * 1024 * 1024 + 48, 1024 * 1024, d.manifest_digest};
+	};
+	auto storage = server.records.open_storage(sid, storage_modes{sync_mode::allow_all, auth_mode::only_tag});
+	test::test_block_creator creator;
+	REQUIRE(storage->commit_block(creator.test_user_change()).block);
+	auto const before = server.data.stored_bytes();
+	CHECK(before == kept.enc_size + dead.enc_size);
+
+	SECTION("a rollback") {
+		REQUIRE(storage->commit_block(creator.test_data_change_with_data(named(kept))).block);
+		REQUIRE(storage->commit_block(creator.test_data_change_with_data(named(dead))).block);
+		CHECK(storage->truncate_from(sequence_number{3}).size() == 1);
+		CHECK(check_result_error(storage->committed_data(dead.manifest_digest), protocol::errc::unknown_data));
+	}
+
+	SECTION("a cut and the retention policy") {
+		// two versions of one object: the storage keeps the data of the newest one only
+		REQUIRE(storage->modes().limits.kept_data_versions == 1);
+		auto const oid = util::create_object_id();
+		auto const v1 = creator.test_versions({{oid, {}, named(dead)}});
+		REQUIRE(storage->commit_block(v1).block);
+		REQUIRE(storage->commit_block(creator.test_versions({{oid, v1.tag(), named(kept)}})).block);
+		auto const segment = creator.test_segment(plain_segment_data{sequence_number{1}, sequence_number{4}, creator.created_tags});
+		REQUIRE(storage->commit_block(segment).block);
+
+		// both records stay, the data of the first goes: no ticket for it any more
+		CHECK(storage->cut_history(segment.tag()).size() == 1);
+		CHECK(storage->get_records(v1.sequence(), v1.sequence()).size() == 1);
+		CHECK(check_result_error(storage->committed_data(dead.manifest_digest), protocol::errc::data_pruned));
+	}
+
+	CHECK(!server.data.find(sid, dead.manifest_digest));
+	CHECK(server.records.availability().holdings(sid, dead.manifest_digest).empty());
+	CHECK(server.data.stored_bytes() == kept.enc_size);
+	// the other one is untouched
+	auto const row = server.data.find(sid, kept.manifest_digest);
+	REQUIRE(row);
+	CHECK(row->state == record_data_state::in_sync);
+	CHECK(server.records.availability().holdings(sid, kept.manifest_digest).size() == 1);
+	CHECK(storage->committed_data(kept.manifest_digest));
+
+	storage.reset();
+	server.close();
 }
 
 }

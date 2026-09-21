@@ -47,13 +47,18 @@ public:
 	/// they are immutable - a different report afterwards is a misconfigured replica
 	void learn_limits(storage_limits const& reported) {
 		if(reported.max_record_size != 0) {
-			if(limits.max_record_size == 0) {
-				LINFO("storage limits learned [max_record_size={}, chunk_size={}]", reported.max_record_size, reported.chunk_size);
-				limits = reported;
-				records.set_limits(reported);
-			} else if(limits != reported) {
-				LWARN("server reports other limits than the storage has [reported max_record_size={}, chunk_size={}; stored {}, {}]",
-					reported.max_record_size, reported.chunk_size, limits.max_record_size, limits.chunk_size);
+			if(limits.max_record_size == 0 || limits_or(limits, reported) == reported) {
+				// the first time, or what an older version of this client could not store yet
+				if(limits != reported) {
+					LINFO("storage limits learned [max_record_size={}, chunk_size={}, kept_data_versions={}]"
+						, reported.max_record_size, reported.chunk_size, reported.kept_data_versions);
+					limits = reported;
+					records.set_limits(reported);
+				}
+			} else {
+				LWARN("server reports other limits than the storage has [reported max_record_size={}, chunk_size={}, kept_data_versions={}; stored {}, {}, {}]"
+					, reported.max_record_size, reported.chunk_size, reported.kept_data_versions
+					, limits.max_record_size, limits.chunk_size, limits.kept_data_versions);
 			}
 		}
 	}
@@ -1006,12 +1011,37 @@ public:
 		}
 	}
 
+	/**
+	 * The server let the data go under the retention policy of the storage (RD9): a
+	 * superseded version, its record stays. Nobody gets it from the server any more, so
+	 * chunks held only to be uploaded go as well; the application is told why.
+	 */
+	void on_data_pruned(data_id const& id, error const& err) {
+		LINFO("record data was pruned by the retention policy of the storage [data_id = {}]", to_hex(id));
+		auto const row = data->find(id);
+		if(row && row->state != record_data_state::in_sync) {
+			data->prune(id);
+			if(output) {
+				output->emit<engine_events::on_data_state_changed>(id, record_data_state::pruned);
+			}
+		}
+		if(output) {
+			output->emit<engine_events::on_data_transfer_failed>(id, err);
+		}
+	}
+
+	static bool is_data_pruned(std::optional<error> const& err) {
+		return err && err->code() == make_error_code(protocol::errc::data_pruned);
+	}
+
 	void on_upload_answer(request_handle handle, std::optional<error> const& err) {
 		auto it = uploads.find(handle);
 		if(it != uploads.end()) {
 			data_id const id = it->second;
 			uploads.erase(it);
-			if(err) {
+			if(is_data_pruned(err)) {
+				on_data_pruned(id, *err);
+			} else if(err) {
 				LWARN("record data upload failed [data_id = {}]: {}", to_hex(id), *err);
 				failed_uploads.insert(id);
 				if(output) {
@@ -1090,10 +1120,21 @@ public:
 				if(output) {
 					output->emit<engine_events::on_data_state_changed>(id, record_data_state::in_sync);
 				}
+			} else if(is_data_pruned(err)) {
+				on_data_pruned(id, *err);
 			} else if(err && err->code() == make_error_code(protocol::errc::data_not_held)) {
 				// the upload is still in progress over there: notify_data brings us back
 				LINFO("record data not complete at the holders yet [data_id = {}]", to_hex(id));
 				set_data_state(id, record_data_state::remote_not_complete);
+			} else if(err && err->code() == make_error_code(protocol::errc::unknown_data)) {
+				// no record on the server names the data any more: a history cut took it
+				// (RD9). We may still hold the record, but the data is gone over there - not
+				// wanted again by itself, only when somebody asks
+				LINFO("record data is not known to the server any more [data_id = {}]", to_hex(id));
+				set_data_state(id, record_data_state::deferred);
+				if(output) {
+					output->emit<engine_events::on_data_transfer_failed>(id, *err);
+				}
 			} else {
 				auto const failure = err.value_or(make_error(securepath::errc::invalid_state, "download ended incomplete"));
 				LWARN("record data download failed [data_id = {}]: {}", to_hex(id), failure);
@@ -1118,13 +1159,40 @@ public:
 	/// ask for a data that is not held: true when it is wanted now (or was already)
 	bool want_data(data_id const& id) {
 		auto const row = data->find(id);
+		// pruned: the server may not have cut yet, or not as far - asking tells
 		bool const fetchable = row && (row->state == record_data_state::deferred
-			|| row->state == record_data_state::removed || row->state == record_data_state::remote_not_complete);
+			|| row->state == record_data_state::removed || row->state == record_data_state::remote_not_complete
+			|| row->state == record_data_state::pruned);
 		if(fetchable) {
 			set_data_state(id, record_data_state::download_pending);
 		}
 		failed_downloads.erase(id);
 		return fetchable || (row && row->state == record_data_state::download_pending);
+	}
+
+	/**
+	 * The retention policy of the storage at a local history cut (RD9,
+	 * storage_limits::kept_data_versions, learned from the server): the data of the
+	 * versions of an object beyond the newest kept ones below the anchor goes, the
+	 * records stay. A data still to be uploaded is left alone - it may be the only copy,
+	 * the server says when it does not want it any more.
+	 */
+	void prune_superseded_data(sequence_number anchor) {
+		if(data) {
+			std::size_t pruned = 0;
+			for(auto const& id : records.superseded_data_below(anchor, limits.kept_data_versions)) {
+				auto const row = data->find(id);
+				if(row && row->state != record_data_state::upload_pending && data->prune(id)) {
+					++pruned;
+					if(output) {
+						output->emit<engine_events::on_data_state_changed>(id, record_data_state::pruned);
+					}
+				}
+			}
+			if(pruned != 0) {
+				LINFO("pruned {} record data of superseded versions [kept versions={}]", pruned, limits.kept_data_versions);
+			}
+		}
 	}
 
 	/**
@@ -1616,6 +1684,7 @@ octet_vector sync_engine::prune_history(record_tag const& segment_tag) {
 	auto retained = impl_->records.object_chain_tags_below(anchor.sequence);
 	auto removed = impl_->records.truncate_prefix(anchor.sequence, retained);
 	impl_->sweep_data();
+	impl_->prune_superseded_data(anchor.sequence);
 	LINFO("pruned local history [anchor=({},{}), removed={}, retained={}]"
 		, anchor.sequence, to_hex(anchor.hash), removed.size(), retained.size());
 

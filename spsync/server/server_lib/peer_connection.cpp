@@ -95,6 +95,22 @@ void peer_connection::announce(protocol::announce_data const& p) {
 	}
 }
 
+void peer_connection::release(protocol::release_data const& p) {
+	bool ready{};
+	{
+		std::unique_lock lock{mutex_};
+		ready = peer_id_.has_value() && data_server_link_;
+	}
+	if(ready) {
+		send_packet(p);
+	}
+}
+
+void peer_connection::operator()(protocol::release_data const& p) {
+	// record servers tell data servers, nobody tells a record server
+	LOG_WARN("release_data for storage {} on a record server, ignored", to_hex(p.sid));
+}
+
 void peer_connection::terminate(securepath::error const& err) {
 	encrypted_connection::close();
 	on_disconnected(err);

@@ -17,7 +17,7 @@ bool retryable_transfer_error(error const& err) {
 	using protocol::errc;
 	auto const is = [&](auto code) { return err.code() == make_error_code(code); };
 	bool const pointless = is(errc::invalid_data_ticket) || is(errc::invalid_data_manifest) || is(errc::invalid_data_chunk)
-		|| is(errc::unknown_data) || is(errc::no_data_servers) || is(errc::no_such_storage) || is(errc::no_such_upload)
+		|| is(errc::unknown_data) || is(errc::data_pruned) || is(errc::no_data_servers) || is(errc::no_such_storage) || is(errc::no_such_upload)
 		|| is(securepath::errc::not_supported) || is(securepath::errc::no_such_data);
 	bool const owners_news = is(errc::data_not_held);
 	return static_cast<bool>(err) && !pointless && !owners_news;

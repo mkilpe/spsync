@@ -69,6 +69,10 @@
   800 with the default 1 MiB); the user change record needs a way to change keys without
   an envelope for each member, or another mechanism - options in doc/user_changes.txt
   "Scaling: members per user change"; segment records have the same ceiling (tag list)
+* record data: a release_data the record server sends while a separate data server is not
+  connected is lost, the data server keeps the chunks of cut away records for good (disk and
+  quota only, no tickets); needs a reconciliation that works with several record servers -
+  with RDS 10's availability exchange (record_data.txt RDS 9 "Known gap")
 + packet size caps on the record and s2s connections (found 2026-09-19 with record_data.txt
   RDS 5, fixed 2026-09-21): the deserialisers of the client's record connection, the server's
   client connection and the peer connection take messages up to the transport frame; the

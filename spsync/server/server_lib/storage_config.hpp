@@ -37,7 +37,7 @@ private:
 	// Path where the storages are located on the disk, can be relative or absolute
 	std::string storage_root_path_ = "record-storages";
 	std::vector<crypto::public_key_id> peers_;
-	storage_limits default_limits_{default_max_record_size, default_chunk_size};
+	storage_limits default_limits_{default_storage_limits};
 };
 
 }

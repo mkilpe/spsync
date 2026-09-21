@@ -34,11 +34,12 @@ public:
 	std::vector<data_endpoint> const& data_servers() const { return data_servers_; }
 
 	/**
-	 * committed is the descriptor of the data when a record of the storage names it.
-	 * Errors (protocol errc): unknown_data, no_data_servers, invalid_state (not a right,
-	 * no server key to sign with).
+	 * committed is the descriptor of the data when a record of the storage names it, else
+	 * the reason no ticket is to be had for it (storage::committed_data: unknown_data,
+	 * data_pruned), which is what comes back. Other errors (protocol errc):
+	 * no_data_servers, invalid_state (not a right, no server key to sign with).
 	 */
-	util::result<issued_ticket> issue(protocol::storage_id const&, std::optional<data_descriptor> const& committed
+	util::result<issued_ticket> issue(protocol::storage_id const&, util::result<data_descriptor> const& committed
 		, crypto::public_key_id const& member, std::uint32_t right
 		, std::optional<crypto::private_key> const& server_key, time_point now) const;
 

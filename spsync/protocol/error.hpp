@@ -52,6 +52,10 @@ enum class errc {
 	/// the data server's transfer quota for the storage is used up for this window
 	/// (RD10): what was fetched is kept, the rest goes on in a later window
 	data_transfer_quota_exceeded,
+	/// a record of the storage names the data, but the retention policy of the storage
+	/// let it go at a history cut (RD9, storage_limits::kept_data_versions): no ticket,
+	/// for good - the version is a superseded one
+	data_pruned,
 	end_of_list
 };
 

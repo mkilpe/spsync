@@ -45,6 +45,7 @@ struct create_storage : storage_request_base {
 	, repl(m.repl)
 	, max_record_size(m.max_record_size)
 	, chunk_size(m.chunk_size)
+	, kept_data_versions(m.kept_data_versions)
 	{}
 
 	/// requested storage modes, wire encoded (0 = server default); immutable after creation
@@ -54,13 +55,16 @@ struct create_storage : storage_request_base {
 	/// requested validity limits (0 = server default), see storage_limits
 	std::uint32_t max_record_size{0};
 	std::uint32_t chunk_size{0};
+	/// requested retention at a history cut (0 = server default), see storage_limits
+	std::uint32_t kept_data_versions{0};
 
-	wire_modes modes() const { return wire_modes{mode, amode, repl, max_record_size, chunk_size}; }
+	wire_modes modes() const { return wire_modes{mode, amode, repl, max_record_size, chunk_size, kept_data_versions}; }
 
 	template<typename S>
 	void serialise(S& s) {
 		serialisation::sequence<S> seq(s);
-		seq & static_cast<storage_request_base&>(*this) & mode & amode & repl & max_record_size & chunk_size;
+		seq & static_cast<storage_request_base&>(*this) & mode & amode & repl & max_record_size & chunk_size
+			& kept_data_versions;
 	}
 };
 

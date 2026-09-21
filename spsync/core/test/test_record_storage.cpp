@@ -871,6 +871,24 @@ TEST_CASE("record_storage data references", "[unit]") {
 		CHECK(table.all_ids().size() == 2);
 	}
 
+	SECTION("an index that follows its records") {
+		// (RDS 9) a record server keeps the rows only: the ones nothing references go
+		CHECK(storage.remove_unreferenced_data().empty());
+		CHECK(table.all_ids().size() == 2);
+
+		// data_b is named by one record, data_a by two
+		storage.truncate_from(b3.sequence() + 1);
+		auto const dead = storage.remove_unreferenced_data();
+		CHECK(dead == std::vector<data_id>{data_b.manifest_digest});
+		CHECK(!table.find(data_b.manifest_digest));
+		CHECK(table.find(data_a.manifest_digest));
+		CHECK(storage.remove_unreferenced_data().empty());
+
+		storage.truncate_from(b3.sequence());
+		CHECK(storage.remove_unreferenced_data() == std::vector<data_id>{data_a.manifest_digest});
+		CHECK(table.all_ids().empty());
+	}
+
 	SECTION("truncation drops the references") {
 		auto const removed = storage.truncate_from(b3.sequence() + 1);
 		CHECK(removed.size() == 2);
@@ -881,6 +899,107 @@ TEST_CASE("record_storage data references", "[unit]") {
 
 		storage.truncate_prefix(b3.sequence() + 1, {});
 		CHECK(storage.data_reference_count(row_a->local_id) == 0);
+	}
+}
+
+// (RDS 9) the retention policy at a history cut: of the versions of an object below the
+// cut the newest ones keep their data, the data only older ones name is superseded
+TEST_CASE("record_storage superseded data below a cut", "[unit]") {
+	remove_database_test_db();
+	auto db_conn = database::sqlite::create_sqlite_connection(db_name);
+	record_storage storage(db_conn);
+	data_state_table table{db_conn};
+	test_block_creator creator;
+
+	auto const descriptor = [] { return data_descriptor{5080, 1000, securepath::test::random_octet_vector(64)}; };
+	auto const ids = [](std::vector<data_descriptor> const& ds) {
+		std::vector<data_id> ret;
+		for(auto const& d : ds) {
+			ret.push_back(d.manifest_digest);
+		}
+		return ret;
+	};
+	auto const a = util::create_object_id();
+	auto const b = util::create_object_id();
+	auto const d1 = descriptor(), d2 = descriptor(), d4 = descriptor(), d5 = descriptor();
+	auto const e1 = descriptor(), e2 = descriptor();
+	auto const commit = [&](std::vector<test_block_creator::version> versions) {
+		auto const block = creator.test_versions(std::move(versions));
+		REQUIRE(storage.create(block, record_state::in_sync));
+		return block;
+	};
+
+	REQUIRE(storage.create(creator.test_user_change(), record_state::in_sync));
+	auto const a1 = commit({{a, {}, d1}});
+	auto const a2 = commit({{a, a1.tag(), d2}});
+	auto const b1 = commit({{b, {}, e1}});
+	// a change of the metadata only: not a version of the data
+	auto const a3 = commit({{a, a2.tag(), std::nullopt}});
+	// one record, two objects: it continues differently for each of them
+	auto const both = commit({{a, a3.tag(), d4}, {b, b1.tag(), e2}});
+	auto const segment = creator.test_segment();
+	REQUIRE(storage.create(segment, record_state::in_sync));
+	auto const cut = segment.sequence();
+	// above the cut
+	auto const a5 = commit({{a, both.tag(), d5}});
+
+	SECTION("the versions beyond the kept ones") {
+		CHECK(storage.superseded_data_below(cut, 1) == ids({d1, d2, e1}));
+		CHECK(storage.superseded_data_below(cut, 2) == ids({d1}));
+		CHECK(storage.superseded_data_below(cut, 3).empty());
+		// the policy is not known, or keeps everything
+		CHECK(storage.superseded_data_below(cut, 0).empty());
+		CHECK(storage.superseded_data_below(cut, keep_all_data_versions).empty());
+		// only what lies below the cut counts: there d2 is the newest data of a
+		CHECK(storage.superseded_data_below(both.sequence(), 1) == ids({d1}));
+		CHECK(storage.superseded_data_below(a1.sequence(), 1).empty());
+		// the version above the cut supersedes nothing yet: it may still be rolled back
+		// (in the order the data came to the storage)
+		CHECK(storage.superseded_data_below(a5.sequence() + 1, 1) == ids({d1, d2, e1, d4}));
+	}
+
+	SECTION("every object is walked on its own") {
+		// the retained set of the cut: b1 is reached through the record of both objects,
+		// which the walk of a passed before
+		auto const retained = storage.object_chain_tags_below(cut);
+		for(auto const& block : {a1, a2, b1, a3, both}) {
+			CHECK(std::find(retained.begin(), retained.end(), block.tag()) != retained.end());
+		}
+		CHECK(retained.size() == 5);
+	}
+
+	SECTION("somebody else naming the data keeps it") {
+		// a newer version above the cut went back to the old data
+		commit({{b, both.tag(), e1}});
+		CHECK(storage.superseded_data_below(cut, 1) == ids({d1, d2}));
+		// a record that is not in sync yet
+		REQUIRE(storage.create(creator.test_versions({{util::create_object_id(), {}, d1}}).to_auth_record<data_change_record>()));
+		CHECK(storage.superseded_data_below(cut, 1) == ids({d2}));
+	}
+
+	SECTION("an index marks them pruned") {
+		auto const count = [&](data_descriptor const& d) {
+			return storage.data_reference_count(table.find(d.manifest_digest)->local_id);
+		};
+		CHECK(storage.prune_superseded_data(cut, 2) == ids({d1}));
+		CHECK(table.find(d1.manifest_digest)->state == record_data_state::pruned);
+		CHECK(table.find(d2.manifest_digest)->state == record_data_state::deferred);
+		// once
+		CHECK(storage.prune_superseded_data(cut, 2).empty());
+		CHECK(storage.prune_superseded_data(cut, 1) == ids({d2, e1}));
+		CHECK(storage.superseded_data_below(cut, 1).empty());
+
+		// the records and their references stay: nothing here is dead
+		CHECK(storage.find_tag(a1.tag()));
+		CHECK(count(d1) == 1);
+		CHECK(storage.remove_unreferenced_data().empty());
+		CHECK(table.all_ids().size() == 6);
+
+		// a record naming a pruned data wants it again
+		commit({{b, both.tag(), e1}});
+		CHECK(table.find(e1.manifest_digest)->state == record_data_state::deferred);
+		CHECK(count(e1) == 2);
+		CHECK(storage.prune_superseded_data(cut, 1).empty());
 	}
 }
 

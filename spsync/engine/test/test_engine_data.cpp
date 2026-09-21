@@ -441,6 +441,47 @@ TEST_CASE("engine fetches record data", "[unit]") {
 		CHECK(fetched->state() == record_data_state::in_sync);
 	}
 
+	SECTION("the server cut the record away") {
+		// (RDS 9) no record on the server names the data any more: the ticket is refused
+		reader.io.add_fetch_data_response([](data_id const&) { return make_error(protocol::errc::unknown_data); });
+		auto fetched = reader.engine.fetch_object_data(received);
+		reader.io.process_events();
+		// not wanted again by itself: deferred, and the application is told why
+		CHECK(fetched->state() == record_data_state::deferred);
+		WAIT_CHECK(reader.observer.failures == 1, 2s);
+
+		reader.engine.on_disconnected({});
+		reader.engine.on_connected();
+		reader.io.process_events();
+		CHECK(reader.io.fetch_requests().size() == 1);
+
+		// asking again asks again
+		reader.engine.fetch_object_data(received);
+		CHECK(reader.io.fetch_requests().size() == 2);
+	}
+
+	SECTION("the server pruned the version") {
+		// (RDS 9) a record names the data, but it is a superseded version and the retention
+		// policy of the storage let its data go at a cut
+		reader.io.add_fetch_data_response([](data_id const&) { return make_error(protocol::errc::data_pruned); });
+		auto fetched = reader.engine.fetch_object_data(received);
+		reader.io.process_events();
+		CHECK(fetched->state() == record_data_state::pruned);
+		WAIT_CHECK(reader.observer.failures == 1, 2s);
+		REQUIRE(!reader.observer.states.empty());
+		CHECK(reader.observer.states.back().second == record_data_state::pruned);
+
+		// not wanted again by itself
+		reader.engine.on_disconnected({});
+		reader.engine.on_connected();
+		reader.io.process_events();
+		CHECK(reader.io.fetch_requests().size() == 1);
+
+		// asking again asks again: another replica may not have cut yet
+		CHECK(reader.engine.fetch_object_data(received)->state() == record_data_state::download_pending);
+		CHECK(reader.io.fetch_requests().size() == 2);
+	}
+
 	SECTION("a lost connection resumes the download") {
 		auto fetched = reader.engine.fetch_object_data(received);
 		reader.io.process_events();
@@ -498,6 +539,105 @@ TEST_CASE("engine fetches record data", "[unit]") {
 		reader.io.process_events();
 		CHECK(fetched->state() == record_data_state::in_sync);
 	}
+}
+
+// (RDS 9) a local prune at a segment keeps the records of an object's versions, and of
+// their data as many of the newest as the storage's retention policy says
+TEST_CASE("engine prune and the retention policy", "[unit]") {
+	data_context context;
+	std::vector<octet_vector> const contents{securepath::test::random_octet_vector(50000)
+		, securepath::test::random_octet_vector(60000), securepath::test::random_octet_vector(70000)};
+	auto const oid = create_object_id();
+	std::uint32_t kept = 0;
+	SECTION("not known: every version") { kept = 0; }
+	SECTION("the newest only") { kept = 1; }
+	SECTION("the newest two") { kept = 2; }
+	if(kept != 0) {
+		// the storage's limits as the server reports them on attach
+		context.engine.on_sequence_number_response(100, sequence_info{sequence_number{1}, {}
+			, storage_limits{default_max_record_size, default_chunk_size, kept}});
+	}
+
+	// three versions; the upload of the second one does not get through
+	std::vector<record_handle> versions;
+	for(auto const& content : contents) {
+		context.add_default_commit_response();
+		if(versions.size() != 1) {
+			context.io.add_upload_data_response([](data_id const&) { return std::nullopt; });
+		}
+		versions.push_back(context.engine.sync_object_change(oid, metadata{}, std::make_shared<memory_record_data>(content)));
+		context.io.process_events();
+	}
+	auto const id = [&](std::size_t version) { return context.data_of(versions.at(version)); };
+	REQUIRE(context.data_store.find(id(0))->state == record_data_state::in_sync);
+	REQUIRE(context.data_store.find(id(1))->state == record_data_state::upload_pending);
+	REQUIRE(context.data_store.find(id(2))->state == record_data_state::in_sync);
+	context.add_default_commit_response();
+	auto segment = context.engine.sync_segment_end();
+	context.io.process_events();
+	REQUIRE(segment->state() == record_state::in_sync);
+	auto const changes_before = context.observer.state_changes.load();
+
+	context.engine.prune_history();
+	// the root user change went, the versions of the object and their rows stayed
+	CHECK(!context.storage.find(sequence_number{1}));
+	data_state_table table{context.database};
+	CHECK(table.all_ids().size() == 3);
+	for(auto const& version : versions) {
+		CHECK(version->state() == record_state::in_sync);
+	}
+
+	// what is still to be uploaded may be the only copy: the second version is left alone
+	std::vector<bool> const held{kept == 0, true, true};
+	for(std::size_t i = 0; i != versions.size(); ++i) {
+		auto data = context.engine.object_data(versions[i]);
+		REQUIRE(data);
+		if(held[i]) {
+			CHECK(read_all(*data) == contents[i]);
+		} else {
+			CHECK(data->state() == record_data_state::pruned);
+			CHECK(data->available_size() == 0);
+			CHECK(!std::filesystem::exists(context.data_root / to_hex(id(i))));
+		}
+	}
+
+	if(kept != 0) {
+		WAIT_CHECK(context.observer.state_changes == changes_before + 1, 2s);
+		CHECK(context.observer.states.back() == std::pair{id(0), record_data_state::pruned});
+
+		// the server cut as well: with one kept version it does not want the second any more
+		if(kept == 1) {
+			context.io.add_upload_data_response([](data_id const&) { return make_error(protocol::errc::data_pruned); });
+			context.engine.on_disconnected({});
+			context.engine.on_connected();
+			context.io.process_events();
+			CHECK(context.data_store.find(id(1))->state == record_data_state::pruned);
+			CHECK(!std::filesystem::exists(context.data_root / to_hex(id(1))));
+			WAIT_CHECK(context.observer.failures == 1, 2s);
+			CHECK(context.observer.failed.back() == id(1));
+			// it is not owed any more
+			auto const requests = context.io.upload_requests().size();
+			context.engine.on_disconnected({});
+			context.engine.on_connected();
+			context.io.process_events();
+			CHECK(context.io.upload_requests().size() == requests);
+		}
+	}
+}
+
+// (RDS 9) the retention policy joins the limits a client learned before it existed
+TEST_CASE("engine learns the retention policy", "[unit]") {
+	data_context context;
+	auto const report = [&](storage_limits const& limits) {
+		context.engine.on_sequence_number_response(100, sequence_info{sequence_number{1}, {}, limits});
+		return context.storage.limits();
+	};
+	CHECK(report(storage_limits{4096, 256 * 1024, 0}) == storage_limits{4096, 256 * 1024, 0});
+	CHECK(report(storage_limits{4096, 256 * 1024, 3}) == storage_limits{4096, 256 * 1024, 3});
+	// immutable from then on: another report is a misconfigured replica
+	CHECK(report(storage_limits{4096, 256 * 1024, 1}) == storage_limits{4096, 256 * 1024, 3});
+	CHECK(report(storage_limits{8192, 256 * 1024, 3}) == storage_limits{4096, 256 * 1024, 3});
+	CHECK(report(storage_limits{}) == storage_limits{4096, 256 * 1024, 3});
 }
 
 }

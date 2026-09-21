@@ -368,6 +368,45 @@ TEST_CASE("record data store evict and refetch", "[unit]") {
 	CHECK(store.store_chunk(id, 0, remote.chunks.at(0)));
 }
 
+// (RDS 9) the retention policy of the storage let a data go: like an eviction, but the
+// caller decides (a data still to be uploaded included) and the state says why
+TEST_CASE("record data store prune", "[unit]") {
+	auto db = fresh_database();
+	record_data_store store{db, data_root};
+	auto const key = test_group_key();
+
+	std::uint64_t const size = 6000;
+	auto const data = write_pattern(store, key, size, 1000, 4096);
+	auto const& id = data.descriptor.manifest_digest;
+	auto const remote = copy_of(store, data);
+	auto handle = store.open({key}, data.descriptor, data.header);
+	REQUIRE(handle);
+	REQUIRE(handle->state() == record_data_state::upload_pending);
+
+	CHECK(!store.prune(securepath::test::random_octet_vector(64)));
+	CHECK(store.prune(id));
+	CHECK(handle->state() == record_data_state::pruned);
+	CHECK(handle->size() == size);
+	CHECK(handle->available_size() == 0);
+	CHECK(read_bytes(*handle, 0, size).empty());
+	CHECK(!std::filesystem::exists(data_root / to_hex(id)));
+	// the row stays with the record that names the data, and what is gone is no source
+	auto const row = store.find(id);
+	REQUIRE(row);
+	CHECK(row->have.count() == 0);
+	CHECK(row->descriptor == data.descriptor);
+	CHECK(!store.find_content(data.header.content_digest, {}));
+	// again is fine
+	CHECK(store.prune(id));
+
+	// a server that has not let it go yet still serves it
+	for(auto const& [no, chunk] : remote.chunks) {
+		CHECK(store.store_chunk(id, no, chunk));
+	}
+	CHECK(handle->state() == record_data_state::in_sync);
+	CHECK(read_bytes(*handle, 0, size) == pattern_bytes(0, size));
+}
+
 // the receiving side: a record named the data, the bytes come later and in any order
 TEST_CASE("record data store download into another store", "[unit]") {
 	auto db = fresh_database();

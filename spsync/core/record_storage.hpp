@@ -206,6 +206,39 @@ public:
 	 */
 	std::vector<data_id> confirmed_data_in_state(record_data_state) const;
 
+	/**
+	 * Remove the rows of the record data table that no object record references any more
+	 * and return their data ids (record_data.txt RD9/RDS 9): what a history cut or a
+	 * rollback left dead. For a storage that keeps the index only - a record server,
+	 * where a row exists because a record named the data. A client's rows belong to its
+	 * record_data_store, which also holds the chunks and rows of data whose record is
+	 * still being made: there record_data_store::remove_unreferenced does this.
+	 */
+	std::vector<data_id> remove_unreferenced_data();
+
+	/**
+	 * The data the retention policy lets go at a history cut below the given sequence
+	 * (record_data.txt RD9, storage_limits::kept_data_versions): of every object the
+	 * versions - its in sync records along the previous-record links, newest first - that
+	 * lie below the cut and carry a data are counted, and the data of those beyond the
+	 * newest kept_versions is superseded. Returned are the data that ONLY superseded
+	 * versions name and that are not pruned yet. Only what lies below the cut counts and
+	 * goes: a newer version above it may still be rolled back, the sealed history cannot.
+	 * A change without data is not a version of the data: the one before it stays the
+	 * newest. Nothing for kept_versions 0 (policy not known) and keep_all_data_versions.
+	 * The records stay as they are, whatever happens to the data.
+	 */
+	std::vector<data_id> superseded_data_below(sequence_number below, std::uint32_t kept_versions) const;
+
+	/**
+	 * superseded_data_below with the rows marked pruned, for a storage that keeps the
+	 * index only (a record server, see remove_unreferenced_data): tickets for them are
+	 * refused from now on and the returned ids go to the data servers. A client lets its
+	 * record_data_store::prune do this, which drops the chunks as well. A record that
+	 * names a pruned data afterwards makes it deferred again.
+	 */
+	std::vector<data_id> prune_superseded_data(sequence_number below, std::uint32_t kept_versions);
+
 
 	/// create new record, the first function sets the state to be unknown and the object id is not set
 	template<typename RecordType>

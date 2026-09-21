@@ -154,6 +154,15 @@ public:
 	bool evict(data_id const&);
 
 	/**
+	 * The retention policy of the storage let the data go (record_data.txt RD9, state
+	 * pruned): the local chunks are dropped whatever the state - the caller decides, a
+	 * data still to be uploaded included - the row and the manifest stay with the record
+	 * that names it. False for an unknown data. Asking for it again is possible as long
+	 * as a server has it; a new record naming it makes it deferred again.
+	 */
+	bool prune(data_id const&);
+
+	/**
 	 * Drop the rows and chunks of every data the predicate does not know as referenced
 	 * (RD9: data of rolled back or cut records, leftovers of a creation whose record
 	 * never got stored). Returns how many went. The caller must not run this between a

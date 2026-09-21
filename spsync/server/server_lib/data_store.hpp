@@ -101,6 +101,12 @@ public:
 	std::uint64_t uploads_in_progress() const;
 
 	/**
+	 * Drop the given data, rows and chunks (RD9): a record server said no record names
+	 * them any more. Their reservation is free again. Returns how many were known here.
+	 */
+	std::size_t release(std::vector<data_id> const&);
+
+	/**
 	 * Drop the incomplete uploads nothing touched since the given time, rows and chunks:
 	 * their reservation is free again. Returns how many went.
 	 */

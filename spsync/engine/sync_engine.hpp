@@ -59,6 +59,12 @@ public:
 	 * it becomes the trusted anchor for this session and the caller must persist it into
 	 * sync_engine_config::trusted_anchor for later sessions, so a reload verifies from
 	 * the anchor.
+	 * Record data follows (record_data.txt RD9): the data of removed records goes, and of
+	 * the retained versions of an object only the newest ones below the segment keep
+	 * theirs, as many as the storage's retention policy says
+	 * (storage_limits::kept_data_versions, learned from the server; every one while it is
+	 * not known). The others become pruned - on_data_state_changed tells - except data
+	 * that is still to be uploaded.
 	 */
 	octet_vector prune_history(record_tag const& segment_tag = {});
 private:

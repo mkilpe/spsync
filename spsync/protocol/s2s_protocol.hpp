@@ -60,7 +60,7 @@ struct peer_heads : storage_request_base {
 	void serialise(S& s) {
 		serialisation::sequence<S> seq(s);
 		seq & static_cast<storage_request_base&>(*this) & heads & modes.mode & modes.amode & modes.repl
-			& modes.max_record_size & modes.chunk_size;
+			& modes.max_record_size & modes.chunk_size & modes.kept_data_versions;
 	}
 };
 
@@ -126,7 +126,7 @@ struct push_records : storage_request_base {
 	void serialise(S& s) {
 		serialisation::sequence<S> seq(s);
 		seq & static_cast<storage_request_base&>(*this) & envelopes & modes.mode & modes.amode & modes.repl
-			& modes.max_record_size & modes.chunk_size;
+			& modes.max_record_size & modes.chunk_size & modes.kept_data_versions;
 	}
 };
 
@@ -226,6 +226,27 @@ struct announce_data : protocol_base {
 	}
 };
 
+/**
+ * From a record server to the data servers of a storage (record_data.txt RD9): no record
+ * of the storage names these data any more - a history cut or a rollback took the
+ * records - so their chunks may go. Sent on the link a data server keeps to the record
+ * server; a data server takes it from a record server it is configured with only.
+ */
+struct release_data : storage_request_base {
+	release_data(storage_id sid = {}, std::vector<octet_vector> ids = {})
+	: storage_request_base(0, std::move(sid))
+	, data_ids(std::move(ids))
+	{}
+
+	std::vector<octet_vector> data_ids;
+
+	template<typename S>
+	void serialise(S& s) {
+		serialisation::sequence<S> seq(s);
+		seq & static_cast<storage_request_base&>(*this) & data_ids;
+	}
+};
+
 using s2s_types = typelist<
 			type_tag<peer_hello, 1>,
 			type_tag<peer_heads, 2>,
@@ -235,7 +256,8 @@ using s2s_types = typelist<
 			type_tag<not_replicating, 6>,
 			type_tag<request_key, 7>,
 			type_tag<response_key, 8>,
-			type_tag<announce_data, 9> >;
+			type_tag<announce_data, 9>,
+			type_tag<release_data, 10> >;
 
 }
 }

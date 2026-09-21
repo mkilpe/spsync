@@ -80,6 +80,27 @@ public:
 	 */
 	error apply_foreign(block_envelope const&);
 
+	/**
+	 * History cut at a committed segment (segments.txt SEG 5) and the rollback of plan
+	 * 3.1, with what follows for record data (record_data.txt RD9/RDS 9): the rows of
+	 * the record data index that no record references any more go, and the data release
+	 * hook is told, so the data servers drop the chunks. The data of retained records
+	 * stays - record data follows its records. A cut also applies the retention policy
+	 * of the storage (storage_limits::kept_data_versions): the data of the versions of an
+	 * object beyond the newest kept ones below the segment is pruned - the records stay,
+	 * tickets for the data are refused with data_pruned and the data servers release it
+	 * like the data of removed records. Both return the removed blocks. These are
+	 * the entry points for whatever triggers a cut or a rollback: going to the chain log
+	 * directly leaves the data behind.
+	 */
+	std::vector<chain_block> cut_history(record_tag const& segment_tag);
+	std::vector<chain_block> truncate_from(sequence_number first_removed);
+
+	using data_release_hook = std::function<void(protocol::storage_id const&, std::vector<data_id> const&)>;
+
+	/// set by the storage server: tells the data servers of data no record names any more
+	void set_data_release(data_release_hook);
+
 	using peer_push_hook = std::function<void(protocol::storage_id const&, storage_modes const&, block_envelope const&)>;
 
 	/// set by the storage server: fans a committed envelope out to the connected peers
@@ -92,10 +113,11 @@ public:
 
 	/**
 	 * The descriptor of a data a record of this storage names, from the record data index
-	 * the record storage keeps (record_data.txt RDS 2); nullopt for a data no stored
-	 * record references. What a data ticket is issued from (RD12).
+	 * the record storage keeps (record_data.txt RDS 2). What a data ticket is issued
+	 * from (RD12). Errors (protocol errc): unknown_data for a data no stored record
+	 * references, data_pruned for one the retention policy let go at a history cut.
 	 */
-	std::optional<data_descriptor> committed_data(data_id const&) const;
+	util::result<data_descriptor> committed_data(data_id const&) const;
 
 	/**
 	 * The heads anti-entropy exchanges for this storage (plan 3.4): the own live head
@@ -118,6 +140,8 @@ public:
 
 private:
 	std::optional<block_envelope> make_envelope(chain_block const&) const;
+	/// requires the mutex released: drop the dead index rows and tell the release hook
+	void release_dead_data(std::vector<data_id> pruned = {});
 	void notify_listeners(chain_block const& c, std::optional<block_envelope> const&);
 	/// requires the mutex; listeners that went away are dropped on the way
 	void for_each_listener(std::function<void(connection&)> const&);
@@ -130,6 +154,7 @@ private:
 	crypto::public_key_access* keys_{};
 	crypto::private_data_access* private_data_{};
 	peer_push_hook peer_push_;
+	data_release_hook data_release_;
 
 	std::unique_ptr<chain_sync> sync_;
 	std::unique_ptr<storage_heads> heads_;

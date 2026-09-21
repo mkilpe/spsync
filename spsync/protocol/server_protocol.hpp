@@ -61,6 +61,7 @@ struct response_sequence_number : reply_base {
 	, repl(m.repl)
 	, max_record_size(m.max_record_size)
 	, chunk_size(m.chunk_size)
+	, kept_data_versions(m.kept_data_versions)
 	, data_endpoints(std::move(endpoints))
 	{
 	}
@@ -75,13 +76,17 @@ struct response_sequence_number : reply_base {
 	/// oversized changes before committing
 	std::uint32_t max_record_size{0};
 	std::uint32_t chunk_size{0};
+	/// the retention of the storage at a history cut (record_data.txt RD9): a client
+	/// pruning its history lets the data of older versions go alike
+	std::uint32_t kept_data_versions{0};
 	/// the data-role servers of the storage (record_data.txt RD12); empty when it carries no record data
 	std::vector<data_endpoint> data_endpoints;
 
 	template<typename S>
 	void serialise(S& s) {
 		serialisation::sequence<S> seq(s);
-		seq & static_cast<reply_base&>(*this) & sequence & mode & amode & repl & max_record_size & chunk_size & data_endpoints;
+		seq & static_cast<reply_base&>(*this) & sequence & mode & amode & repl & max_record_size & chunk_size
+			& kept_data_versions & data_endpoints;
 	}
 };
 

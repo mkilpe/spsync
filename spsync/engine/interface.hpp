@@ -118,7 +118,11 @@ struct engine_output : event_system::event_handler {
 	 * Called when the transfer of a record data ended with an error (refused by the
 	 * server, quota, no data server). The state stays as it was (upload_pending,
 	 * download_pending - what was received is kept); the engine tries again after the
-	 * next connect, a download also when it is asked for again.
+	 * next connect, a download also when it is asked for again. A download that fails
+	 * with unknown_data goes back to deferred: the server cut the record away (RD9).
+	 * With data_pruned the transfer is over for good: the server let the data of this
+	 * superseded version go under the storage's retention policy, the state is pruned
+	 * and chunks held for an upload are dropped.
 	 */
 	virtual void on_data_transfer_failed(data_id, error) {}
 

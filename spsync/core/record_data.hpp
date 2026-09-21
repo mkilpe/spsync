@@ -29,7 +29,12 @@ enum class record_data_state {
 	removed,
 
 	/// the data is invalid, e.g. the aes gcm tag didn't match
-	invalid
+	invalid,
+
+	/// the retention policy of the storage let the data go at a history cut
+	/// (storage_limits::kept_data_versions): a superseded version, its record stays.
+	/// Stored as a number: new states go to the end
+	pruned
 };
 
 

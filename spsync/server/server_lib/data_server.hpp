@@ -92,6 +92,13 @@ public:
 	/// run the expiry of incomplete uploads now over the open stores; returns how many went
 	std::size_t expire_incomplete();
 
+	/**
+	 * Drop data of a storage no record names any more (RD9): called by the record role
+	 * of an all-in-one server, and for a release_data a configured record server sent
+	 * over its link. Returns how many were held here.
+	 */
+	std::size_t release(protocol::storage_id const&, std::vector<data_id> const&);
+
 	/// what one data of a storage looks like here; nullopt when it is not known
 	std::optional<data_state_row> find(protocol::storage_id const&, data_id const&);
 

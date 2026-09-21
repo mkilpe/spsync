@@ -184,6 +184,12 @@ public:
 				self->context_.public_keys().insert(key);
 			}
 		};
+		hooks.release = [weak = weak_self()](protocol::storage_id const& sid, std::vector<data_id> const& ids) {
+			auto self = weak.lock();
+			if(self && self->owner_) {
+				self->owner_->release(sid, ids);
+			}
+		};
 		hooks.connected = [wstate = std::weak_ptr<link_state>(state), weak = weak_self()] {
 			auto self = weak.lock();
 			auto st = wstate.lock();
@@ -449,6 +455,20 @@ std::shared_ptr<server_data_store> data_server::open_store(protocol::storage_id 
 
 std::size_t data_server::expire_incomplete() {
 	return impl_->expire_incomplete();
+}
+
+std::size_t data_server::release(protocol::storage_id const& sid, std::vector<data_id> const& ids) {
+	std::size_t released = 0;
+	// only a storage that has a store here: a release must not create one
+	for(auto const& [store_sid, store] : impl_->open_stores()) {
+		if(store_sid == sid) {
+			released += store->release(ids);
+		}
+	}
+	if(released != 0) {
+		LOG_INFO("released {} record data no record names any more (sid={})", released, to_hex(sid));
+	}
+	return released;
 }
 
 std::optional<data_state_row> data_server::find(protocol::storage_id const& sid, data_id const& id) {

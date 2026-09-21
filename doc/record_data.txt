@@ -152,7 +152,10 @@ RD8 Replication (details belong to distributed_sync.txt): data is not in the
     Weak and strict mode identical here.
 
 RD9 Lifecycle. A newer change to the same oid supersedes the old data (old one
-    becomes prunable at the next segment cut unless retained); remove-type changes
+    becomes prunable at the next segment cut unless retained: the storage's
+    retention policy kept_data_versions, decided 2026-09-21 - the newest n data
+    carrying versions of an object below the cut keep their data, default 1, the
+    RECORDS of all versions always stay; see RDS 9); remove-type changes
     (the open question in single_change) make the object's data dead. Local
     eviction (RD6) is independent of server retention. Data of records dropped by
     truncate_from (rollback) is dropped with them once no record references the
@@ -932,9 +935,128 @@ Implementation steps
       fetch continues from", engine "does not repeat a fetch that made no
       progress", limits range in the storage limits test.
 
-- RDS 9  Retention / segment interaction                                       [1d]
+- RDS 9  Retention / segment interaction                          [done 2026-09-21]
       With segments.txt SEG 5 (done 2026-09-01): prune data at segment cut,
       retained live objects keep theirs; server GC by data_id references.
+      Done in two parts. (1) Record data follows its records, on both sides
+      and by references: whatever removes records (history cut, rollback) is
+      followed by a sweep of the data rows no stored record names any more.
+      (2) The retention policy of the storage decides about the data of the
+      versions whose records stay - further down.
+      Client: the engine sweeps after prune_history, after a truncation
+      (rollback, new cursor owner) and when a record could not be created for
+      a finished data (sweep_data, there since RDS 3/4); chunk files and rows
+      go together. A download the server refuses with unknown_data - the
+      record was cut away there while this client still holds it - parks the
+      data as deferred and reports on_data_transfer_failed instead of retrying
+      for ever; asking again (fetch_object_data) asks again.
+      Server: storage::cut_history / truncate_from wrap the chain_log calls,
+      then record_storage::remove_unreferenced_data() drops the dead rows in
+      one transaction and the ids go to the storage's data release hook,
+      called without the storage mutex. storage_server fans a release out:
+      data_availability::forget (no more tickets, no holder), its own data
+      role (server_data_store::release: chunk files, row, quota, a half
+      finished upload of it - its next chunk gets no_such_upload), and an s2s
+      release_data {sid, data_ids} (tag 10) to every connected data server
+      link, at most 500 ids a packet like the announcements
+      (server_lib/data_release.hpp release_packets); record_server_link hands
+      it to data_server::release. release_data is only sent on links
+      configured as data servers and only honoured on a data server's links to
+      its record servers - a peer replica sending one is logged and ignored.
+      Data that a record which stays still names is untouched (shared data_id:
+      reference count).
+      Note: nothing in the server calls a cut or a rollback yet - SEG 5 and
+      plan 3.1 made the mechanisms, no operator command or policy triggers
+      them (tests only). Whatever does later has to go through
+      storage::cut_history / truncate_from, not chain_log / chain_sync
+      directly, or the data stays behind.
+      What a cut drops: SEG 5 retains the whole previous-record chain of every
+      live object, so the records a cut removes are dead history only (user
+      changes, segments, and objects once remove-type changes exist). The data
+      of superseded versions goes by the retention policy below, their records
+      stay.
+      Retention policy (user decision 2026-09-21: option c, default the newest
+      only). storage_limits::kept_data_versions, a creation parameter like the
+      two validity limits: 0 = not stated (server default --kept_data_versions,
+      compiled default 1), n = the newest n, keep_all_data_versions
+      (0xFFFFFFFF) = all; persisted next to them (storage_config column; a
+      storage from before the column keeps all, it was promised nothing else),
+      immutable, part of modes_match, carried by create_storage, the sequence
+      answer and the s2s mode fields, persisted by the client in sync_state
+      (a client that stored the limits before the field existed adopts it from
+      the next answer; limits_or / default_storage_limits in sync_mode.hpp).
+      It is not a validity rule - what a cut keeps never makes a record
+      invalid - but replicas and clients cut alike with it.
+      The rule (record_storage::superseded_data_below(cut sequence, n)): of
+      every object the versions = its in sync records from the newest along
+      the previous-record links; those BELOW the cut that carry a data are
+      counted, the data of the ones beyond the newest n is superseded, and a
+      data goes when ONLY superseded versions name it (a kept version, a
+      record above the cut, a record not yet in sync keep it). Only sealed
+      history counts and goes: a version above the segment supersedes nothing
+      yet, it may still be rolled back. A change without data (metadata only)
+      is not a version of the data. Nothing happens to any record.
+      Mechanism: the data row stays as a tombstone in the new state
+      record_data_state::pruned (appended to the enum, states are stored as
+      numbers); references and rows are untouched, so GC by references works
+      on as before when the records go one day. A record that names a pruned
+      data afterwards makes it deferred again (where a record is stored, not
+      in data_state_table::ensure - opening a data must not revive it).
+      Server: storage::cut_history calls prune_superseded_data after the cut
+      and hands the ids to the same release path as dead data (availability
+      forgotten, own data role, release_data to the data servers).
+      storage::committed_data is a result now: unknown_data or the new
+      protocol errc data_pruned, which ticket_issuer passes on - so a client
+      can tell "gone for good" from "unknown".
+      Client: prune_history applies the same rule with the learned policy
+      (nothing while it is not known): record_data_store::prune drops the
+      chunks, state pruned, on_data_state_changed. A superseded data that is
+      still upload_pending is left alone, it may be the only copy - the server
+      answers the upload with data_pruned once it has cut, then it goes too. A
+      download answered data_pruned -> pruned + on_data_transfer_failed, not
+      retried (transfer_retry), not auto-fetched; fetch_object_data on a
+      pruned data asks again (another replica may not have cut yet).
+      Known limits of the policy: replicas cut when they are told to, not
+      together - a shared data server drops the data at the first release, a
+      replica that has not cut still issues tickets and the download ends
+      data_not_held (availability degrades early, validity never). A late
+      joiner gets the records of pruned versions from a cut server and learns
+      "pruned" only by asking. A pruned data that a rolled back record had
+      revived is deferred until the next cut although no server holds it.
+      Fixed on the way (SEG 5): the retained set walked the object chains with
+      one shared "seen" set of tags and stopped at a record another object had
+      passed - with a record of several objects whose previous records differ,
+      the older chain of all but the first walked object was NOT retained and
+      went with the cut. Every object is walked on its own now
+      (record_storage impl object_versions).
+      Known gap: a release is sent once and not remembered. A separate data
+      server that is down or disconnected at that moment keeps the chunks for
+      good: they cost disk and the storage's quota there, nothing else (no
+      ticket is issued for them), but nothing collects them either -
+      expire_incomplete (RDS 5) only takes uploads that never completed.
+      Reconciling on link-up is not safe as it stands - with several record
+      servers a data server cannot tell "cut away" from "this replica has not
+      got the record yet" - so this waits for RDS 10's availability exchange,
+      which has to answer the same question. The all-in-one shape has no such
+      gap (direct call). Recorded in todos.txt.
+      Tests: record_storage "an index that follows its records", server data
+      store "release" (files, quota, open session, unknown ids), storage
+      "releases the data of removed records" (rollback and cut, shared data
+      kept, hook outside the mutex), "release packets", data announce "all in
+      one server releases the data of removed records" and "separate data
+      server" (release over the link, files gone), engine "fetches record data / the server cut the
+      record away", "engine prune keeps the data of retained records".
+      Tests (retention): record_storage "superseded data below a cut" (kept
+      1/2/3/all/unknown, below the cut only, metadata-only version, record of
+      two objects, shared and pending references, index marks pruned once,
+      revival), record data store "prune", storage "retention policy is
+      persisted and immutable" (defaults, stated, mismatch, legacy column),
+      storage "prunes the data of superseded versions at a cut", ticket issuer
+      passes data_pruned on, all in one "a cut and the retention policy"
+      (chunks gone from the data role, records stay), engine "prune and the
+      retention policy" (unknown/1/2, upload_pending left alone then refused
+      with data_pruned), "engine learns the retention policy", "fetches record
+      data / the server pruned the version".
 
 - RDS 10 Replication among data servers                                        [2d]
       Copy count k with hash placement, availability exchange between data
@@ -944,7 +1066,7 @@ Implementation steps
 
 Ordering: RDS 8 first (done). RDS 1-7 are single-server work with the data role
 split in from the start; they unblock file sync (use case 1) and groupchat
-attachments. RDS 9 and 10 follow.
+attachments. RDS 9 done 2026-09-21, RDS 10 follows.
 
 
 Resolved questions (2026-09-07)

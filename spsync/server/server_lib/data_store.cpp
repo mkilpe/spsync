@@ -170,6 +170,22 @@ std::uint64_t server_data_store::uploads_in_progress() const {
 	return static_cast<std::uint64_t>(q.execute().value<std::int64_t>(0).value_or(0));
 }
 
+std::size_t server_data_store::release(std::vector<data_id> const& ids) {
+	std::unique_lock lock{mutex_};
+	std::set<std::uint64_t> released;
+	for(auto const& id : ids) {
+		if(auto const row = store_.find(id)) {
+			released.insert(row->local_id);
+		}
+		forget_activity(id);
+	}
+	std::size_t removed = 0;
+	if(!released.empty()) {
+		removed = store_.remove_unreferenced([&](std::uint64_t local_id) { return !released.contains(local_id); });
+	}
+	return removed;
+}
+
 std::size_t server_data_store::expire_incomplete(time_point untouched_since) {
 	std::unique_lock lock{mutex_};
 	auto q = db_->prepare("SELECT data_id FROM data_activity WHERE touched < :t;");

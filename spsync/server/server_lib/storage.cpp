@@ -29,17 +29,26 @@ void create_or_upgrade_config_table(database::connection& db) {
 			"replication INTEGER,"
 			"max_record_size INTEGER,"
 			"chunk_size INTEGER,"
+			"kept_data_versions INTEGER,"
 			"created_at INTEGER);").execute();
-	} else if(!has_column(db, "storage_config", "max_record_size")) {
-		// a storage from before RDS 8: it gets the compiled defaults, the same on every replica
-		db.prepare("ALTER TABLE storage_config ADD COLUMN max_record_size INTEGER;").execute();
-		db.prepare("ALTER TABLE storage_config ADD COLUMN chunk_size INTEGER;").execute();
+	} else {
+		if(!has_column(db, "storage_config", "max_record_size")) {
+			// a storage from before RDS 8: it gets the compiled defaults, the same on every replica
+			db.prepare("ALTER TABLE storage_config ADD COLUMN max_record_size INTEGER;").execute();
+			db.prepare("ALTER TABLE storage_config ADD COLUMN chunk_size INTEGER;").execute();
+		}
+		if(!has_column(db, "storage_config", "kept_data_versions")) {
+			// a storage from before the retention policy (RDS 9) was promised nothing else
+			// than that data lives as long as its record: it keeps every version
+			db.prepare("ALTER TABLE storage_config ADD COLUMN kept_data_versions INTEGER;").execute();
+		}
 	}
 }
 
 std::optional<storage_modes> load_persisted_modes(database::connection& db) {
 	std::optional<storage_modes> ret;
-	auto q = db.prepare("SELECT sync_mode, auth_mode, replication, max_record_size, chunk_size FROM storage_config WHERE key = 1;");
+	auto q = db.prepare("SELECT sync_mode, auth_mode, replication, max_record_size, chunk_size, kept_data_versions"
+		" FROM storage_config WHERE key = 1;");
 	auto res = q.execute();
 	if(res) {
 		ret = storage_modes{
@@ -48,23 +57,55 @@ std::optional<storage_modes> load_persisted_modes(database::connection& db) {
 			replication_mode(res.value<std::int64_t>(2).value_or(0)),
 			storage_limits{
 				static_cast<std::uint32_t>(res.value<std::int64_t>(3).value_or(default_max_record_size)),
-				static_cast<std::uint32_t>(res.value<std::int64_t>(4).value_or(default_chunk_size))}};
+				static_cast<std::uint32_t>(res.value<std::int64_t>(4).value_or(default_chunk_size)),
+				static_cast<std::uint32_t>(res.value<std::int64_t>(5).value_or(keep_all_data_versions))}};
 	}
 	return ret;
 }
 
 void persist_modes(database::connection& db, storage_modes const& m, std::string const& log_id) {
-	auto ins = db.prepare("INSERT INTO storage_config(key, sync_mode, auth_mode, replication, max_record_size, chunk_size, created_at)"
-		" VALUES(1, :m, :a, :r, :mr, :cs, :c);");
+	auto ins = db.prepare("INSERT INTO storage_config(key, sync_mode, auth_mode, replication, max_record_size, chunk_size"
+		", kept_data_versions, created_at) VALUES(1, :m, :a, :r, :mr, :cs, :kv, :c);");
 	ins.bind(":m", std::to_underlying(m.mode));
 	ins.bind(":a", std::to_underlying(m.auth));
 	ins.bind(":r", std::to_underlying(m.replication));
 	ins.bind(":mr", static_cast<std::int64_t>(m.limits.max_record_size));
 	ins.bind(":cs", static_cast<std::int64_t>(m.limits.chunk_size));
+	ins.bind(":kv", static_cast<std::int64_t>(m.limits.kept_data_versions));
 	ins.bind(":c", static_cast<std::int64_t>(std::time(nullptr)));
 	ins.execute();
-	LOG_INFO("storage modes persisted [mode={}, auth={}, replication={}, max_record_size={}, chunk_size={}] (rsid={})",
-		int(m.mode), int(m.auth), int(m.replication), m.limits.max_record_size, m.limits.chunk_size, log_id);
+	LOG_INFO("storage modes persisted [mode={}, auth={}, replication={}, max_record_size={}, chunk_size={}, kept_data_versions={}] (rsid={})",
+		int(m.mode), int(m.auth), int(m.replication), m.limits.max_record_size, m.limits.chunk_size
+		, m.limits.kept_data_versions, log_id);
+}
+
+/// a rejection that no later state can lift: the record itself is not acceptable here
+bool permanent_rejection(error const& err) {
+	return err.code() == make_error_code(protocol::errc::invalid_record)
+		|| err.code() == make_error_code(protocol::errc::record_too_big)
+		|| err.code() == make_error_code(protocol::errc::conflicting_record);
+}
+
+/**
+ * A foreign record that did not commit: true when the origin head moves past it anyway,
+ * false when it is to be offered again.
+ */
+bool foreign_record_skipped(error const& err, block_envelope const& env, std::string const& log_id) {
+	if(err.code() == make_error_code(protocol::errc::record_already_committed)) {
+		// same operation under another tag was adopted already (op id dedup)
+		return true;
+	}
+	if(permanent_rejection(err)) {
+		// the origin accepted what our rules refuse (a validity disagreement or a
+		// misbehaving origin): retrying can never change the verdict, so the record
+		// is skipped and the origin head moves past it - anti-entropy goes on and the
+		// storage does not stay "syncing" for good. Logged once, here.
+		LOG_WARN("foreign record rejected for good, skipped [origin={}, origin seq={}, tag={}, err={}] (rsid={})"
+			, env.origin(), env.block().sequence(), to_hex(env.block().tag()), err, log_id);
+		return true;
+	}
+	LOG_WARN("foreign record was not accepted [origin={}, err={}] (rsid={})", env.origin(), err, log_id);
+	return false;
 }
 
 /**
@@ -73,13 +114,6 @@ void persist_modes(database::connection& db, storage_modes const& m, std::string
  * persisted one is a storage_mode_mismatch; limits outside their ranges are
  * invalid_storage_modes.
  */
-/// a rejection that no later state can lift: the record itself is not acceptable here
-bool permanent_rejection(error const& err) {
-	return err.code() == make_error_code(protocol::errc::invalid_record)
-		|| err.code() == make_error_code(protocol::errc::record_too_big)
-		|| err.code() == make_error_code(protocol::errc::conflicting_record);
-}
-
 storage_modes load_or_create_modes(database::connection& db, std::optional<storage_modes> const& requested,
 	storage_limits const& defaults, std::string const& log_id)
 {
@@ -97,12 +131,9 @@ storage_modes load_or_create_modes(database::connection& db, std::optional<stora
 		throw make_error(protocol::errc::no_such_storage, "no such storage");
 	}
 	storage_modes m = *requested;
-	if(m.limits.max_record_size == 0) {
-		m.limits.max_record_size = defaults.max_record_size;
-	}
-	if(m.limits.chunk_size == 0) {
-		m.limits.chunk_size = defaults.chunk_size;
-	}
+	// what the request leaves open comes from the server's defaults, what those leave
+	// open from the compiled ones: a persisted limit is never "not stated"
+	m.limits = limits_or(limits_or(m.limits, defaults), default_storage_limits);
 	if(!valid_storage_limits(m.limits)) {
 		LOG_WARN("invalid default storage limits (rsid={})", log_id);
 		throw make_error(protocol::errc::invalid_storage_modes, "invalid storage limits");
@@ -273,23 +304,10 @@ error storage::apply_foreign(block_envelope const& env) {
 	}
 	auto res = sync_->commit_foreign(block);
 	if(!res) {
-		if(check_result_error(res, protocol::errc::record_already_committed)) {
-			// same operation under another tag was adopted already (op id dedup)
+		if(foreign_record_skipped(res.get_error(), env, to_hex(id_))) {
 			heads_->advance(head);
 			return {};
 		}
-		if(permanent_rejection(res.get_error())) {
-			// the origin accepted what our rules refuse (a validity disagreement or a
-			// misbehaving origin): retrying can never change the verdict, so the record
-			// is skipped and the origin head moves past it - anti-entropy goes on and the
-			// storage does not stay "syncing" for good. Logged once, here.
-			LOG_WARN("foreign record rejected for good, skipped [origin={}, origin seq={}, tag={}, err={}] (rsid={})"
-				, env.origin(), block.sequence(), to_hex(block.tag()), res.get_error(), to_hex(id_));
-			heads_->advance(head);
-			return {};
-		}
-		LOG_WARN("foreign record was not accepted [origin={}, err={}] (rsid={})"
-			, env.origin(), res.get_error(), to_hex(id_));
 		return res.get_error();
 	}
 	heads_->advance(head);
@@ -321,12 +339,63 @@ void storage::set_peer_push(peer_push_hook hook) {
 	peer_push_ = std::move(hook);
 }
 
-std::optional<data_descriptor> storage::committed_data(data_id const& id) const {
+std::vector<chain_block> storage::cut_history(record_tag const& segment_tag) {
+	std::vector<chain_block> removed;
+	std::vector<data_id> pruned;
+	{
+		std::unique_lock l{mutex_};
+		removed = sync_->log().cut_before(segment_tag);
+		// the cut went through: the segment is there
+		auto const anchor = sync_->records().find_tag(segment_tag)->block_id().sequence;
+		pruned = sync_->records().prune_superseded_data(anchor, modes_.limits.kept_data_versions);
+	}
+	release_dead_data(std::move(pruned));
+	return removed;
+}
+
+std::vector<chain_block> storage::truncate_from(sequence_number first_removed) {
+	std::vector<chain_block> removed;
+	{
+		std::unique_lock l{mutex_};
+		removed = sync_->truncate_from(first_removed);
+	}
+	release_dead_data();
+	return removed;
+}
+
+void storage::set_data_release(data_release_hook hook) {
 	std::unique_lock l{mutex_};
-	std::optional<data_descriptor> ret;
+	data_release_ = std::move(hook);
+}
+
+void storage::release_dead_data(std::vector<data_id> pruned) {
+	std::vector<data_id> dead;
+	data_release_hook hook;
+	{
+		std::unique_lock l{mutex_};
+		dead = sync_->records().remove_unreferenced_data();
+		hook = data_release_;
+	}
+	if(!dead.empty() || !pruned.empty()) {
+		LOG_INFO("record data let go [{} no record names any more, {} pruned by the retention policy] (sid={})"
+			, dead.size(), pruned.size(), to_hex(id_));
+		dead.insert(dead.end(), pruned.begin(), pruned.end());
+		if(hook) {
+			hook(id_, dead);
+		}
+	}
+}
+
+util::result<data_descriptor> storage::committed_data(data_id const& id) const {
+	std::unique_lock l{mutex_};
+	util::result<data_descriptor> ret{make_error(protocol::errc::unknown_data)};
 	auto const row = data_state_table{db_}.find(id);
 	if(row && sync_->records().data_reference_count(row->local_id) != 0) {
-		ret = row->descriptor;
+		if(row->state == record_data_state::pruned) {
+			ret = make_error(protocol::errc::data_pruned);
+		} else {
+			ret = row->descriptor;
+		}
 	}
 	return ret;
 }

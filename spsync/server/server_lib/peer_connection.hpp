@@ -60,6 +60,10 @@ public:
 	/// hello exchange is done
 	void announce(protocol::announce_data const&);
 
+	/// tell a data server that records no longer name these data (RD9); only a data
+	/// server link takes it, a no-op on a replication peer's connection
+	void release(protocol::release_data const&);
+
 protected:
 	void on_connected() override;
 	void on_disconnected(securepath::error const& error) override;
@@ -76,6 +80,7 @@ public:
 	void operator()(protocol::request_key const&);
 	void operator()(protocol::response_key const&);
 	void operator()(protocol::announce_data const&);
+	void operator()(protocol::release_data const&);
 
 private:
 	void terminate(securepath::error const&);

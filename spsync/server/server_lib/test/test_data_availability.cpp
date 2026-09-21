@@ -2,6 +2,7 @@
 #include <securepath/test_frame/test_utils.hpp>
 
 #include <spsync/server/server_lib/data_availability.hpp>
+#include <spsync/server/server_lib/data_release.hpp>
 #include <spsync/server/server_lib/peer_config.hpp>
 #include <spsync/server/server_lib/ticket_issuer.hpp>
 #include <spsync/protocol/error.hpp>
@@ -180,7 +181,9 @@ TEST_CASE("data ticket issuer", "[unit]") {
 		return !r && r.get_error().code() == make_error_code(code);
 	};
 
-	CHECK(is_error(issuer.issue(sid, std::nullopt, member, upload, server_key, now), protocol::errc::unknown_data));
+	// no ticket for a data the storage does not vouch for: its reason comes back
+	CHECK(is_error(issuer.issue(sid, make_error(protocol::errc::unknown_data), member, upload, server_key, now), protocol::errc::unknown_data));
+	CHECK(is_error(issuer.issue(sid, make_error(protocol::errc::data_pruned), member, upload, server_key, now), protocol::errc::data_pruned));
 	CHECK(is_error(issuer.issue(sid, descriptor, member, 0, server_key, now), protocol::errc::invalid_state));
 	CHECK(is_error(issuer.issue(sid, descriptor, member, 7, server_key, now), protocol::errc::invalid_state));
 	CHECK(is_error(issuer.issue(sid, descriptor, member, upload, std::nullopt, now), protocol::errc::invalid_state));
@@ -238,6 +241,39 @@ TEST_CASE("data endpoint configuration", "[unit]") {
 	CHECK(!(no_key >> bad));
 	std::istringstream no_port{"host/" + key.in_hex()};
 	CHECK(!(no_port >> bad));
+}
+
+// (RDS 9) a release goes out in packets of a bounded number of ids
+TEST_CASE("release packets", "[unit]") {
+	auto const sid = securepath::test::random_octet_vector(16);
+	std::vector<data_id> ids;
+	for(int i = 0; i != 1201; ++i) {
+		ids.push_back(securepath::test::random_octet_vector(64));
+	}
+
+	CHECK(release_packets(sid, {}).empty());
+
+	auto const one = release_packets(sid, {ids.front()});
+	REQUIRE(one.size() == 1);
+	CHECK(one.front().sid == sid);
+	CHECK(one.front().data_ids == std::vector<data_id>{ids.front()});
+
+	auto const packets = release_packets(sid, ids);
+	REQUIRE(packets.size() == 3);
+	CHECK(packets.at(0).data_ids.size() == release_batch_size);
+	CHECK(packets.at(1).data_ids.size() == release_batch_size);
+	CHECK(packets.at(2).data_ids.size() == 201);
+	// every id once, in order
+	std::vector<data_id> all;
+	for(auto const& p : packets) {
+		CHECK(p.sid == sid);
+		all.insert(all.end(), p.data_ids.begin(), p.data_ids.end());
+	}
+	CHECK(all == ids);
+
+	// an exact multiple has no empty tail, a batch of nothing is a batch of one
+	CHECK(release_packets(sid, std::vector<data_id>(ids.begin(), ids.begin() + 1000)).size() == 2);
+	CHECK(release_packets(sid, std::vector<data_id>(ids.begin(), ids.begin() + 3), 0).size() == 3);
 }
 
 }

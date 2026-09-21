@@ -43,6 +43,9 @@ public:
 	/// this is news of a complete copy: the holder was not known to hold all of it
 	bool announce(protocol::storage_id const&, data_id const&, data_holding const&);
 
+	/// no record names the data any more (RD9): nobody is asked for it again
+	void forget(protocol::storage_id const&, data_id const&);
+
 	void set_load(crypto::public_key_id const& holder, holder_load const&);
 
 	/// the announced holdings of the data, in no particular order

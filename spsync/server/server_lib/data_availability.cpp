@@ -20,6 +20,11 @@ bool data_availability::announce(protocol::storage_id const& sid, data_id const&
 	return holding.complete && !was_complete;
 }
 
+void data_availability::forget(protocol::storage_id const& sid, data_id const& id) {
+	std::unique_lock lock{mutex_};
+	holdings_.erase(data_key{sid, id});
+}
+
 void data_availability::set_load(crypto::public_key_id const& holder, holder_load const& load) {
 	std::unique_lock lock{mutex_};
 	loads_[holder] = load;
