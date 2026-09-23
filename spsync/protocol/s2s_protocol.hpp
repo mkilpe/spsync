@@ -61,8 +61,7 @@ struct peer_heads : storage_request_base {
 	template<typename S>
 	void serialise(S& s) {
 		serialisation::sequence<S> seq(s);
-		seq & static_cast<storage_request_base&>(*this) & heads & modes.mode & modes.amode & modes.repl
-			& modes.max_record_size & modes.chunk_size & modes.kept_data_versions;
+		seq & static_cast<storage_request_base&>(*this) & heads & modes;
 	}
 };
 
@@ -127,8 +126,7 @@ struct push_records : storage_request_base {
 	template<typename S>
 	void serialise(S& s) {
 		serialisation::sequence<S> seq(s);
-		seq & static_cast<storage_request_base&>(*this) & envelopes & modes.mode & modes.amode & modes.repl
-			& modes.max_record_size & modes.chunk_size & modes.kept_data_versions;
+		seq & static_cast<storage_request_base&>(*this) & envelopes & modes;
 	}
 };
 

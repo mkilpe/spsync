@@ -1,4 +1,6 @@
 #include <securepath/test_frame/test_suite.hpp>
+
+#include <limits>
 #include <securepath/test_frame/test_serialisation.hpp>
 #include <securepath/test_frame/test_utils.hpp>
 #include <securepath/database/sqlite/connection.hpp>
@@ -648,7 +650,16 @@ TEST_CASE("chain_sync data descriptor bounds", "[unit]") {
 		data_descriptor{good.enc_size, good.chunk_size, securepath::test::random_octet_vector(32)},
 		data_descriptor{good.enc_size, good.chunk_size, {}},
 		// more chunks than a manifest may name
-		data_descriptor{(std::uint64_t{chunk_size_range.lowest} + 16) * (max_data_chunks + 1), chunk_size_range.lowest, digest}};
+		data_descriptor{(std::uint64_t{chunk_size_range.lowest} + 16) * (max_data_chunks + 1), chunk_size_range.lowest, digest},
+		// (review 2026-09-21) sizes whose chunk arithmetic wraps: they came out as no chunks at all
+		data_descriptor{std::numeric_limits<std::uint64_t>::max(), good.chunk_size, digest},
+		data_descriptor{std::numeric_limits<std::uint64_t>::max() - good.chunk_size, good.chunk_size, digest},
+		// a last chunk that is a tag at most: it can never decrypt
+		data_descriptor{std::uint64_t{good.chunk_size} + 16 + 16, good.chunk_size, digest},
+		data_descriptor{std::uint64_t{good.chunk_size} + 16 + 1, good.chunk_size, digest}};
+	// chunks are counted without wrapping whatever the size says
+	CHECK(data_descriptor{std::numeric_limits<std::uint64_t>::max(), good.chunk_size, digest}.chunk_count() > max_data_chunks);
+	CHECK(valid_data_descriptor(data_descriptor{std::uint64_t{good.chunk_size} + 16 + 17, good.chunk_size, digest}));
 	for(auto const& d : bad) {
 		CHECK(!valid_data_descriptor(d));
 		auto creator_copy = creator;

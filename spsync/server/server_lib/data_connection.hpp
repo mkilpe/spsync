@@ -68,6 +68,13 @@ private:
 		std::map<std::uint64_t, incoming_chunk> incoming;
 	};
 
+	/// one download a ticket opened on this connection: where it is served from, and
+	/// whether it counts against the storage's transfer quota (a data server's copy does not)
+	struct download {
+		std::shared_ptr<server_data_store> store;
+		bool charged{true};
+	};
+
 	/// take one piece; true when it completed the data
 	util::result<bool> take_piece(upload&, protocol::upload_data_chunk const&);
 
@@ -80,13 +87,6 @@ private:
 	data_server_context& context_;
 	crypto::public_key_id id_;
 	std::map<upload_key, upload> uploads_;
-	/// the downloads a ticket opened on this connection
-	/// an opened download: where it is served from, and whether it counts against the
-	/// storage's transfer quota (a data server's copy does not)
-	struct download {
-		std::shared_ptr<server_data_store> store;
-		bool charged{true};
-	};
 	std::map<upload_key, download> downloads_;
 };
 

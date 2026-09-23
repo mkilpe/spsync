@@ -1,5 +1,6 @@
 #include <securepath/test_frame/test_suite.hpp>
 #include <securepath/test_frame/test_utils.hpp>
+#include <spsync/test/test_record_data.hpp>
 
 #include <spsync/core/data/chunk_files.hpp>
 #include <spsync/core/data/data_state_table.hpp>
@@ -13,6 +14,7 @@
 #include <securepath/util/conversions.hpp>
 
 #include <filesystem>
+#include <limits>
 #include <fstream>
 #include <map>
 
@@ -22,16 +24,11 @@ namespace {
 std::string const db_name = "record_data_store_test.db";
 std::filesystem::path const data_root = "record_data_store_test";
 
-/// a fresh database and an empty chunk directory
 database::connection_ptr fresh_database(std::string const& name = db_name, std::filesystem::path const& root = data_root) {
-	std::remove(name.c_str());
-	std::filesystem::remove_all(root);
-	return database::sqlite::create_sqlite_connection(name);
+	return test::fresh_database(name, root);
 }
 
-encryption_key test_group_key(std::uint64_t seq = 3) {
-	return encryption_key{sequence_number{seq}, securepath::test::random_octet_vector(crypto::aes_gcm_key_size())};
-}
+using test::test_group_key;
 
 /// deterministic plaintext, so big data never has to be held to be compared
 octet_vector pattern_bytes(std::uint64_t offset, std::size_t size) {
@@ -368,6 +365,57 @@ TEST_CASE("record data store evict and refetch", "[unit]") {
 	CHECK(store.store_chunk(id, 0, remote.chunks.at(0)));
 }
 
+// (review 2026-09-21) what an eviction and a removed row must not do to handles and states
+TEST_CASE("record data store evictions and stale handles", "[unit]") {
+	auto db = fresh_database();
+	record_data_store store{db, data_root};
+	auto const key = test_group_key();
+	std::uint64_t const size = 6000;
+	auto const data = write_pattern(store, key, size, 1000, 4096);
+	auto const& id = data.descriptor.manifest_digest;
+	store.set_state(id, record_data_state::in_sync);
+
+	SECTION("another handle's cached chunk goes with the chunks") {
+		auto reader = store.open({key}, data.descriptor, data.header);
+		auto other = store.open({key}, data.descriptor, data.header);
+		// reader has chunk 0 decrypted in its cache
+		CHECK(read_bytes(*reader, 0, 100) == pattern_bytes(0, 100));
+		other->remove_data();
+		CHECK(reader->available_size() == 0);
+		CHECK(read_bytes(*reader, 0, 100).empty());
+	}
+
+	SECTION("an eviction changes what it is about") {
+		// held -> removed
+		CHECK(store.evict(id));
+		CHECK(store.find(id)->state == record_data_state::removed);
+		// the tombstone of a prune, a data never held, a download on its way: as they were
+		for(auto const state : {record_data_state::pruned, record_data_state::deferred, record_data_state::download_pending
+			, record_data_state::remote_not_complete, record_data_state::invalid}) {
+			store.set_state(id, state);
+			CHECK(store.evict(id));
+			CHECK(store.find(id)->state == state);
+		}
+	}
+
+	SECTION("a handle that outlives its row is not another data's") {
+		auto stale = store.open({key}, data.descriptor, data.header);
+		REQUIRE(stale->state() == record_data_state::in_sync);
+		// the row goes (a rollback and the sweep that follows), another data comes
+		CHECK(store.remove({id}) == 1);
+		auto const next = write_pattern(store, key, 3000, 1000, 4096);
+		REQUIRE(store.find(next.descriptor.manifest_digest));
+		CHECK(store.find(next.descriptor.manifest_digest)->state == record_data_state::upload_pending);
+
+		CHECK(stale->state() == record_data_state::invalid);
+		CHECK(stale->available_size() == 0);
+		stale->set_state(record_data_state::in_sync);
+		CHECK(store.find(next.descriptor.manifest_digest)->state == record_data_state::upload_pending);
+		// and the key of the row that went is not given out again
+		CHECK(store.find(next.descriptor.manifest_digest)->local_id != stale->local_id());
+	}
+}
+
 // (RDS 9) the retention policy of the storage let a data go: like an eviction, but the
 // caller decides (a data still to be uploaded included) and the state says why
 TEST_CASE("record data store prune", "[unit]") {
@@ -556,10 +604,10 @@ TEST_CASE("record data store remove unreferenced", "[unit]") {
 	auto const key = test_group_key();
 	auto const kept = write_pattern(store, key, 100, 1000, 100);
 	auto const dead = write_pattern(store, key, 200, 1000, 100);
-	auto const kept_id = store.find(kept.descriptor.manifest_digest)->local_id;
 
-	CHECK(store.remove_unreferenced([](std::uint64_t) { return true; }) == 0);
-	CHECK(store.remove_unreferenced([&](std::uint64_t local_id) { return local_id == kept_id; }) == 1);
+	CHECK(store.remove({}) == 0);
+	CHECK(store.remove({securepath::test::random_octet_vector(64)}) == 0);
+	CHECK(store.remove({dead.descriptor.manifest_digest, securepath::test::random_octet_vector(64)}) == 1);
 	CHECK(store.find(kept.descriptor.manifest_digest));
 	CHECK(!store.find(dead.descriptor.manifest_digest));
 	CHECK(!std::filesystem::exists(data_root / to_hex(dead.descriptor.manifest_digest)));
@@ -567,7 +615,7 @@ TEST_CASE("record data store remove unreferenced", "[unit]") {
 
 	// a handle of a dropped data
 	auto handle = store.open({key}, kept.descriptor, kept.header);
-	CHECK(store.remove_unreferenced([](std::uint64_t) { return false; }) == 1);
+	CHECK(store.remove({kept.descriptor.manifest_digest}) == 1);
 	CHECK(handle->state() == record_data_state::invalid);
 	CHECK(read_bytes(*handle, 0, 100).empty());
 }
@@ -718,6 +766,16 @@ TEST_CASE("record data store chunk pieces", "[unit]") {
 		CHECK(!origin.read_chunk_piece(id, 1, chunk_size + 1, 0));
 		CHECK(!origin.read_chunk_piece(id, 99, 0, 10));
 		CHECK(!origin.read_chunk_piece(securepath::test::random_octet_vector(64), 0, 0, 10));
+
+		// (review 2026-09-21) an offset from the wire that wraps the range check is a
+		// refused read like any other - and a refused read is no lost chunk: the offsets
+		// come from whoever asks, the chunk stays where it is
+		auto const huge = std::numeric_limits<std::uint64_t>::max();
+		CHECK(!origin.read_chunk_piece(id, 1, huge, 2));
+		CHECK(!origin.read_chunk_piece(id, 1, huge - 10, 11));
+		CHECK(!origin.read_chunk_piece(id, 1, 1, static_cast<std::size_t>(huge)));
+		CHECK(origin.find(id)->have.count() == data.descriptor.chunk_count());
+		CHECK(origin.read_chunk_piece(id, 1, 0, chunk_size) == chunk);
 	}
 
 	SECTION("receiving") {
@@ -753,6 +811,25 @@ TEST_CASE("record data store chunk pieces", "[unit]") {
 			CHECK(!incoming->append(400, bytes.subspan(400, 100)));
 			CHECK(!incoming->finish());
 		}
+		{
+			// (review 2026-09-21) the digest is of the pieces as they came, the file is
+			// what is kept: a file that is not exactly the pieces - a write that ended
+			// half way, anything that got in - is not adopted whatever the digest says
+			auto incoming = store.begin_chunk(id, 0);
+			REQUIRE(incoming);
+			CHECK(incoming->append(0, bytes.first(400)));
+			for(auto const& entry : std::filesystem::recursive_directory_iterator{staging}) {
+				if(entry.is_regular_file()) {
+					std::ofstream{entry.path(), std::ios::binary | std::ios::app} << "x";
+				}
+			}
+			CHECK(incoming->append(400, bytes.subspan(400)));
+			CHECK(incoming->complete());
+			CHECK(!incoming->finish());
+			CHECK(store.find(id)->have.count() == 0);
+			CHECK(!store.read_chunk(id, 0));
+		}
+		CHECK(std::filesystem::is_empty(staging));
 		{
 			// dropped half way
 			auto incoming = store.begin_chunk(id, 0);

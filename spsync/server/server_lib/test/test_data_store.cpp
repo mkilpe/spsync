@@ -1,5 +1,6 @@
 #include <securepath/test_frame/test_suite.hpp>
 #include <securepath/test_frame/test_utils.hpp>
+#include <spsync/test/test_record_data.hpp>
 
 #include <spsync/server/server_lib/data_store.hpp>
 #include <spsync/protocol/error.hpp>
@@ -20,32 +21,12 @@ std::string const db_name = "server_data_store_test.db";
 std::filesystem::path const data_root = "server_data_store_test";
 
 database::connection_ptr fresh_database(std::string const& name = db_name, std::filesystem::path const& root = data_root) {
-	std::remove(name.c_str());
-	std::filesystem::remove_all(root);
-	return database::sqlite::create_sqlite_connection(name);
+	return test::fresh_database(name, root);
 }
 
-/// a data as a client made it: descriptor, manifest and the encrypted chunks
-struct client_data {
-	data_descriptor descriptor;
-	data_manifest manifest;
-	std::map<std::uint64_t, octet_vector> chunks;
-};
-
-client_data make_data(std::size_t size, std::uint32_t chunk_size = 1000) {
-	encryption_key const key{sequence_number{1}, securepath::test::random_octet_vector(crypto::aes_gcm_key_size())};
-	client_data ret;
-	data_encryptor enc(key, chunk_size, [&](std::uint64_t no, octet_vector const& c) { ret.chunks[no] = c; });
-	enc.write(securepath::test::random_octet_vector(size));
-	auto result = enc.finish();
-	ret.descriptor = result.descriptor;
-	ret.manifest = result.manifest;
-	return ret;
-}
-
-bool is_error(auto const& result, protocol::errc code) {
-	return !result && result.get_error().code() == make_error_code(code);
-}
+using test::client_data;
+using test::is_error;
+auto const make_data = [](std::size_t size, std::uint32_t chunk_size = 1000) { return test::make_client_data(size, chunk_size); };
 
 }
 
@@ -335,12 +316,12 @@ TEST_CASE("server data store replica", "[unit]") {
 	tampered[5] ^= 0x01;
 	CHECK(!chunks.store_chunk(id, 0, tampered));
 	CHECK(chunks.store_chunk(id, 0, data.chunks.at(0)));
-	CHECK(!store.replica_progress(id, now));
+	CHECK(!store.replica_pulled(id, now));
 	CHECK(store.open_replica(data.descriptor, now).value().count() == 1);
 	for(std::uint64_t no = 1; no != data.descriptor.chunk_count(); ++no) {
 		CHECK(chunks.store_chunk(id, no, data.chunks.at(no)));
 	}
-	CHECK(store.replica_progress(id, now));
+	CHECK(store.replica_pulled(id, now));
 	CHECK(store.uploads_in_progress() == 0);
 	CHECK(store.find(id)->state == record_data_state::in_sync);
 	CHECK(store.open_replica(data.descriptor, now).value().complete());

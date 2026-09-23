@@ -1,6 +1,7 @@
 #include <securepath/test_frame/test_suite.hpp>
 #include <securepath/test_frame/test_utils.hpp>
 
+#include "data_server_fixtures.hpp"
 #include <spsync/server/server_lib/data_server.hpp>
 #include <spsync/comm/data_downloader.hpp>
 #include <spsync/comm/data_uploader.hpp>
@@ -60,12 +61,7 @@ struct data_server_fixture {
 
 	/// the record server's part: a ticket for the client, the given holders
 	ticket_source tickets(std::vector<data_endpoint> holders, std::chrono::seconds validity = 600s, std::size_t client = 0) {
-		return [this, holders = std::move(holders), validity, client](data_descriptor const& d, data_right right
-			, std::move_only_function<void(util::result<data_grant>)> cb) {
-			data_ticket ticket{sid, d, net.key_id(client), right, clock_type::now() + validity};
-			ticket.sign(record_server);
-			cb(util::result<data_grant>{data_grant{std::move(ticket), holders}});
-		};
+		return test::signed_tickets(record_server, std::move(holders), sid, net.key_id(client), validity);
 	}
 
 	data_descriptor create_data(std::size_t size) {
@@ -74,10 +70,9 @@ struct data_server_fixture {
 
 	/// both descriptor halves; the plaintext is kept for a reader to compare with
 	encrypted_data_result create_full(std::size_t size) {
-		plain = securepath::test::random_octet_vector(size);
-		auto writer = store.create(group_key, 4096);
-		writer.write(plain);
-		return writer.finish();
+		auto made = test::store_data(store, size, 4096, group_key);
+		plain = std::move(made.plain);
+		return std::move(made.result);
 	}
 
 	/// the author (client 0) puts the data on the server
@@ -124,28 +119,7 @@ struct data_server_fixture {
 	std::vector<data_id> completed;
 };
 
-/// what the uploader reported
-struct upload_log {
-	data_uploader::done_callback done() {
-		return [this](data_id const& id, std::optional<error> err) {
-			std::unique_lock lock{mutex};
-			finished.emplace_back(id, std::move(err));
-			++count;
-		};
-	}
-
-	data_uploader::progress_callback progress() {
-		return [this](data_id const&, std::uint64_t transferred, std::uint64_t) {
-			std::unique_lock lock{mutex};
-			reports.push_back(transferred);
-		};
-	}
-
-	std::atomic<std::size_t> count{0};
-	std::mutex mutex;
-	std::vector<std::pair<data_id, std::optional<error>>> finished;
-	std::vector<std::uint64_t> reports;
-};
+using upload_log = test::transfer_log;
 
 }
 
@@ -202,6 +176,42 @@ TEST_CASE("data server upload end to end", "[unit]") {
 	REQUIRE(news);
 	CHECK(!news->view_begin);
 	CHECK(!news->view_end);
+}
+
+// (review 2026-09-21) closing the channel ends what is out - it used to fail the pending
+// opens as "this holder is down", which is what moves on to the next holder: a close made
+// new connections, and the next data server got a manifest nobody waited for
+TEST_CASE("data channel close does not fail over", "[unit]") {
+	data_server_fixture f;
+	auto const data = f.create_data(3000);
+
+	// a holder that takes the connection and never says a word: the open stays out
+	asio::ip::tcp::acceptor silent{f.net.client_context(0).io_context(), asio::ip::tcp::endpoint{asio::ip::address_v4::loopback(), 0}};
+	std::vector<asio::ip::tcp::socket> taken;
+	std::function<void()> accept = [&] {
+		silent.async_accept([&](std::error_code const& ec, asio::ip::tcp::socket socket) {
+			if(!ec) {
+				taken.push_back(std::move(socket));
+				accept();
+			}
+		});
+	};
+	accept();
+	data_endpoint const mute{"127.0.0.1", silent.local_endpoint().port(), f.endpoint().key, {}};
+
+	net_data_channel channel{f.net.client_context(0), f.tickets({mute, f.endpoint()})};
+	upload_log log;
+	data_uploader uploader{f.store, channel, data_upload_config{}, log.done(), log.progress()};
+	REQUIRE(uploader.enqueue(data.manifest_digest));
+	std::this_thread::sleep_for(300ms);
+	channel.close();
+
+	WAIT_REQUIRE(log.count == 1, 10s);
+	CHECK(log.finished.back().second.has_value());
+	// the real server, second in the list, never heard of the data
+	std::this_thread::sleep_for(500ms);
+	CHECK(!f.server->find(f.sid, data.manifest_digest));
+	silent.close();
 }
 
 // chunks of the biggest size the limits allow go through: a chunk travels in pieces, so
@@ -269,8 +279,8 @@ TEST_CASE("data server upload resume", "[unit]") {
 		held += data.chunk_enc_size(no);
 	}
 	REQUIRE(!log.reports.empty());
-	CHECK(log.reports.front() == held);
-	CHECK(log.reports.back() == data.enc_size);
+	CHECK(log.reports.front().transferred == held);
+	CHECK(log.reports.back().transferred == data.enc_size);
 	CHECK(f.server->open_store(f.sid)->find(id)->state == record_data_state::in_sync);
 	WAIT_CHECK(f.completed_count() == 1, 2s);
 }
@@ -414,26 +424,8 @@ TEST_CASE("data server expires incomplete uploads", "[unit]") {
 
 namespace {
 
-/// what the downloader reported
-struct download_log {
-	data_downloader::done_callback done() {
-		return [this](data_id const&, std::optional<error> err) {
-			std::unique_lock lock{mutex};
-			finished.push_back(std::move(err));
-			++count;
-		};
-	}
-
-	std::atomic<std::size_t> count{0};
-	std::mutex mutex;
-	std::vector<std::optional<error>> finished;
-};
-
-octet_vector read_all(record_data& data) {
-	octet_vector ret(data.size());
-	ret.resize(data.read(0, ret.data(), ret.size()));
-	return ret;
-}
+using download_log = test::transfer_log;
+using test::read_all;
 
 }
 
@@ -456,7 +448,7 @@ TEST_CASE("data server download end to end", "[unit]") {
 	CHECK(downloader.enqueue(id));
 	WAIT_CHECK(log.count == 1, 30s);
 	REQUIRE(log.finished.size() == 1);
-	CHECK(!log.finished[0]);
+	CHECK(!log.finished[0].second);
 	CHECK(handle->state() == record_data_state::in_sync);
 	CHECK(read_all(*handle) == f.plain);
 	CHECK(f.reader_store.manifest(id) == data.manifest);
@@ -478,7 +470,7 @@ TEST_CASE("data server download failover", "[unit]") {
 	CHECK(downloader.enqueue(data.descriptor.manifest_digest));
 	WAIT_CHECK(log.count == 1, 30s);
 	REQUIRE(log.finished.size() == 1);
-	CHECK(!log.finished[0]);
+	CHECK(!log.finished[0].second);
 	CHECK(read_all(*handle) == f.plain);
 }
 
@@ -496,8 +488,8 @@ TEST_CASE("data server download refusals", "[unit]") {
 		CHECK(downloader.enqueue(data.descriptor.manifest_digest));
 		WAIT_CHECK(log.count == 1, 10s);
 		REQUIRE(log.finished.size() == 1);
-		REQUIRE(log.finished[0]);
-		CHECK(log.finished[0]->code() == make_error_code(protocol::errc::data_not_held));
+		REQUIRE(log.finished[0].second);
+		CHECK(log.finished[0].second->code() == make_error_code(protocol::errc::data_not_held));
 		CHECK(handle->state() == record_data_state::deferred);
 	}
 
@@ -509,8 +501,8 @@ TEST_CASE("data server download refusals", "[unit]") {
 		CHECK(downloader.enqueue(data.descriptor.manifest_digest));
 		WAIT_CHECK(log.count == 1, 10s);
 		REQUIRE(log.finished.size() == 1);
-		REQUIRE(log.finished[0]);
-		CHECK(log.finished[0]->code() == make_error_code(protocol::errc::invalid_data_ticket));
+		REQUIRE(log.finished[0].second);
+		CHECK(log.finished[0].second->code() == make_error_code(protocol::errc::invalid_data_ticket));
 		CHECK(handle->available_size() == 0);
 	}
 }
@@ -538,9 +530,9 @@ TEST_CASE("data server transfer quota window", "[unit]") {
 		CHECK(downloader.enqueue(id));
 		++tries;
 		WAIT_REQUIRE(log.count == tries, 30s);
-		complete = !log.finished.back().has_value();
+		complete = !log.finished.back().second.has_value();
 		if(!complete) {
-			CHECK(log.finished.back()->code() == make_error_code(protocol::errc::data_transfer_quota_exceeded));
+			CHECK(log.finished.back().second->code() == make_error_code(protocol::errc::data_transfer_quota_exceeded));
 			held_after_first = held_after_first == 0 ? f.reader_store.find(id)->have.count() : held_after_first;
 			// the next window
 			std::this_thread::sleep_for(2s);

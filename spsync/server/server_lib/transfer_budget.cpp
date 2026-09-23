@@ -3,14 +3,6 @@
 #include <algorithm>
 
 namespace securepath::sync {
-namespace {
-
-std::int64_t seconds_since_epoch(time_point t) {
-	return std::chrono::duration_cast<std::chrono::seconds>(t.time_since_epoch()).count();
-}
-
-}
-
 transfer_budget::transfer_budget(transfer_quota quota)
 : quota_(quota)
 {

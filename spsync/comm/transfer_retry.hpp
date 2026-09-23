@@ -17,6 +17,10 @@ struct transfer_retry_config {
 
 	/// the longest wait between two tries
 	std::chrono::milliseconds max{60000};
+
+	/// the longest wait a server may ask for (its retry_after, e.g. the rest of a transfer
+	/// quota window): whatever it says beyond that is cut down to this
+	std::chrono::milliseconds max_hint{std::chrono::hours{2}};
 };
 
 /**

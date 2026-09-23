@@ -18,7 +18,9 @@ bool retryable_transfer_error(error const& err) {
 	auto const is = [&](auto code) { return err.code() == make_error_code(code); };
 	bool const pointless = is(errc::invalid_data_ticket) || is(errc::invalid_data_manifest) || is(errc::invalid_data_chunk)
 		|| is(errc::unknown_data) || is(errc::data_pruned) || is(errc::no_data_servers) || is(errc::no_such_storage) || is(errc::no_such_upload)
-		|| is(securepath::errc::not_supported) || is(securepath::errc::no_such_data);
+		|| is(securepath::errc::not_supported) || is(securepath::errc::no_such_data)
+		// the data server is not the one the grant names: the same again next time
+		|| is(errc::invalid_client_key);
 	bool const owners_news = is(errc::data_not_held);
 	return static_cast<bool>(err) && !pointless && !owners_news;
 }
@@ -34,8 +36,13 @@ public:
 	void schedule(data_id const& id, std::optional<std::chrono::seconds> hint) {
 		std::unique_lock lock{mutex_};
 		auto& w = waits_.try_emplace(id, io_).first->second;
-		auto const delay = hint ? std::chrono::milliseconds{*hint} : w.backoff.value_or(config_.first);
-		w.backoff = std::min(w.backoff.value_or(config_.first) * 2, config_.max);
+		auto delay = w.backoff.value_or(config_.first);
+		if(hint) {
+			// the server said when: that is no failure to back off from
+			delay = std::min<std::chrono::milliseconds>(*hint, config_.max_hint);
+		} else {
+			w.backoff = std::min(delay * 2, config_.max);
+		}
 		w.pending = true;
 		LOG_INFO("record data transfer tried again in {} ms [data_id={}]", delay.count(), to_hex(id));
 		w.timer.expires_after(delay);

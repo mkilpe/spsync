@@ -1,4 +1,5 @@
 #include "connection.hpp"
+#include "guarded.hpp"
 #include "storage.hpp"
 
 #include <spsync/protocol/error.hpp>
@@ -52,7 +53,7 @@ void connection::handle(protocol::create_storage const& p) {
 	securepath::error error;
 	try {
 		// a creation always carries modes: the requested ones or the server defaults
-		auto handle = context_.acquire_sync(p.sid, modes_from_wire(p.modes()).value_or(storage_modes{}));
+		auto handle = context_.acquire_sync(p.sid, modes_from_wire(p.modes).value_or(storage_modes{}));
 		syncs_.emplace(p.sid, handle);
 		handle->add_listener(shared_from_this());
 	} catch(securepath::error const& err) {
@@ -181,26 +182,19 @@ void connection::handle(protocol::request_commit const& p) {
 
 void connection::handle(protocol::request_data_ticket const& p) {
 	LOG_TRACE("request_data_ticket for user {} [data_id={}]", id_, to_hex(p.data_id));
-	util::result<issued_ticket> issued;
-	try {
+	auto issued = guarded("issuing a data ticket", p.sid, [&]() -> util::result<issued_ticket> {
 		auto handle = find_storage(p.sid);
-		if(handle && context_.is_syncing(p.sid)) {
-			// the record naming the data may not have arrived here yet
-			issued = make_error(protocol::errc::storage_syncing);
-		} else if(handle) {
-			issued = context_.issue_data_ticket(*handle, p.data_id, id_, p.right);
-		} else {
-			issued = make_error(protocol::errc::no_such_storage);
+		if(!handle) {
+			return make_error(protocol::errc::no_such_storage);
 		}
-	} catch(securepath::error const& err) {
-		LOG_WARN("exception while issuing a data ticket: {} (sid={})", err, to_hex(p.sid));
-		issued = err;
-	} catch(std::exception const& ex) {
-		LOG_WARN("exception while issuing a data ticket: {} (sid={})", ex.what(), to_hex(p.sid));
-		issued = make_error(securepath::errc::unknown_error);
-	}
+		if(context_.is_syncing(p.sid)) {
+			// the record naming the data may not have arrived here yet
+			return make_error(protocol::errc::storage_syncing);
+		}
+		return context_.issue_data_ticket(*handle, p.data_id, id_, p.right);
+	});
 	if(issued) {
-		send_packet(protocol::response_data_ticket{p, std::move(issued->ticket), std::move(issued->holders)});
+		send_packet(protocol::response_data_ticket{p, std::move(issued.value().ticket), std::move(issued.value().holders)});
 	} else {
 		LOG_INFO("no data ticket for user {}: {}", id_, issued.get_error());
 		send_packet(protocol::response_data_ticket{p, issued.get_error()});

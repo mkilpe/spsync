@@ -25,6 +25,18 @@ struct data_quota {
 	std::uint64_t max_storage_bytes{};
 };
 
+/// what a data server takes at all, whatever a record server signed or asked for: a
+/// descriptor a bitmap and a manifest can be sized from, and chunks of at most the biggest size
+[[nodiscard]] inline bool storable_descriptor(data_descriptor const& d) {
+	return usable_data_descriptor(d) && d.chunk_size <= chunk_size_range.highest;
+}
+
+/// what a download is opened with: the manifest to verify against and the chunks held here
+struct served_data {
+	data_manifest manifest;
+	have_bitmap have;
+};
+
 /**
  * The data of one storage on a data-role server (RD5): the same chunk files and data
  * table as a client keeps (record_data_store), ciphertext only and verified against the
@@ -34,18 +46,6 @@ struct data_quota {
  *
  * Thread safe.
  */
-/// what a data server takes at all, whatever a record server signed or asked for: a data
-/// id and chunks that fit a transport frame
-[[nodiscard]] inline bool storable_descriptor(data_descriptor const& d) {
-	return !d.manifest_digest.empty() && d.chunk_size != 0 && d.chunk_size <= chunk_size_range.highest;
-}
-
-/// what a download is opened with: the manifest to verify against and the chunks held here
-struct served_data {
-	data_manifest manifest;
-	have_bitmap have;
-};
-
 class server_data_store {
 public:
 	server_data_store(database::connection_ptr, std::filesystem::path data_root, data_quota = {}, transfer_quota = {});
@@ -86,12 +86,13 @@ public:
 
 	/**
 	 * The chunk store a pull writes into, with the verification of a client download
-	 * (comm/data_downloader works on it). The pull reports its progress through
-	 * replica_progress, which keeps the expiry off a copy on its way; true when the data
+	 * (comm/data_downloader works on it). What keeps the expiry off a copy on its way is
+	 * the record server asking for it again with every sweep (open_replica touches it);
+	 * when the pull has ended, replica_pulled settles the bookkeeping: true when the data
 	 * is complete now.
 	 */
 	record_data_store& chunks() { return store_; }
-	bool replica_progress(data_id const&, time_point now);
+	bool replica_pulled(data_id const&, time_point now);
 
 	// -- serving (RD4, RDS 6) --
 
@@ -142,7 +143,10 @@ public:
 	std::size_t expire_incomplete(time_point untouched_since);
 
 private:
-	util::result<bool> chunk_kept(data_id const&, time_point now);
+	/// the quota and the registration shared by an upload and a copy; null manifest = not known yet
+	util::result<have_bitmap> open(data_descriptor const&, data_manifest const* manifest, time_point now);
+	/// a chunk was kept or a pull ended: true when the data is complete now
+	bool chunk_kept(data_id const&, time_point now);
 	void touch(data_id const&, time_point now);
 	void forget_activity(data_id const&);
 

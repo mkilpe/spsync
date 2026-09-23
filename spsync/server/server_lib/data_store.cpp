@@ -11,14 +11,6 @@
 #include <vector>
 
 namespace securepath::sync {
-namespace {
-
-std::int64_t seconds_since_epoch(time_point t) {
-	return std::chrono::duration_cast<std::chrono::seconds>(t.time_since_epoch()).count();
-}
-
-}
-
 /*
 	database table 'data_activity': the uploads that have not completed
 		data_id: the data as blob (primary key)
@@ -39,7 +31,7 @@ server_data_store::server_data_store(database::connection_ptr db, std::filesyste
 	}
 }
 
-util::result<have_bitmap> server_data_store::open_upload(data_descriptor const& descriptor, data_manifest const& manifest, time_point now) {
+util::result<have_bitmap> server_data_store::open(data_descriptor const& descriptor, data_manifest const* manifest, time_point now) {
 	std::unique_lock lock{mutex_};
 	util::result<have_bitmap> ret;
 	bool const known = store_.find(descriptor.manifest_digest).has_value();
@@ -50,7 +42,7 @@ util::result<have_bitmap> server_data_store::open_upload(data_descriptor const& 
 		// a known data holds its reservation already: a resume is never refused
 		ret = make_error(protocol::errc::data_quota_exceeded);
 	} else {
-		auto row = store_.register_data(descriptor, manifest);
+		auto row = manifest ? store_.register_data(descriptor, *manifest) : store_.register_data(descriptor);
 		if(row) {
 			if(row->state != record_data_state::in_sync) {
 				touch(descriptor.manifest_digest, now);
@@ -61,33 +53,18 @@ util::result<have_bitmap> server_data_store::open_upload(data_descriptor const& 
 		}
 	}
 	return ret;
+}
+
+util::result<have_bitmap> server_data_store::open_upload(data_descriptor const& descriptor, data_manifest const& manifest, time_point now) {
+	return open(descriptor, &manifest, now);
 }
 
 util::result<have_bitmap> server_data_store::open_replica(data_descriptor const& descriptor, time_point now) {
-	std::unique_lock lock{mutex_};
-	util::result<have_bitmap> ret;
-	bool const known = store_.find(descriptor.manifest_digest).has_value();
-	if(quota_.max_data_size != 0 && descriptor.enc_size > quota_.max_data_size) {
-		ret = make_error(protocol::errc::data_too_big);
-	} else if(!known && quota_.max_storage_bytes != 0
-		&& table_.total_enc_size() + descriptor.enc_size > quota_.max_storage_bytes) {
-		ret = make_error(protocol::errc::data_quota_exceeded);
-	} else {
-		auto row = store_.register_data(descriptor);
-		if(row) {
-			if(row->state != record_data_state::in_sync) {
-				touch(descriptor.manifest_digest, now);
-			}
-			ret = std::move(row->have);
-		} else {
-			ret = make_error(protocol::errc::invalid_data_manifest);
-		}
-	}
-	return ret;
+	return open(descriptor, nullptr, now);
 }
 
-bool server_data_store::replica_progress(data_id const& id, time_point now) {
-	return chunk_kept(id, now).value();
+bool server_data_store::replica_pulled(data_id const& id, time_point now) {
+	return chunk_kept(id, now);
 }
 
 util::result<bool> server_data_store::store_chunk(data_id const& id, std::uint64_t chunk_no, octet_span encrypted, time_point now) {
@@ -130,7 +107,7 @@ util::result<bool> server_data_store::finish_chunk(data_id const& id, incoming_c
 }
 
 /// a chunk was kept: the upload goes on, or the data is complete now (true)
-util::result<bool> server_data_store::chunk_kept(data_id const& id, time_point now) {
+bool server_data_store::chunk_kept(data_id const& id, time_point now) {
 	auto const row = store_.find(id);
 	bool const complete = row && row->state == record_data_state::in_sync;
 	std::unique_lock lock{mutex_};
@@ -156,8 +133,9 @@ util::result<octet_vector> server_data_store::serve_piece(data_id const& id, std
 	, bool charged) {
 	util::result<octet_vector> ret{make_error(protocol::errc::data_not_held)};
 	auto const row = store_.find(id);
+	// offset and size are the asker's: checked without adding them up
 	bool const held = row && row->have.test(chunk_no) && size != 0 && size <= protocol::max_data_piece_size
-		&& offset + size <= row->descriptor.chunk_enc_size(chunk_no);
+		&& row->descriptor.chunk_holds_range(chunk_no, offset, size);
 	if(held && charged && !budget_.charge(size, now)) {
 		ret = make_error(protocol::errc::data_transfer_quota_exceeded);
 	} else if(held) {
@@ -200,18 +178,10 @@ std::uint64_t server_data_store::uploads_in_progress() const {
 
 std::size_t server_data_store::release(std::vector<data_id> const& ids) {
 	std::unique_lock lock{mutex_};
-	std::set<std::uint64_t> released;
 	for(auto const& id : ids) {
-		if(auto const row = store_.find(id)) {
-			released.insert(row->local_id);
-		}
 		forget_activity(id);
 	}
-	std::size_t removed = 0;
-	if(!released.empty()) {
-		removed = store_.remove_unreferenced([&](std::uint64_t local_id) { return !released.contains(local_id); });
-	}
-	return removed;
+	return store_.remove(ids);
 }
 
 std::size_t server_data_store::expire_incomplete(time_point untouched_since) {
@@ -225,20 +195,16 @@ std::size_t server_data_store::expire_incomplete(time_point untouched_since) {
 		untouched.push_back(res.value<octet_vector>(0).value_or(octet_vector{}));
 	}
 
-	std::set<std::uint64_t> expired;
+	std::vector<data_id> expired;
 	for(auto const& id : untouched) {
 		auto const row = store_.find(id);
 		if(row && row->state != record_data_state::in_sync) {
 			LOG_INFO("incomplete upload expired [data_id={}, held {}/{} chunks]", to_hex(id), row->have.count(), row->have.size());
-			expired.insert(row->local_id);
+			expired.push_back(id);
 		}
 		forget_activity(id);
 	}
-	std::size_t removed = 0;
-	if(!expired.empty()) {
-		removed = store_.remove_unreferenced([&](std::uint64_t local_id) { return !expired.contains(local_id); });
-	}
-	return removed;
+	return store_.remove(expired);
 }
 
 void server_data_store::touch(data_id const& id, time_point now) {

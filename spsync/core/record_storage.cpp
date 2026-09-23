@@ -30,7 +30,8 @@ std::int64_t const seq_selector_value(1);
 /// shares it (reference counting by data_id, RD9). A data the retention policy had let go
 /// is wanted again by its new record.
 std::uint64_t reference_data(database::connection_ptr const& db, data_descriptor const& descriptor) {
-	data_state_table table{db};
+	// the storage made the table when it was opened
+	data_state_table table{db, data_state_table::existing_schema{}};
 	auto const local_id = table.ensure(descriptor);
 	auto const row = table.find(local_id);
 	if(row && row->state == record_data_state::pruned) {
@@ -47,9 +48,14 @@ void create_object_records(database::connection_ptr db, octet_vector const& tag,
 		q.bind(":tag", tag);
 		q.bind(":prev_tag", obj.data.previous_oid_record_tag);
 		q.bind(":oid", obj.data.id.value());
-		if(obj.data.data) {
+		if(obj.data.data && usable_data_descriptor(*obj.data.data)) {
 			q.bind(":data_ref", static_cast<std::int64_t>(reference_data(db, *obj.data.data)));
 		} else {
+			if(obj.data.data) {
+				// a server refuses such a record (chain validity); a client that is handed
+				// one keeps the record and knows no data for it
+				LOG_WARN("record names a data with a descriptor out of bounds, not indexed [tag={}]", to_hex(tag));
+			}
 			q.bind(":data_ref");
 		}
 		q.execute();
@@ -511,6 +517,16 @@ struct record_storage::impl {
 	 * links: its versions, newest first. Every object is walked on its own - a record
 	 * that changes several objects continues differently for each of them.
 	 */
+	/// the rows of the data the retention policy lets go at a cut, see superseded_data_below
+	std::vector<data_state_row> superseded_rows(sequence_number below, std::uint32_t kept_versions);
+
+	std::uint64_t data_reference_count(std::uint64_t data_ref) const {
+		auto q = db->prepare("SELECT count(*) FROM record_objects WHERE data_ref = :d;");
+		q.bind(":d", static_cast<std::int64_t>(data_ref));
+		// a count is a plain integer (sequences are stored with the unsigned offset)
+		return static_cast<std::uint64_t>(q.execute().value<std::int64_t>(0).value_or(0));
+	}
+
 	std::vector<object_version> object_versions(object_head_row const& head) {
 		std::vector<object_version> ret;
 		std::unordered_set<record_tag> visited;
@@ -943,54 +959,69 @@ void record_storage::set_limits(storage_limits const& l) {
 	q.execute();
 }
 
-std::vector<data_id> record_storage::superseded_data_below(sequence_number below, std::uint32_t kept_versions) const {
-	std::vector<data_id> ret;
+std::vector<data_state_row> record_storage::impl::superseded_rows(sequence_number below, std::uint32_t kept_versions) {
+	std::vector<data_state_row> ret;
 	if(kept_versions != 0 && kept_versions != keep_all_data_versions) {
 		// row of the record data table -> references by versions beyond the kept ones
 		std::map<std::uint64_t, std::uint64_t> superseded;
-		for(auto const& head : impl_->collect_object_heads()) {
+		for(auto const& head : collect_object_heads()) {
 			std::uint64_t carrying = 0;
-			for(auto const& version : impl_->object_versions(head)) {
+			for(auto const& version : object_versions(head)) {
 				if(version.data_ref && sequence_number{version.seq} < below && ++carrying > kept_versions) {
 					++superseded[*version.data_ref];
 				}
 			}
 		}
-		data_state_table table{impl_->db};
+		data_state_table table{db, data_state_table::existing_schema{}};
 		for(auto const& [data_ref, references] : superseded) {
-			auto const row = table.find(data_ref);
+			auto row = table.find(data_ref);
 			// somebody else naming the data keeps it: a kept version, a record above the
 			// cut, a record that is not in sync yet
 			if(row && row->state != record_data_state::pruned && data_reference_count(data_ref) == references) {
-				ret.push_back(row->descriptor.manifest_digest);
+				ret.push_back(std::move(*row));
 			}
 		}
 	}
 	return ret;
 }
 
+std::vector<data_id> record_storage::superseded_data_below(sequence_number below, std::uint32_t kept_versions) const {
+	std::vector<data_id> ret;
+	for(auto const& row : impl_->superseded_rows(below, kept_versions)) {
+		ret.push_back(row.descriptor.manifest_digest);
+	}
+	return ret;
+}
+
 std::vector<data_id> record_storage::prune_superseded_data(sequence_number below, std::uint32_t kept_versions) {
-	data_state_table table{impl_->db};
-	database::transaction tact(*impl_->db);
-	auto pruned = superseded_data_below(below, kept_versions);
-	for(auto const& id : pruned) {
-		if(auto const row = table.find(id)) {
-			table.set_state(row->local_id, record_data_state::pruned);
-		}
+	std::vector<data_id> pruned;
+	data_state_table table{impl_->db, data_state_table::existing_schema{}};
+	auto tact = table.transaction();
+	for(auto const& row : impl_->superseded_rows(below, kept_versions)) {
+		table.set_state(row.local_id, record_data_state::pruned);
+		pruned.push_back(row.descriptor.manifest_digest);
 	}
 	return pruned;
 }
 
+std::vector<data_id> record_storage::unreferenced_data() const {
+	std::vector<data_id> ret;
+	auto q = impl_->db->prepare(
+		"SELECT data_id FROM record_data"
+		" WHERE key NOT IN (SELECT data_ref FROM record_objects WHERE data_ref IS NOT NULL) ORDER BY key;");
+	for(auto res = q.execute(); res; res.next()) {
+		ret.push_back(res.value<octet_vector>(0).value_or(octet_vector{}));
+	}
+	return ret;
+}
+
 std::vector<data_id> record_storage::remove_unreferenced_data() {
-	data_state_table table{impl_->db};
-	std::vector<data_id> removed;
-	database::transaction tact(*impl_->db);
-	for(auto const local_id : table.all_ids()) {
-		if(data_reference_count(local_id) == 0) {
-			if(auto const row = table.find(local_id)) {
-				removed.push_back(row->descriptor.manifest_digest);
-			}
-			table.remove(local_id);
+	data_state_table table{impl_->db, data_state_table::existing_schema{}};
+	auto tact = table.transaction();
+	auto removed = unreferenced_data();
+	for(auto const& id : removed) {
+		if(auto const row = table.find(id)) {
+			table.remove(row->local_id);
 		}
 	}
 	return removed;
@@ -1015,10 +1046,7 @@ void record_storage::set_data_endpoints(std::vector<data_endpoint> const& endpoi
 }
 
 std::uint64_t record_storage::data_reference_count(std::uint64_t data_ref) const {
-	auto q = impl_->db->prepare("SELECT count(*) FROM record_objects WHERE data_ref = :d;");
-	q.bind(":d", static_cast<std::int64_t>(data_ref));
-	// a count is a plain integer (sequences are stored with the unsigned offset)
-	return static_cast<std::uint64_t>(q.execute().value<std::int64_t>(0).value_or(0));
+	return impl_->data_reference_count(data_ref);
 }
 
 std::vector<data_id> record_storage::confirmed_data_in_state(record_data_state state) const {

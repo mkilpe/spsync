@@ -34,7 +34,10 @@ struct data_state_row {
  */
 class data_state_table {
 public:
+	/// for a database whose owner made the table when it was opened: nothing is checked
+	struct existing_schema {};
 	explicit data_state_table(database::connection_ptr);
+	data_state_table(database::connection_ptr, existing_schema);
 
 	/// the row of the descriptor's data, created as deferred with nothing held when unknown
 	std::uint64_t ensure(data_descriptor const&);
@@ -66,6 +69,9 @@ public:
 	std::vector<data_state_row> find_by_content(octet_vector const& content_digest) const;
 
 	void remove(std::uint64_t local_id);
+
+	/// a transaction over the connection, for writes that belong together
+	database::transaction transaction();
 
 private:
 	database::connection_ptr db_;

@@ -1,5 +1,6 @@
 #include <securepath/test_frame/test_suite.hpp>
 #include <securepath/test_frame/test_utils.hpp>
+#include <spsync/test/test_record_data.hpp>
 
 #include <spsync/core/data/chunk_crypto.hpp>
 #include <spsync/core/data/data_decryptor.hpp>
@@ -17,9 +18,7 @@
 namespace securepath::sync {
 namespace {
 
-encryption_key test_group_key(std::uint64_t seq = 3) {
-	return encryption_key{sequence_number{seq}, securepath::test::random_octet_vector(crypto::aes_gcm_key_size())};
-}
+using test::test_group_key;
 
 /// encrypt plain in pieces, collect the chunks
 struct encrypted_data {

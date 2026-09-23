@@ -1,6 +1,7 @@
 #pragma once
 
 #include "data_channel.hpp"
+#include "transfer_config.hpp"
 
 #include <spsync/core/data/record_data_store.hpp>
 
@@ -10,18 +11,8 @@
 
 namespace securepath::sync {
 
-struct data_upload_config {
-	/// datas uploading at the same time, the rest wait in the order they were queued
-	std::size_t max_datas{2};
-
-	/// pieces of one data sent without an answer yet; with the piece size this is what a
-	/// data has in memory and on its way at once, whatever its chunk size
-	std::size_t window{16};
-
-	/// octets of a chunk per packet: a chunk travels in pieces (at most the protocol's
-	/// max_data_piece_size)
-	std::uint32_t piece_size{128 * 1024};
-};
+/// the pacing of the uploads (transfer_config.hpp)
+using data_upload_config = transfer_config;
 
 /**
  * The upload queue of a storage (RD4/RD7): datas are uploaded in the order they were
@@ -37,15 +28,16 @@ struct data_upload_config {
  *
  * Thread safe. The channel is never called with the uploader's lock held and may answer
  * from any thread, also before its call returns. The callbacks are called without the
- * lock, one at a time.
+ * lock, one at a time. The store is called under the lock, from whatever thread answers.
+ * What the two directions share is transfer_queue.
  */
 class data_uploader {
 public:
 	/// the upload of a data ended: completely at the holder, or with the error that stopped it
-	using done_callback = std::function<void(data_id const&, std::optional<error>)>;
+	using done_callback = transfer_done_callback;
 
 	/// encrypted octets known to be at the holder, of the data's enc_size
-	using progress_callback = std::function<void(data_id const&, std::uint64_t transferred, std::uint64_t total)>;
+	using progress_callback = transfer_progress_callback;
 
 	data_uploader(record_data_store&, data_channel&, data_upload_config, done_callback, progress_callback = {});
 	~data_uploader();

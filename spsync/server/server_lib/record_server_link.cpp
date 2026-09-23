@@ -16,6 +16,8 @@ record_server_link::record_server_link(network::context& context, peer_config re
 
 record_server_link::~record_server_link() {
 	encrypted_connection::close();
+	// close() tells nobody: whoever still waits for a ticket is answered here
+	fail_requests(make_error(securepath::errc::invalid_state, "the link to the record server is gone"));
 }
 
 void record_server_link::start(std::chrono::seconds timeout) {

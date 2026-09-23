@@ -35,6 +35,9 @@ public:
 
 	bool has(data_id const&, std::uint64_t chunk_no) const;
 
+	/// octets of the chunk's file, nullopt when there is none
+	std::optional<std::uint64_t> size(data_id const&, std::uint64_t chunk_no) const;
+
 	/// drop one chunk; fine when it is not held
 	void remove_chunk(data_id const&, std::uint64_t chunk_no);
 
@@ -51,6 +54,9 @@ public:
 
 	/// append to a staged chunk that arrives in pieces
 	void append_staged(std::string const& stage, std::uint64_t chunk_no, octet_span piece);
+
+	/// octets of a staged chunk's file, nullopt when there is none
+	std::optional<std::uint64_t> staged_size(std::string const& stage, std::uint64_t chunk_no) const;
 
 	/// one staged chunk becomes a chunk of the data, replacing a previous one; the staging area goes
 	void adopt_staged_chunk(std::string const& stage, std::uint64_t chunk_no, data_id const&);

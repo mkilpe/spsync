@@ -207,13 +207,15 @@ public:
 	std::vector<data_id> confirmed_data_in_state(record_data_state) const;
 
 	/**
-	 * Remove the rows of the record data table that no object record references any more
-	 * and return their data ids (record_data.txt RD9/RDS 9): what a history cut or a
-	 * rollback left dead. For a storage that keeps the index only - a record server,
-	 * where a row exists because a record named the data. A client's rows belong to its
-	 * record_data_store, which also holds the chunks and rows of data whose record is
-	 * still being made: there record_data_store::remove_unreferenced does this.
+	 * The data ids of the record data table rows no object record references any more
+	 * (record_data.txt RD9/RDS 9): what a history cut or a rollback left dead, or a data
+	 * whose record could not be made. One query. A client hands them to its
+	 * record_data_store::remove, which drops the chunks with the rows; a storage that
+	 * keeps the index only (a record server) removes the rows with remove_unreferenced_data.
 	 */
+	std::vector<data_id> unreferenced_data() const;
+
+	/// remove the rows of unreferenced_data() in one transaction and return their ids
 	std::vector<data_id> remove_unreferenced_data();
 
 	/**

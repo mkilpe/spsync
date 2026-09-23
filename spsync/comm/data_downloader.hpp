@@ -1,6 +1,7 @@
 #pragma once
 
 #include "data_channel.hpp"
+#include "transfer_config.hpp"
 
 #include <spsync/core/data/record_data_store.hpp>
 
@@ -10,16 +11,8 @@
 
 namespace securepath::sync {
 
-struct data_download_config {
-	/// datas downloading at the same time, the rest wait in the order they were queued
-	std::size_t max_datas{2};
-
-	/// pieces of one data asked for without an answer yet
-	std::size_t window{16};
-
-	/// octets of a chunk per request (at most the protocol's max_data_piece_size)
-	std::uint32_t piece_size{128 * 1024};
-};
+/// the pacing of the downloads (transfer_config.hpp)
+using data_download_config = transfer_config;
 
 /**
  * The download queue of a storage (RD4/RD7), the mirror of data_uploader: a data comes
@@ -37,10 +30,10 @@ struct data_download_config {
  */
 class data_downloader {
 public:
-	using done_callback = std::function<void(data_id const&, std::optional<error>)>;
+	using done_callback = transfer_done_callback;
 
 	/// encrypted octets held here, of the data's enc_size
-	using progress_callback = std::function<void(data_id const&, std::uint64_t transferred, std::uint64_t total)>;
+	using progress_callback = transfer_progress_callback;
 
 	data_downloader(record_data_store&, data_download_channel&, data_download_config, done_callback, progress_callback = {});
 	~data_downloader();

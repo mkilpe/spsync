@@ -50,9 +50,40 @@ TEST_CASE("retryable transfer errors", "[unit]") {
 	CHECK(!retryable_transfer_error(make_error(protocol::errc::no_data_servers)));
 	CHECK(!retryable_transfer_error(make_error(securepath::errc::not_supported)));
 	CHECK(!retryable_transfer_error(make_error(securepath::errc::no_such_data)));
+	CHECK(!retryable_transfer_error(make_error(protocol::errc::data_pruned)));
+	// (review 2026-09-21) the data server is not the one the grant names
+	CHECK(!retryable_transfer_error(make_error(protocol::errc::invalid_client_key)));
 	// the owner's news (remote_not_complete), ended by a notification
 	CHECK(!retryable_transfer_error(make_error(protocol::errc::data_not_held)));
 	CHECK(!retryable_transfer_error(error{}));
+}
+
+// (review 2026-09-21) the wait a server asks for is its word, not a failure to back off
+// from, and not to be believed beyond reason (a uint32 of seconds is 136 years)
+TEST_CASE("transfer retry hint", "[unit]") {
+	asio::io_context io;
+	auto guard = asio::make_work_guard(io);
+	std::jthread runner{[&] { io.run(); }};
+	std::atomic<int> fired{0};
+	auto const id = securepath::test::random_octet_vector(64);
+	{
+		transfer_retry_config config{100ms, 5000ms};
+		config.max_hint = 150ms;
+		transfer_retry retry{io, config, [&](data_id const&) { ++fired; }};
+		auto const start = std::chrono::steady_clock::now();
+		retry.schedule(id, std::chrono::seconds{4000000000u});
+		WAIT_REQUIRE(fired == 1, 3s);
+		CHECK(std::chrono::steady_clock::now() - start >= 140ms);
+		// the hints did not move the backoff: the next plain retry is the first one
+		retry.schedule(id, std::chrono::seconds{0});
+		WAIT_REQUIRE(fired == 2, 3s);
+		auto const plain = std::chrono::steady_clock::now();
+		retry.schedule(id);
+		WAIT_REQUIRE(fired == 3, 3s);
+		CHECK(std::chrono::steady_clock::now() - plain < 190ms + 300ms);
+	}
+	guard.reset();
+	io.stop();
 }
 
 TEST_CASE("transfer retry", "[unit]") {

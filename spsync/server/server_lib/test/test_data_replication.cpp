@@ -1,6 +1,7 @@
 #include <securepath/test_frame/test_suite.hpp>
 #include <securepath/test_frame/test_utils.hpp>
 
+#include "data_server_fixtures.hpp"
 #include <spsync/server/server_lib/data_server.hpp>
 #include <spsync/server/server_lib/storage_server.hpp>
 #include <spsync/server/server_lib/storage.hpp>
@@ -39,53 +40,13 @@ void clean(std::vector<std::string> const& roots) {
 
 /// a data as a client makes it, three chunks of the smallest size a chain takes
 encrypted_data_result make_data(record_data_store& store) {
-	encryption_key const key{sequence_number{1}, securepath::test::random_octet_vector(crypto::aes_gcm_key_size())};
-	auto writer = store.create(key, chunk_size_range.lowest);
-	writer.write(securepath::test::random_octet_vector(700000));
-	return writer.finish();
+	return test::store_data(store, 700000, chunk_size_range.lowest).result;
 }
 
-/// the record server's part of a client's transfer, as its connection handler does it
-ticket_source tickets_of(storage_server& records, std::shared_ptr<storage> const& storage, network::context& record_context
-	, std::vector<data_endpoint> const& servers, crypto::public_key_id const& member) {
-	return [&records, storage, &record_context, servers, member](data_descriptor const& d, data_right right
-		, std::move_only_function<void(util::result<data_grant>)> cb) {
-		ticket_issuer issuer{servers, records.availability(), 600s};
-		auto issued = issuer.issue(storage->id(), storage->committed_data(d.manifest_digest), member
-			, static_cast<std::uint32_t>(right), record_context.private_data().my_private_key(), clock_type::now());
-		if(issued) {
-			cb(util::result<data_grant>{data_grant{std::move(issued->ticket), std::move(issued->holders)}});
-		} else {
-			cb(util::result<data_grant>{issued.get_error()});
-		}
-	};
-}
-
-std::optional<error> upload(record_data_store& store, network::context& client_context, ticket_source source, data_id const& id) {
-	net_data_channel channel{client_context, std::move(source)};
-	std::atomic<int> done{0};
-	std::mutex mutex;
-	std::optional<error> result;
-	data_uploader uploader{store, channel, data_upload_config{}, [&](data_id const&, std::optional<error> err) {
-		std::unique_lock lock{mutex};
-		result = std::move(err);
-		++done;
-	}};
-	REQUIRE(uploader.enqueue(id));
-	WAIT_REQUIRE(done == 1, 30s);
-	std::unique_lock lock{mutex};
-	return result;
-}
-
-bool holds(data_server& server, protocol::storage_id const& sid, data_id const& id) {
-	auto const row = server.find(sid, id);
-	return row && row->state == record_data_state::in_sync;
-}
-
-std::size_t complete_holders(storage_server const& records, protocol::storage_id const& sid, data_id const& id) {
-	auto const holdings = records.availability().holdings(sid, id);
-	return static_cast<std::size_t>(std::ranges::count_if(holdings, &data_holding::complete));
-}
+using test::tickets_of;
+using test::upload;
+using test::holds;
+using test::complete_holders;
 
 /// a record server and two data servers of their own (RD12), copy count 2
 struct separate_cluster {
@@ -244,56 +205,25 @@ TEST_CASE("data copies among separate data servers", "[unit]") {
 
 namespace {
 
-/// an all-in-one replica (RD12): record role and data role over one context and root
-struct replica {
-	replica(test::test_context& tctx, std::size_t index, std::vector<data_endpoint> const& data_servers)
-	: root("test-replication-replica-" + std::to_string(index))
-	, records(tctx.client_context(index), record_params(tctx, index, data_servers))
-	, data(tctx.client_context(index), data_params(tctx, index, data_servers))
-	{
-		records.attach_data_role(data);
-	}
+/// the ports of an all-in-one replica: its record, s2s and data listeners
+std::uint16_t port(std::size_t index, std::uint16_t what) {
+	return static_cast<std::uint16_t>(42810 + 5 * index + what);
+}
 
-	static std::uint16_t port(std::size_t index, std::uint16_t what) {
-		return static_cast<std::uint16_t>(42810 + 5 * index + what);
-	}
-
-	storage_server_params record_params(test::test_context& tctx, std::size_t index, std::vector<data_endpoint> const& data_servers) const {
-		storage_server_params p;
-		p.storage_root = root;
-		p.storage_server_endpoint = asio::ip::tcp::endpoint(asio::ip::address_v4::loopback(), port(index, 0));
-		p.s2s_endpoint = asio::ip::tcp::endpoint(asio::ip::address_v4::loopback(), port(index, 1));
-		p.peers = {peer_config{"127.0.0.1", port(1 - index, 1), tctx.key_id(1 - index)}};
-		p.data_servers = data_servers;
-		p.data_copies = 2;
-		return p;
-	}
-
-	data_server_params data_params(test::test_context& tctx, std::size_t index, std::vector<data_endpoint> const& data_servers) const {
-		data_server_params p;
-		p.enabled = true;
-		p.storage_root = root;
-		p.data_endpoint = asio::ip::tcp::endpoint(asio::ip::address_v4::loopback(), data_servers[index].port);
-		// the other replica's tickets are good here: it hears of what is held through the
-		// record roles' link, so no link of the data role's own
-		p.record_servers = {peer_config{"", 0, tctx.key_id(1 - index)}};
-		return p;
-	}
-
-	void start() {
-		data.start();
-		records.start();
-	}
-
-	void close() {
-		records.close();
-		data.close();
-	}
-
-	std::string root;
-	storage_server records;
-	data_server data;
-};
+/// an all-in-one replica (RD12): both roles over one context and root, peered with the
+/// other one. The other replica's tickets are good at the data role: it hears of what is
+/// held through the record roles' link, so no link of the data role's own
+test::all_in_one_params replica_params(test::test_context& tctx, std::size_t index, std::vector<data_endpoint> const& data_servers) {
+	test::all_in_one_params p;
+	p.root = "test-replication-replica-" + std::to_string(index);
+	p.port = port(index, 0);
+	p.s2s_port = port(index, 1);
+	p.data_port = port(index, 2);
+	p.peers = {peer_config{"127.0.0.1", port(1 - index, 1), tctx.key_id(1 - index)}};
+	p.data_servers = data_servers;
+	p.trusted_record_servers = {peer_config{"", 0, tctx.key_id(1 - index)}};
+	return p;
+}
 
 }
 
@@ -307,11 +237,11 @@ TEST_CASE("data copies among all in one replicas", "[unit]") {
 	network::enable_pk_handshake(tctx.client_context(0));
 	network::enable_pk_handshake(tctx.client_context(1));
 	std::vector<data_endpoint> const endpoints{
-		data_endpoint{"127.0.0.1", replica::port(0, 2), tctx.key_id(0), {}, {}},
-		data_endpoint{"127.0.0.1", replica::port(1, 2), tctx.key_id(1), {}, {}}};
+		data_endpoint{"127.0.0.1", port(0, 2), tctx.key_id(0), {}, {}},
+		data_endpoint{"127.0.0.1", port(1, 2), tctx.key_id(1), {}, {}}};
 
-	replica a{tctx, 0, endpoints};
-	replica b{tctx, 1, endpoints};
+	test::all_in_one a{tctx.client_context(0), replica_params(tctx, 0, endpoints)};
+	test::all_in_one b{tctx.client_context(1), replica_params(tctx, 1, endpoints)};
 	a.start();
 	b.start();
 	WAIT_REQUIRE(!a.records.connected_peers().empty(), 15s);

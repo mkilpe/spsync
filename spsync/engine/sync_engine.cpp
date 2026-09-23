@@ -999,13 +999,25 @@ public:
 	 * during this connection, is left alone.
 	 */
 	void request_uploads() {
+		request_transfers_of(record_data_state::upload_pending, uploads, failed_uploads, "upload"
+			, [this](data_id const& id) { return comm.upload_data(id); });
+	}
+
+	/**
+	 * Ask comm for the transfers a state is owed: every data of a server confirmed record
+	 * in that state that is not on its way already and was not refused during this
+	 * connection, in the order of the records.
+	 */
+	template<typename Ask>
+	void request_transfers_of(record_data_state state, std::map<request_handle, data_id>& on_their_way
+		, std::set<data_id> const& refused, char const* what, Ask ask) {
 		if(data) {
-			for(auto const& id : records.confirmed_data_in_state(record_data_state::upload_pending)) {
-				bool const asked = std::any_of(uploads.begin(), uploads.end(), [&](auto const& u) { return u.second == id; });
-				if(!asked && !failed_uploads.contains(id)) {
-					auto const handle = comm.upload_data(id);
-					uploads[handle] = id;
-					LINFO("requested record data upload [data_id = {}, request handle = {}]", to_hex(id), handle);
+			for(auto const& id : records.confirmed_data_in_state(state)) {
+				bool const asked = std::any_of(on_their_way.begin(), on_their_way.end(), [&](auto const& t) { return t.second == id; });
+				if(!asked && !refused.contains(id)) {
+					auto const handle = ask(id);
+					on_their_way[handle] = id;
+					LINFO("requested record data {} [data_id = {}, request handle = {}]", what, to_hex(id), handle);
 				}
 			}
 		}
@@ -1030,8 +1042,8 @@ public:
 		}
 	}
 
-	static bool is_data_pruned(std::optional<error> const& err) {
-		return err && err->code() == make_error_code(protocol::errc::data_pruned);
+	static bool is_error(std::optional<error> const& err, protocol::errc code) {
+		return err && err->code() == make_error_code(code);
 	}
 
 	void on_upload_answer(request_handle handle, std::optional<error> const& err) {
@@ -1039,7 +1051,7 @@ public:
 		if(it != uploads.end()) {
 			data_id const id = it->second;
 			uploads.erase(it);
-			if(is_data_pruned(err)) {
+			if(is_error(err, protocol::errc::data_pruned)) {
 				on_data_pruned(id, *err);
 			} else if(err) {
 				LWARN("record data upload failed [data_id = {}]: {}", to_hex(id), *err);
@@ -1070,16 +1082,8 @@ public:
 	 * connection, is left alone (a failed one until it is asked for again).
 	 */
 	void request_downloads() {
-		if(data) {
-			for(auto const& id : records.confirmed_data_in_state(record_data_state::download_pending)) {
-				bool const asked = std::any_of(downloads.begin(), downloads.end(), [&](auto const& d) { return d.second == id; });
-				if(!asked && !failed_downloads.contains(id)) {
-					auto const handle = comm.fetch_data(id);
-					downloads[handle] = id;
-					LINFO("requested record data download [data_id = {}, request handle = {}]", to_hex(id), handle);
-				}
-			}
-		}
+		request_transfers_of(record_data_state::download_pending, downloads, failed_downloads, "download"
+			, [this](data_id const& id) { return comm.fetch_data(id); });
 	}
 
 	/// RD6 fetch policy: small enough data of others is wanted as soon as its record is here
@@ -1087,7 +1091,8 @@ public:
 		if(data && config.auto_fetch_max_size != 0) {
 			for(auto const& id : records.confirmed_data_in_state(record_data_state::deferred)) {
 				auto const row = data->find(id);
-				if(row && row->descriptor.enc_size <= config.auto_fetch_max_size) {
+				// what the server refused during this connection stays as it is
+				if(row && row->descriptor.enc_size <= config.auto_fetch_max_size && !failed_downloads.contains(id)) {
 					set_data_state(id, record_data_state::download_pending);
 				}
 			}
@@ -1120,18 +1125,21 @@ public:
 				if(output) {
 					output->emit<engine_events::on_data_state_changed>(id, record_data_state::in_sync);
 				}
-			} else if(is_data_pruned(err)) {
+			} else if(is_error(err, protocol::errc::data_pruned)) {
 				on_data_pruned(id, *err);
-			} else if(err && err->code() == make_error_code(protocol::errc::data_not_held)) {
+			} else if(is_error(err, protocol::errc::data_not_held)) {
 				// the upload is still in progress over there: notify_data brings us back
 				LINFO("record data not complete at the holders yet [data_id = {}]", to_hex(id));
 				set_data_state(id, record_data_state::remote_not_complete);
-			} else if(err && err->code() == make_error_code(protocol::errc::unknown_data)) {
+			} else if(is_error(err, protocol::errc::unknown_data)) {
 				// no record on the server names the data any more: a history cut took it
 				// (RD9). We may still hold the record, but the data is gone over there - not
-				// wanted again by itself, only when somebody asks
+				// wanted again by itself, only when somebody asks. Deferred is what auto
+				// fetch picks up, so the refusal is remembered for this connection - the
+				// next one is another chance, the record may only have been late over there
 				LINFO("record data is not known to the server any more [data_id = {}]", to_hex(id));
 				set_data_state(id, record_data_state::deferred);
+				failed_downloads.insert(id);
 				if(output) {
 					output->emit<engine_events::on_data_transfer_failed>(id, *err);
 				}
@@ -1170,19 +1178,27 @@ public:
 		return fetchable || (row && row->state == record_data_state::download_pending);
 	}
 
+	/// a data that is on its way, in either direction
+	static bool in_transfer(record_data_state state) {
+		return state == record_data_state::upload_pending || state == record_data_state::download_pending
+			|| state == record_data_state::remote_not_complete;
+	}
+
 	/**
 	 * The retention policy of the storage at a local history cut (RD9,
 	 * storage_limits::kept_data_versions, learned from the server): the data of the
 	 * versions of an object beyond the newest kept ones below the anchor goes, the
 	 * records stay. A data still to be uploaded is left alone - it may be the only copy,
-	 * the server says when it does not want it any more.
+	 * the server says when it does not want it any more - and so is one that is being
+	 * fetched: somebody asked for it, and the chunks still arriving would land in a
+	 * pruned row.
 	 */
 	void prune_superseded_data(sequence_number anchor) {
 		if(data) {
 			std::size_t pruned = 0;
 			for(auto const& id : records.superseded_data_below(anchor, limits.kept_data_versions)) {
 				auto const row = data->find(id);
-				if(row && row->state != record_data_state::upload_pending && data->prune(id)) {
+				if(row && !in_transfer(row->state) && data->prune(id)) {
 					++pruned;
 					if(output) {
 						output->emit<engine_events::on_data_state_changed>(id, record_data_state::pruned);
@@ -1202,8 +1218,7 @@ public:
 	 */
 	void sweep_data() {
 		if(data) {
-			auto const removed = data->remove_unreferenced(
-				[this](std::uint64_t local_id) { return records.data_reference_count(local_id) != 0; });
+			auto const removed = data->remove(records.unreferenced_data());
 			if(removed != 0) {
 				LINFO("dropped {} unreferenced record data", removed);
 			}
@@ -1211,8 +1226,9 @@ public:
 	}
 
 	/// a change of a data change record, decrypted; nullopt when the record cannot be read
-	std::optional<data_change_record_verifier::single_data> read_change(record_handle const& h, std::size_t change) const {
-		std::optional<data_change_record_verifier::single_data> ret;
+	using read_change_result = std::optional<data_change_record_verifier::single_data>;
+	read_change_result read_change(record_handle const& h, std::size_t change) const {
+		read_change_result ret;
 		if(h && h->type() == data_change_record_tag) {
 			auto const block = h->record();
 			auto const rec = block.deserialise_to<data_change_record>();
@@ -1252,9 +1268,8 @@ public:
 	 * RDS 6: the content of the change's data is held under another data id (the same
 	 * file sent again, by anybody) and the data itself is not: it can be rebuilt locally.
 	 */
-	std::optional<adoption> plan_adoption(record_handle const& h, std::size_t change) const {
+	std::optional<adoption> plan_adoption(read_change_result const& read) const {
 		std::optional<adoption> ret;
-		auto const read = data ? read_change(h, change) : std::nullopt;
 		auto const info = read ? read->header.data_info() : std::nullopt;
 		if(info && read->data.data) {
 			auto const& wanted = *read->data.data;
@@ -1284,9 +1299,8 @@ public:
 	}
 
 	/// the same, fetching the data when it is not held
-	record_data_handle fetch_change_data(record_handle const& h, std::size_t change) {
+	record_data_handle fetch_change_data(read_change_result const& read) {
 		record_data_handle ret;
-		auto const read = data ? read_change(h, change) : std::nullopt;
 		if(read) {
 			ret = open_change_data(*read);
 		}
@@ -1599,7 +1613,8 @@ record_data_handle sync_engine::object_data(record_handle h, std::size_t change)
 
 record_data_handle sync_engine::fetch_object_data(record_handle h, std::size_t change) {
 	std::unique_lock lock{impl_->mutex};
-	auto const plan = impl_->plan_adoption(h, change);
+	auto const read = impl_->data ? impl_->read_change(h, change) : std::nullopt;
+	auto const plan = impl_->plan_adoption(read);
 	if(plan) {
 		// the content is held under another data id: rebuilt here instead of downloaded,
 		// without the engine mutex - it is as much work as creating the data was
@@ -1611,7 +1626,7 @@ record_data_handle sync_engine::fetch_object_data(record_handle h, std::size_t c
 			impl_->output->emit<engine_events::on_data_state_changed>(plan->wanted.manifest_digest, record_data_state::in_sync);
 		}
 	}
-	return impl_->fetch_change_data(h, change);
+	return impl_->fetch_change_data(read);
 }
 
 record_handle sync_engine::sync_user_change(plain_user_change_data change_data, metadata mdata) {

@@ -7,6 +7,7 @@
 #include <spsync/server/server_lib/peer_config.hpp>
 #include <spsync/server/server_lib/ticket_issuer.hpp>
 #include <spsync/protocol/error.hpp>
+#include <spsync/test/test_record_data.hpp>
 
 #include <securepath/crypto/key_generation.hpp>
 #include <securepath/crypto/public_key_cache.hpp>
@@ -14,7 +15,6 @@
 #include <algorithm>
 #include <map>
 #include <set>
-#include <map>
 #include <sstream>
 
 namespace securepath::sync {
@@ -39,9 +39,12 @@ std::vector<crypto::public_key_id> keys_of(std::vector<data_endpoint> const& end
 	return ret;
 }
 
+/// what a chain accepts: three chunks of the default size
 data_descriptor test_descriptor() {
-	return data_descriptor{3 * 1024 * 1024, 1024 * 1024, securepath::test::random_octet_vector(64)};
+	return test::test_descriptor(3 * 1024 * 1024, 1024 * 1024);
 }
+
+using test::is_error;
 
 }
 
@@ -179,10 +182,6 @@ TEST_CASE("data ticket issuer", "[unit]") {
 	data_availability table;
 	ticket_issuer issuer{endpoints, table, 600s};
 	CHECK(issuer.data_servers() == endpoints);
-
-	auto const is_error = [](util::result<issued_ticket> const& r, protocol::errc code) {
-		return !r && r.get_error().code() == make_error_code(code);
-	};
 
 	// no ticket for a data the storage does not vouch for: its reason comes back
 	CHECK(is_error(issuer.issue(sid, make_error(protocol::errc::unknown_data), member, upload, server_key, now), protocol::errc::unknown_data));
@@ -363,9 +362,6 @@ TEST_CASE("replica ticket issuer", "[unit]") {
 	auto const placement = upload_order(endpoints, id);
 	data_availability table;
 	ticket_issuer issuer{endpoints, table, 600s};
-	auto const is_error = [](util::result<issued_ticket> const& r, auto code) {
-		return !r && r.get_error().code() == make_error_code(code);
-	};
 
 	// a member cannot ask for the right
 	auto const member = crypto::public_key_id{securepath::test::random_octet_vector(32)};

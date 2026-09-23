@@ -163,12 +163,11 @@ public:
 	bool prune(data_id const&);
 
 	/**
-	 * Drop the rows and chunks of every data the predicate does not know as referenced
-	 * (RD9: data of rolled back or cut records, leftovers of a creation whose record
-	 * never got stored). Returns how many went. The caller must not run this between a
-	 * writer's finish() and the creation of its record.
+	 * Drop these data, rows and chunks (RD9): what no stored record references any more
+	 * (record_storage::unreferenced_data), what a server was told to let go. Unknown ids
+	 * are nothing; returns how many were known.
 	 */
-	std::size_t remove_unreferenced(std::function<bool(std::uint64_t local_id)> const& is_referenced);
+	std::size_t remove(std::vector<data_id> const&);
 
 	// -- transfer side, ciphertext only --
 

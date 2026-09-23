@@ -12,28 +12,26 @@
 #include <atomic>
 #include <map>
 #include <mutex>
+#include <variant>
 
 namespace securepath::sync {
 namespace {
 
-/// the answer to a manifest: the holder's have octets, or an error and whether it was
-/// the transport that failed (try the next holder) or the holder that refused (final)
-using manifest_handler = std::move_only_function<void(util::result<octet_vector>, bool transport_failure)>;
-using chunk_handler = data_channel::piece_callback;
+/// a reply of the data server as it comes off the wire, whichever call it answers
+using reply_packet = std::variant<protocol::upload_data_manifest_reply, protocol::upload_data_chunk_reply
+	, protocol::download_data_open_reply, protocol::download_data_piece_reply>;
 
-/// the answer to the opening of a download as it comes off the wire
-struct opened_download {
-	data_manifest manifest;
-	octet_vector have;
-};
-using open_download_handler = std::move_only_function<void(util::result<opened_download>, bool transport_failure)>;
-using fetch_handler = data_download_channel::fetch_callback;
+/// a call still out: answered with its reply, or with an error and whether it was the
+/// transport that failed (the holder is down: try the next one) or the holder that refused
+using pending_call = std::move_only_function<void(util::result<reply_packet>, bool transport_failure)>;
 
+/// a link is to a server AND the key it has to authenticate with: a grant that names
+/// another key for the same address does not get the link an earlier grant's key opened
 std::string endpoint_name(data_endpoint const& e) {
-	return e.host + ":" + std::to_string(e.port);
+	return e.host + ":" + std::to_string(e.port) + "/" + to_hex(e.key.data());
 }
 
-/// the connection to one data server
+/// the connection to one data server: calls answered by their reply packets, by call id
 class data_link : public network::encrypted_connection {
 public:
 	data_link(network::context& context, data_endpoint endpoint)
@@ -55,48 +53,41 @@ public:
 		return dead_;
 	}
 
+	/// the channel closes: what is out ends here - not "this holder is down, the next one"
 	void shutdown() {
 		encrypted_connection::close();
-		fail_all(make_error(securepath::errc::invalid_state, "data channel closed"));
+		fail_all(make_error(securepath::errc::invalid_state, "data channel closed"), false);
 	}
 
-	void send_manifest(data_ticket const& ticket, data_manifest const& manifest, manifest_handler handler) {
+	/**
+	 * Make a call: make(cid) is the packet, handler gets its Reply, or the error and
+	 * whether it was the transport. The packet goes out at once, or when the hello is
+	 * answered; on a dead link the handler is failed at once.
+	 */
+	template<typename Reply, typename Make>
+	void call(Make make, std::move_only_function<void(util::result<Reply>, bool transport_failure)> handler) {
 		auto const cid = ++call_id_;
-		post(cid, protocol::upload_data_manifest{cid, ticket, manifest}, manifests_, std::move(handler)
-			, [](manifest_handler& h, error const& err) { h(util::result<octet_vector>{err}, true); });
-	}
-
-	void send_piece(octet_vector const& sid, data_id const& id, std::uint64_t chunk_no, std::uint64_t offset, octet_vector bytes, chunk_handler handler) {
-		auto const cid = ++call_id_;
-		post(cid, protocol::upload_data_chunk{cid, sid, id, chunk_no, offset, std::move(bytes)}, chunks_, std::move(handler)
-			, [](chunk_handler& h, error const& err) { h(err); });
-	}
-
-	void send_download_open(data_ticket const& ticket, open_download_handler handler) {
-		auto const cid = ++call_id_;
-		post(cid, protocol::download_data_open{cid, ticket}, downloads_, std::move(handler)
-			, [](open_download_handler& h, error const& err) { h(util::result<opened_download>{err}, true); });
-	}
-
-	void send_fetch(octet_vector const& sid, data_id const& id, std::uint64_t chunk_no, std::uint64_t offset, std::uint32_t size, fetch_handler handler) {
-		auto const cid = ++call_id_;
-		post(cid, protocol::download_data_piece{cid, sid, id, chunk_no, offset, size}, fetches_, std::move(handler)
-			, [](fetch_handler& h, error const& err) { h(util::result<octet_vector>{err}); });
+		auto bytes = serialisation::asn_der_serialise_choice<protocol::c2d_types>(make(cid));
+		post(cid, std::move(bytes), [handler = std::move(handler)](util::result<reply_packet> answer, bool transport_failure) mutable {
+			if(!answer) {
+				handler(util::result<Reply>{answer.get_error()}, transport_failure);
+			} else if(auto const* reply = std::get_if<Reply>(&answer.value())) {
+				handler(util::result<Reply>{*reply}, false);
+			} else {
+				handler(util::result<Reply>{make_error(securepath::errc::invalid_data, "a reply of another kind")}, false);
+			}
+		});
 	}
 
 private:
-	/// remember the handler and send the packet, or keep it until the hello is answered;
-	/// on a dead link the handler is failed at once
-	template<typename Packet, typename Handler, typename Fail>
-	void post(protocol::call_id cid, Packet const& packet, std::map<protocol::call_id, Handler>& calls, Handler handler, Fail fail) {
-		auto bytes = serialisation::asn_der_serialise_choice<protocol::c2d_types>(packet);
+	void post(protocol::call_id cid, octet_vector bytes, pending_call answer) {
 		std::unique_lock lock{mutex_};
 		if(dead_) {
 			auto const err = failure_;
 			lock.unlock();
-			fail(handler, err);
+			answer(util::result<reply_packet>{err}, true);
 		} else {
-			calls.emplace(cid, std::move(handler));
+			calls_.emplace(cid, std::move(answer));
 			// sent with the lock held: the pieces of a chunk must leave in the order they
 			// were posted, also while the outbox is being flushed
 			if(ready_) {
@@ -148,86 +139,41 @@ private:
 		}
 	}
 
-	void handle(protocol::upload_data_manifest_reply const& p) {
-		auto handler = take(manifests_, p.cid);
-		if(handler) {
-			if(p.error) {
-				handler(util::result<octet_vector>{protocol::to_error(p.error)}, false);
-			} else {
-				handler(util::result<octet_vector>{p.have}, false);
-			}
+	/// every other packet is the reply to a call
+	template<typename Reply>
+	void handle(Reply const& p) {
+		auto answer = take(p.cid);
+		if(answer) {
+			answer(util::result<reply_packet>{reply_packet{p}}, false);
 		}
 	}
 
-	void handle(protocol::upload_data_chunk_reply const& p) {
-		auto handler = take(chunks_, p.cid);
-		if(handler) {
-			handler(p.error ? std::optional<error>{protocol::to_error(p.error)} : std::nullopt);
-		}
-	}
-
-	void handle(protocol::download_data_open_reply const& p) {
-		auto handler = take(downloads_, p.cid);
-		if(handler && p.error) {
-			handler(util::result<opened_download>{protocol::to_error(p.error)}, false);
-		} else if(handler) {
-			handler(util::result<opened_download>{opened_download{p.manifest, p.have}}, false);
-		}
-	}
-
-	void handle(protocol::download_data_piece_reply const& p) {
-		auto handler = take(fetches_, p.cid);
-		if(handler && p.error && p.retry_after != 0) {
-			// a transfer quota window: the refusal says when the next one opens
-			handler(util::result<octet_vector>{protocol::make_retry_error(protocol::errc::data_transfer_quota_exceeded, p.retry_after)});
-		} else if(handler && p.error) {
-			handler(util::result<octet_vector>{protocol::to_error(p.error)});
-		} else if(handler) {
-			handler(util::result<octet_vector>{p.bytes});
-		}
-	}
-
-	template<typename Handler>
-	Handler take(std::map<protocol::call_id, Handler>& calls, protocol::call_id cid) {
-		Handler ret;
+	pending_call take(protocol::call_id cid) {
+		pending_call ret;
 		std::unique_lock lock{mutex_};
-		auto it = calls.find(cid);
-		if(it != calls.end()) {
+		auto it = calls_.find(cid);
+		if(it != calls_.end()) {
 			ret = std::move(it->second);
-			calls.erase(it);
+			calls_.erase(it);
 		}
 		return ret;
 	}
 
-	/// the link is gone: every call still out gets the error, new ones too
-	void fail_all(error const& err) {
-		std::map<protocol::call_id, manifest_handler> manifests;
-		std::map<protocol::call_id, chunk_handler> chunks;
-		std::map<protocol::call_id, open_download_handler> downloads;
-		std::map<protocol::call_id, fetch_handler> fetches;
+	/// the link is gone: every call still out gets the error, new ones too. An open that
+	/// is out may go on at the next holder when the transport failed (RD13 failover)
+	void fail_all(error const& err, bool transport_failure = true) {
+		std::map<protocol::call_id, pending_call> calls;
 		{
 			std::unique_lock lock{mutex_};
 			if(!dead_) {
 				dead_ = true;
 				failure_ = err;
 			}
-			manifests.swap(manifests_);
-			chunks.swap(chunks_);
-			downloads.swap(downloads_);
-			fetches.swap(fetches_);
+			calls.swap(calls_);
 			outbox_.clear();
 		}
-		for(auto& [cid, handler] : manifests) {
-			handler(util::result<octet_vector>{err}, true);
-		}
-		for(auto& [cid, handler] : chunks) {
-			handler(err);
-		}
-		for(auto& [cid, handler] : downloads) {
-			handler(util::result<opened_download>{err}, true);
-		}
-		for(auto& [cid, handler] : fetches) {
-			handler(util::result<octet_vector>{err});
+		for(auto& [cid, answer] : calls) {
+			answer(util::result<reply_packet>{err}, transport_failure);
 		}
 	}
 
@@ -238,16 +184,29 @@ private:
 	serialisation::packet_deserialiser<protocol::d2c_types> deser_{network::max_frame_size};
 
 	mutable std::mutex mutex_;
-	std::map<protocol::call_id, manifest_handler> manifests_;
-	std::map<protocol::call_id, chunk_handler> chunks_;
-	std::map<protocol::call_id, open_download_handler> downloads_;
-	std::map<protocol::call_id, fetch_handler> fetches_;
+	std::map<protocol::call_id, pending_call> calls_;
 	/// packets waiting for the hello to be answered
 	std::vector<octet_vector> outbox_;
 	error failure_;
 	bool ready_{};
 	bool dead_{};
 };
+
+/// what a holder said to a call: the error it refused with, none when it did not
+template<typename Reply>
+std::optional<error> refusal(util::result<Reply> const& answer) {
+	std::optional<error> ret;
+	if(!answer) {
+		ret = answer.get_error();
+	} else if(answer.value().error) {
+		ret = protocol::to_error(answer.value().error);
+	}
+	return ret;
+}
+
+error channel_closed() {
+	return make_error(securepath::errc::invalid_state, "data channel closed");
+}
 
 }
 
@@ -259,143 +218,33 @@ public:
 	, timeout_(timeout)
 	{}
 
-	/// one attempt to open an upload: the grant and how far down its holder list we are
-	struct attempt {
-		data_descriptor descriptor;
-		data_manifest manifest;
-		data_grant grant;
-		open_callback callback;
-		std::size_t holder{};
-	};
-
 	void open_upload(data_descriptor const& descriptor, data_manifest const& manifest, open_callback cb) {
-		auto att = std::make_shared<attempt>(attempt{descriptor, manifest, {}, std::move(cb)});
-		std::weak_ptr<impl> weak = shared_from_this();
-		tickets_(descriptor, data_right::upload, [weak, att](util::result<data_grant> grant) {
-			auto self = weak.lock();
-			if(!self) {
-				att->callback(util::result<have_bitmap>{make_error(securepath::errc::invalid_state, "data channel closed")});
-			} else if(!grant) {
-				att->callback(util::result<have_bitmap>{grant.get_error()});
-			} else {
-				att->grant = std::move(grant.value());
-				self->try_holder(att, make_error(securepath::errc::no_such_data, "the grant names no data server"));
-			}
-		});
+		open_transfer(upload_opening_, descriptor, manifest, std::move(cb));
 	}
 
-	/// send the manifest to the attempt's current holder; last_error is the answer when none is left
-	void try_holder(std::shared_ptr<attempt> const& att, error const& last_error) {
-		if(att->holder >= att->grant.holders.size()) {
-			att->callback(util::result<have_bitmap>{last_error});
-		} else {
-			auto const endpoint = att->grant.holders[att->holder];
-			auto link = acquire_link(endpoint);
-			std::weak_ptr<impl> weak = shared_from_this();
-			link->send_manifest(att->grant.ticket, att->manifest, [weak, att, link](util::result<octet_vector> have, bool transport_failure) {
-				auto self = weak.lock();
-				if(have && self) {
-					self->remember_upload(att->grant.ticket, link);
-					att->callback(util::result<have_bitmap>{have_bitmap{att->descriptor.chunk_count(), std::move(have.value())}});
-				} else if((transport_failure || is_full(have.get_error())) && self) {
-					// RD13: a holder that is down is the next entry, and one at its quota
-					// behaves as if it was not on the ring for new data
-					++att->holder;
-					self->try_holder(att, have.get_error());
-				} else {
-					att->callback(util::result<have_bitmap>{have ? make_error(securepath::errc::invalid_state, "data channel closed") : have.get_error()});
-				}
-			});
-		}
-	}
-
-	/// the data server has no room for the data: another one may
-	static bool is_full(error const& err) {
-		return err.code() == make_error_code(protocol::errc::data_quota_exceeded)
-			|| err.code() == make_error_code(protocol::errc::data_too_big);
+	void open_download(data_descriptor const& descriptor, download_callback cb) {
+		open_transfer(download_opening_, descriptor, data_manifest{}, std::move(cb));
 	}
 
 	void send_piece(data_id const& id, std::uint64_t chunk_no, std::uint64_t offset, octet_vector bytes, piece_callback cb) {
-		std::shared_ptr<data_link> link;
-		octet_vector sid;
-		{
-			std::unique_lock lock{mutex_};
-			auto it = uploads_.find(id);
-			if(it != uploads_.end()) {
-				link = it->second.link;
-				sid = it->second.sid;
-			}
-		}
-		if(link) {
-			link->send_piece(sid, id, chunk_no, offset, std::move(bytes), std::move(cb));
-		} else {
+		auto const r = find_route(uploads_, id);
+		if(!r) {
 			cb(make_error(protocol::errc::no_such_upload, "no upload opened for the data"));
-		}
-	}
-
-	/// one attempt to open a download, as for an upload
-	struct download_attempt {
-		data_descriptor descriptor;
-		data_grant grant;
-		download_callback callback;
-		std::size_t holder{};
-	};
-
-	void open_download(data_descriptor const& descriptor, download_callback cb) {
-		auto att = std::make_shared<download_attempt>(download_attempt{descriptor, {}, std::move(cb)});
-		std::weak_ptr<impl> weak = shared_from_this();
-		tickets_(descriptor, data_right::download, [weak, att](util::result<data_grant> grant) {
-			auto self = weak.lock();
-			if(!self) {
-				att->callback(util::result<download_info>{make_error(securepath::errc::invalid_state, "data channel closed")});
-			} else if(!grant) {
-				att->callback(util::result<download_info>{grant.get_error()});
-			} else {
-				att->grant = std::move(grant.value());
-				self->try_download_holder(att, make_error(protocol::errc::data_not_held, "the grant names no data server"));
-			}
-		});
-	}
-
-	/// a holder that is down or does not hold the data is the next entry (RD13)
-	void try_download_holder(std::shared_ptr<download_attempt> const& att, error const& last_error) {
-		if(att->holder >= att->grant.holders.size()) {
-			att->callback(util::result<download_info>{last_error});
 		} else {
-			auto link = acquire_link(att->grant.holders[att->holder]);
-			std::weak_ptr<impl> weak = shared_from_this();
-			link->send_download_open(att->grant.ticket, [weak, att, link](util::result<opened_download> opened, bool transport_failure) {
-				auto self = weak.lock();
-				bool const not_held = !opened && opened.get_error().code() == make_error_code(protocol::errc::data_not_held);
-				if(opened && self) {
-					self->remember_download(att->grant.ticket, link);
-					att->callback(util::result<download_info>{download_info{std::move(opened->manifest)
-						, have_bitmap{att->descriptor.chunk_count(), std::move(opened->have)}}});
-				} else if((transport_failure || not_held) && self) {
-					++att->holder;
-					self->try_download_holder(att, opened.get_error());
-				} else {
-					att->callback(util::result<download_info>{opened ? make_error(securepath::errc::invalid_state, "data channel closed") : opened.get_error()});
-				}
-			});
+			r->link->call<protocol::upload_data_chunk_reply>(
+				[&](protocol::call_id cid) { return protocol::upload_data_chunk{cid, r->sid, id, chunk_no, offset, std::move(bytes)}; }
+				, [cb = std::move(cb)](util::result<protocol::upload_data_chunk_reply> answer, bool) mutable { cb(refusal(answer)); });
 		}
 	}
 
 	void fetch_piece(data_id const& id, std::uint64_t chunk_no, std::uint64_t offset, std::uint32_t size, fetch_callback cb) {
-		std::shared_ptr<data_link> link;
-		octet_vector sid;
-		{
-			std::unique_lock lock{mutex_};
-			auto it = downloads_.find(id);
-			if(it != downloads_.end()) {
-				link = it->second.link;
-				sid = it->second.sid;
-			}
-		}
-		if(link) {
-			link->send_fetch(sid, id, chunk_no, offset, size, std::move(cb));
-		} else {
+		auto const r = find_route(downloads_, id);
+		if(!r) {
 			cb(util::result<octet_vector>{make_error(protocol::errc::data_not_held, "no download opened for the data")});
+		} else {
+			r->link->call<protocol::download_data_piece_reply>(
+				[&](protocol::call_id cid) { return protocol::download_data_piece{cid, r->sid, id, chunk_no, offset, size}; }
+				, [cb = std::move(cb)](util::result<protocol::download_data_piece_reply> answer, bool) mutable { cb(fetched(answer)); });
 		}
 	}
 
@@ -413,6 +262,100 @@ public:
 	}
 
 private:
+	/// where the pieces of an opened transfer go: the data server that opened it
+	struct route {
+		octet_vector sid;
+		std::shared_ptr<data_link> link;
+	};
+	using routes = std::map<data_id, route>;
+
+	/// one attempt to open a transfer: the grant and how far down its holder list we are
+	template<typename Result>
+	struct attempt {
+		data_descriptor descriptor;
+		/// what an upload opens with; a download opens with the ticket alone
+		data_manifest manifest;
+		data_grant grant;
+		std::move_only_function<void(util::result<Result>)> callback;
+		std::size_t holder{};
+	};
+
+	/// what the opening of an upload and of a download differ in
+	template<typename Result>
+	struct opening {
+		data_right right;
+		/// the answer when the grant names no holder
+		error nobody;
+		/// a refusal that moves the opening on to the next holder (RD13)
+		bool (*moves_on)(error const&);
+		/// where the pieces go once a holder took the opening
+		routes impl::* routes_of;
+		/// the call that opens at a holder
+		void (*open)(data_link&, attempt<Result> const&, std::move_only_function<void(util::result<Result>, bool)>);
+	};
+
+	/**
+	 * Open a transfer with a fresh grant at the first holder that can be reached: a holder
+	 * that is down is the next entry, so is one whose refusal moves the opening on; any
+	 * other refusal is the answer.
+	 */
+	template<typename Result>
+	void open_transfer(opening<Result> const& how, data_descriptor const& descriptor, data_manifest const& manifest
+		, std::move_only_function<void(util::result<Result>)> cb) {
+		auto att = std::make_shared<attempt<Result>>(attempt<Result>{descriptor, manifest, {}, std::move(cb)});
+		std::weak_ptr<impl> weak = shared_from_this();
+		tickets_(descriptor, how.right, [weak, att, &how](util::result<data_grant> grant) {
+			auto self = weak.lock();
+			if(!self) {
+				att->callback(util::result<Result>{channel_closed()});
+			} else if(!grant) {
+				att->callback(util::result<Result>{grant.get_error()});
+			} else {
+				att->grant = std::move(grant.value());
+				self->try_holder(how, att, how.nobody);
+			}
+		});
+	}
+
+	/// open at the attempt's current holder; last_error is the answer when none is left
+	template<typename Result>
+	void try_holder(opening<Result> const& how, std::shared_ptr<attempt<Result>> const& att, error const& last_error) {
+		if(att->holder >= att->grant.holders.size()) {
+			att->callback(util::result<Result>{last_error});
+		} else {
+			auto link = acquire_link(att->grant.holders[att->holder]);
+			std::weak_ptr<impl> weak = shared_from_this();
+			how.open(*link, *att, [weak, &how, att, link](util::result<Result> answer, bool transport_failure) {
+				auto self = weak.lock();
+				if(answer && self) {
+					self->remember(how, att->grant.ticket, link);
+					att->callback(std::move(answer));
+				} else if((transport_failure || how.moves_on(answer.get_error())) && self) {
+					++att->holder;
+					self->try_holder(how, att, answer.get_error());
+				} else {
+					att->callback(util::result<Result>{answer ? channel_closed() : answer.get_error()});
+				}
+			});
+		}
+	}
+
+	template<typename Result>
+	void remember(opening<Result> const& how, data_ticket const& ticket, std::shared_ptr<data_link> link) {
+		std::unique_lock lock{mutex_};
+		(this->*how.routes_of)[ticket.data()] = route{ticket.storage_id(), std::move(link)};
+	}
+
+	std::optional<route> find_route(routes const& of, data_id const& id) {
+		std::unique_lock lock{mutex_};
+		std::optional<route> ret;
+		auto it = of.find(id);
+		if(it != of.end()) {
+			ret = it->second;
+		}
+		return ret;
+	}
+
 	/// the live connection to the data server, a new one when there is none
 	std::shared_ptr<data_link> acquire_link(data_endpoint const& endpoint) {
 		std::shared_ptr<data_link> link;
@@ -432,33 +375,74 @@ private:
 		return link;
 	}
 
-	void remember_upload(data_ticket const& ticket, std::shared_ptr<data_link> link) {
-		std::unique_lock lock{mutex_};
-		uploads_[ticket.data()] = upload{ticket.storage_id(), std::move(link)};
+	// -- the two openings --
+
+	/// the data server has no room for the data: another one may (it behaves as if it
+	/// was not on the ring for new data)
+	static bool is_full(error const& err) {
+		return err.code() == make_error_code(protocol::errc::data_quota_exceeded)
+			|| err.code() == make_error_code(protocol::errc::data_too_big);
 	}
 
-	void remember_download(data_ticket const& ticket, std::shared_ptr<data_link> link) {
-		std::unique_lock lock{mutex_};
-		downloads_[ticket.data()] = upload{ticket.storage_id(), std::move(link)};
+	/// the data server does not hold the data: another one may
+	static bool is_not_held(error const& err) {
+		return err.code() == make_error_code(protocol::errc::data_not_held);
+	}
+
+	/// the manifest to a holder: its answer is the chunks it has
+	static void open_upload_at(data_link& link, attempt<have_bitmap> const& att
+		, std::move_only_function<void(util::result<have_bitmap>, bool)> answer) {
+		link.call<protocol::upload_data_manifest_reply>(
+			[&](protocol::call_id cid) { return protocol::upload_data_manifest{cid, att.grant.ticket, att.manifest}; }
+			, [answer = std::move(answer), chunks = att.descriptor.chunk_count()](util::result<protocol::upload_data_manifest_reply> reply, bool transport) mutable {
+				auto const refused = refusal(reply);
+				answer(refused ? util::result<have_bitmap>{*refused} : util::result<have_bitmap>{have_bitmap{chunks, reply.value().have}}, transport);
+			});
+	}
+
+	/// the opening of a download: the holder's manifest and what it has
+	static void open_download_at(data_link& link, attempt<download_info> const& att
+		, std::move_only_function<void(util::result<download_info>, bool)> answer) {
+		link.call<protocol::download_data_open_reply>(
+			[&](protocol::call_id cid) { return protocol::download_data_open{cid, att.grant.ticket}; }
+			, [answer = std::move(answer), chunks = att.descriptor.chunk_count()](util::result<protocol::download_data_open_reply> reply, bool transport) mutable {
+				auto const refused = refusal(reply);
+				answer(refused ? util::result<download_info>{*refused}
+					: util::result<download_info>{download_info{std::move(reply.value().manifest), have_bitmap{chunks, std::move(reply.value().have)}}}, transport);
+			});
+	}
+
+	/// the answer to a fetched piece; a transfer quota window says when the next one opens
+	static util::result<octet_vector> fetched(util::result<protocol::download_data_piece_reply>& reply) {
+		util::result<octet_vector> ret;
+		auto const refused = refusal(reply);
+		if(refused && reply && reply.value().retry_after != 0) {
+			ret = protocol::make_retry_error(protocol::errc::data_transfer_quota_exceeded, reply.value().retry_after);
+		} else if(refused) {
+			ret = *refused;
+		} else {
+			ret = std::move(reply.value().bytes);
+		}
+		return ret;
 	}
 
 private:
-	struct upload {
-		octet_vector sid;
-		std::shared_ptr<data_link> link;
-	};
-
 	network::context& context_;
 	ticket_source const tickets_;
 	std::chrono::seconds const timeout_;
 
+	opening<have_bitmap> const upload_opening_{data_right::upload
+		, make_error(securepath::errc::no_such_data, "the grant names no data server"), &is_full, &impl::uploads_, &open_upload_at};
+	opening<download_info> const download_opening_{data_right::download
+		, make_error(protocol::errc::data_not_held, "the grant names no data server"), &is_not_held, &impl::downloads_, &open_download_at};
+
 	std::mutex mutex_;
-	/// one connection per data server, by host:port
+	/// one connection per data server and key
 	std::map<std::string, std::shared_ptr<data_link>> links_;
 	/// where the chunks of an opened upload go
-	std::map<data_id, upload> uploads_;
+	routes uploads_;
 	/// where the pieces of an opened download come from
-	std::map<data_id, upload> downloads_;
+	routes downloads_;
 };
 
 net_data_channel::net_data_channel(network::context& context, ticket_source tickets, std::chrono::seconds timeout)

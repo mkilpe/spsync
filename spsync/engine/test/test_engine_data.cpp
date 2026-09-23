@@ -1,4 +1,5 @@
 #include <spsync/test/engine_context.hpp>
+#include <spsync/test/test_record_data.hpp>
 
 #include <spsync/core/data/source_record_data.hpp>
 #include <spsync/core/records/data_change_record.hpp>
@@ -78,11 +79,7 @@ struct reader_context : test::engine_context {
 	data_observer observer{single_thread_event_loop};
 };
 
-octet_vector read_all(record_data& data) {
-	octet_vector ret(data.size());
-	ret.resize(data.read(0, ret.data(), ret.size()));
-	return ret;
-}
+using test::read_all;
 
 }
 
@@ -458,6 +455,35 @@ TEST_CASE("engine fetches record data", "[unit]") {
 		// asking again asks again
 		reader.engine.fetch_object_data(received);
 		CHECK(reader.io.fetch_requests().size() == 2);
+	}
+
+	SECTION("auto fetch does not ask again for what the server refused") {
+		// (review 2026-09-21) deferred is what auto fetch picks up: a refusal must not
+		// turn every later record into another ticket request
+		auto eager = reader.engine_config;
+		eager.auto_fetch_max_size = 1024 * 1024;
+		reader.engine.set_config(eager);
+		for(int i = 0; i != 8; ++i) {
+			reader.io.add_fetch_data_response([](data_id const&) { return make_error(protocol::errc::unknown_data); });
+		}
+		// any record event looks for transfers: both data of the chain are small enough
+		reader.engine.on_record_received(blocks.back());
+		reader.io.process_events();
+		auto const asked = reader.io.fetch_requests().size();
+		CHECK(asked == 2);
+		for(int i = 0; i != 3; ++i) {
+			reader.engine.on_record_received(blocks.back());
+			reader.io.process_events();
+		}
+		CHECK(reader.io.fetch_requests().size() == asked);
+		CHECK(reader.engine.object_data(received)->state() == record_data_state::deferred);
+
+		// the next connection is another chance: the record may have arrived there by then
+		reader.engine.on_disconnected({});
+		reader.engine.on_connected();
+		reader.engine.on_record_received(blocks.back());
+		reader.io.process_events();
+		CHECK(reader.io.fetch_requests().size() == 2 * asked);
 	}
 
 	SECTION("the server pruned the version") {

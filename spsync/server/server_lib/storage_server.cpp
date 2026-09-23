@@ -21,6 +21,7 @@
 #include <securepath/util/conversions.hpp>
 
 #include <algorithm>
+#include <map>
 #include <filesystem>
 
 namespace securepath::sync {
@@ -438,26 +439,58 @@ public:
 
 	// -- copies of the data (record_data.txt RD13 copy count, RDS 10) --
 
-	/// run f with the storage when it exists here, opened for the time of the call if need be
-	void with_storage(protocol::storage_id const& sid, std::function<void(storage&)> const& f) {
-		try {
-			auto handle = find_open_sync(sid);
-			if(!handle && exists_on_disk(sid)) {
-				handle = acquire_sync(sid, std::optional<storage_modes>{});
-			}
-			if(handle) {
-				f(*handle);
-				release_sync(std::move(handle));
-			}
-		} catch(std::exception const& ex) {
-			LOG_WARN("cannot look at storage {}: {}", to_hex(sid), ex.what());
-		}
-	}
+	/**
+	 * The storages a pass over many data looks at, each opened once for the time of the
+	 * pass when nobody has it open (a sweep asks about thousands of data of a storage:
+	 * opened per question it would be built and torn down as often) and given back at
+	 * the end, also when the pass is left by an exception.
+	 */
+	class storage_pass {
+	public:
+		explicit storage_pass(impl& server) : server_(server) {}
+		storage_pass(storage_pass const&) = delete;
+		storage_pass& operator=(storage_pass const&) = delete;
 
-	data_standing standing_of(protocol::storage_id const& sid, data_id const& id) {
+		~storage_pass() {
+			for(auto& [sid, handle] : opened_) {
+				if(handle) {
+					server_.release_sync(std::move(handle));
+				}
+			}
+		}
+
+		/// the storage when it exists here, null otherwise
+		std::shared_ptr<storage> get(protocol::storage_id const& sid) {
+			auto it = opened_.find(sid);
+			if(it == opened_.end()) {
+				it = opened_.emplace(sid, open(sid)).first;
+			}
+			return it->second;
+		}
+
+	private:
+		std::shared_ptr<storage> open(protocol::storage_id const& sid) const {
+			std::shared_ptr<storage> handle;
+			try {
+				handle = server_.find_open_sync(sid);
+				if(!handle && server_.exists_on_disk(sid)) {
+					handle = server_.acquire_sync(sid, std::optional<storage_modes>{});
+				}
+			} catch(std::exception const& ex) {
+				LOG_WARN("cannot look at storage {}: {}", to_hex(sid), ex.what());
+			}
+			return handle;
+		}
+
+	private:
+		impl& server_;
+		std::map<protocol::storage_id, std::shared_ptr<storage>> opened_;
+	};
+
+	static data_standing standing_of(storage_pass& pass, protocol::storage_id const& sid, data_id const& id) {
 		data_standing ret;
-		with_storage(sid, [&](storage& st) {
-			auto const committed = st.committed_data(id);
+		if(auto const st = pass.get(sid)) {
+			auto const committed = st->committed_data(id);
 			if(committed) {
 				ret.descriptor = committed.value();
 			} else {
@@ -465,9 +498,9 @@ public:
 				// unknown here may be a record that has not arrived yet when other record
 				// servers have the storage as well
 				ret.dead = code == make_error_code(protocol::errc::data_pruned)
-					|| (code == make_error_code(protocol::errc::unknown_data) && st.modes().replication == replication_mode::none);
+					|| (code == make_error_code(protocol::errc::unknown_data) && st->modes().replication == replication_mode::none);
 			}
-		});
+		}
 		return ret;
 	}
 
@@ -491,12 +524,16 @@ public:
 		if(data.empty() || issuer_.data_servers().empty()) {
 			return;
 		}
-		replication_view const view{issuer_.data_servers(), availability_, params_.data_copies
-			, [this](crypto::public_key_id const& key) {
-				return (key == identity_.server_id && data_role_ != nullptr) || data_server_link(key) != nullptr;
-			}
-			, [this](protocol::storage_id const& sid, data_id const& id) { return standing_of(sid, id); }};
-		auto const plan = plan_replication(view, data);
+		replication_plan plan;
+		{
+			storage_pass pass{*this};
+			replication_view const view{issuer_.data_servers(), availability_, params_.data_copies
+				, [this](crypto::public_key_id const& key) {
+					return (key == identity_.server_id && data_role_ != nullptr) || data_server_link(key) != nullptr;
+				}
+				, [&pass](protocol::storage_id const& sid, data_id const& id) { return standing_of(pass, sid, id); }};
+			plan = plan_replication(view, data);
+		}
 		for(auto const& [target, storages] : plan.copies) {
 			for(auto const& [sid, descriptors] : storages) {
 				tell_to_replicate(target, sid, descriptors);
@@ -522,7 +559,10 @@ public:
 	util::result<issued_ticket> issue_replica_ticket(protocol::storage_id const& sid, data_id const& id,
 		crypto::public_key_id const& data_server) override {
 		util::result<data_descriptor> committed{make_error(protocol::errc::no_such_storage)};
-		with_storage(sid, [&](storage& st) { committed = st.committed_data(id); });
+		storage_pass pass{*this};
+		if(auto const st = pass.get(sid)) {
+			committed = st->committed_data(id);
+		}
 		return issuer_.issue_replica(sid, committed, data_server, context_.private_data().my_private_key(), clock_type::now());
 	}
 
@@ -535,7 +575,12 @@ public:
 		copy_timer_->async_wait([weak = weak_self()](std::error_code const& ec) {
 			auto self = weak.lock();
 			if(self && !ec) {
-				self->look_after_copies(self->availability_.known_data());
+				try {
+					self->look_after_copies(self->availability_.known_data());
+				} catch(std::exception const& ex) {
+					// the next sweep is another try; without it the copies would never be looked after again
+					LOG_WARN("the sweep for missing data copies failed: {}", ex.what());
+				}
 				self->schedule_copy_sweep();
 			}
 		});

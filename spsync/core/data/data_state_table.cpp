@@ -54,7 +54,9 @@ data_state_table::data_state_table(database::connection_ptr db)
 {
 	if(!db_->has_table("record_data")) {
 		db_->prepare("CREATE TABLE record_data("
-			"key INTEGER PRIMARY KEY,"
+			// autoincrement: the key of a removed row is never given to another data - a
+			// handle or a record_objects.data_ref that outlived its row must not find a stranger
+			"key INTEGER PRIMARY KEY AUTOINCREMENT,"
 			"data_id BLOB UNIQUE,"
 			"enc_size INTEGER,"
 			"chunk_size INTEGER,"
@@ -71,7 +73,16 @@ data_state_table::data_state_table(database::connection_ptr db)
 	db_->prepare("CREATE INDEX IF NOT EXISTS record_data_content ON record_data(content_digest);").execute();
 }
 
+data_state_table::data_state_table(database::connection_ptr db, existing_schema)
+: db_(std::move(db))
+{
+}
+
 std::uint64_t data_state_table::ensure(data_descriptor const& d) {
+	// the row sizes a bitmap from the descriptor: not from one that names no or countless chunks
+	if(!usable_data_descriptor(d)) {
+		throw make_error(securepath::errc::invalid_data, "record data descriptor out of bounds");
+	}
 	// two threads may meet here for the same data: the insert of the second is a no-op
 	auto insert = db_->prepare(
 		"INSERT INTO record_data(data_id, enc_size, chunk_size, state, have)"
@@ -178,6 +189,10 @@ std::vector<data_state_row> data_state_table::find_by_content(octet_vector const
 		}
 	}
 	return ret;
+}
+
+database::transaction data_state_table::transaction() {
+	return database::transaction{*db_};
 }
 
 void data_state_table::remove(std::uint64_t local_id) {

@@ -112,6 +112,12 @@ private:
 
 }
 
+/// load signals of this data server (RD13)
+struct holder_load_signals {
+	std::uint64_t stored_bytes{};
+	std::uint64_t uploads_in_progress{};
+};
+
 class data_server::impl
 	: public network::encrypted_server
 	, public data_server_context
@@ -187,8 +193,8 @@ public:
 		};
 		hooks.release = [weak = weak_self()](protocol::storage_id const& sid, std::vector<data_id> const& ids) {
 			auto self = weak.lock();
-			if(self && self->owner_) {
-				self->owner_->release(sid, ids);
+			if(self) {
+				self->release(sid, ids);
 			}
 		};
 		hooks.replicate = [weak = weak_self(), asked_by = state->server.key](protocol::storage_id const& sid
@@ -225,6 +231,16 @@ public:
 			state->link = link;
 		}
 		link->start(params_.timeout);
+		// close_links may have closed it between the check and the start, and a start
+		// after a close connects anew: nobody would ever close that one
+		bool closing{};
+		{
+			std::unique_lock lock{mutex_};
+			closing = closing_;
+		}
+		if(closing) {
+			link->close();
+		}
 	}
 
 	/// exponential backoff capped at one minute
@@ -373,7 +389,7 @@ public:
 	}
 
 	std::vector<protocol::announce_data> whole_view() {
-		return owner_ ? owner_->announcements(own_id_) : std::vector<protocol::announce_data>{};
+		return announcements(own_id_);
 	}
 
 	// -- data_server_context --
@@ -414,10 +430,10 @@ public:
 		}
 		// a separate data server tells its record servers
 		auto const links = live_links();
-		auto const announcement = (links.empty() || !owner_) ? std::nullopt : owner_->announcement(own_id_, sid, id);
-		if(announcement) {
+		auto const news = links.empty() ? std::nullopt : announcement(own_id_, sid, id);
+		if(news) {
 			for(auto const& link : links) {
-				link->announce(*announcement);
+				link->announce(*news);
 			}
 		}
 	}
@@ -467,6 +483,86 @@ public:
 		}
 	}
 
+	// -- what is held, for the record servers (RD13) --
+
+	/// the store of a storage that has one open here; a lookup never creates one
+	std::shared_ptr<server_data_store> find_store(protocol::storage_id const& sid) const {
+		std::unique_lock lock{mutex_};
+		auto const it = stores_.find(sid);
+		return it != stores_.end() ? it->second : nullptr;
+	}
+
+	std::size_t release(protocol::storage_id const& sid, std::vector<data_id> const& ids) {
+		auto const store = find_store(sid);
+		std::size_t const released = store ? store->release(ids) : 0;
+		if(released != 0) {
+			LOG_INFO("released {} record data no record names any more (sid={})", released, to_hex(sid));
+		}
+		for(auto const& id : ids) {
+			forget_asker(id);
+		}
+		return released;
+	}
+
+	std::optional<data_state_row> find(protocol::storage_id const& sid, data_id const& id) const {
+		auto const store = find_store(sid);
+		return store ? store->find(id) : std::nullopt;
+	}
+
+	std::vector<std::pair<protocol::storage_id, data_state_row>> complete_holdings() const {
+		std::vector<std::pair<protocol::storage_id, data_state_row>> ret;
+		for(auto const& [sid, store] : open_stores()) {
+			for(auto& row : store->complete_data()) {
+				ret.emplace_back(sid, std::move(row));
+			}
+		}
+		return ret;
+	}
+
+	/// load signals (RD13): octets reserved by the known data, uploads in progress
+	holder_load_signals load() const {
+		holder_load_signals ret;
+		for(auto const& [sid, store] : open_stores()) {
+			ret.stored_bytes += store->used_bytes();
+			ret.uploads_in_progress += store->uploads_in_progress();
+		}
+		return ret;
+	}
+
+	std::vector<protocol::announce_data> announcements(crypto::public_key_id const& holder) const {
+		std::size_t const batch = 500;
+		auto const signals = load();
+		auto const uploads = static_cast<std::uint32_t>(signals.uploads_in_progress);
+		std::vector<protocol::announce_data> ret;
+		std::vector<protocol::data_holding_entry> entries;
+		for(auto const& [sid, row] : complete_holdings()) {
+			entries.push_back({sid, row.descriptor.manifest_digest, row.have.count(), row.have.size(), true});
+			if(entries.size() == batch) {
+				ret.emplace_back(holder, std::move(entries), signals.stored_bytes, uploads);
+				entries.clear();
+			}
+		}
+		if(!entries.empty() || ret.empty()) {
+			ret.emplace_back(holder, std::move(entries), signals.stored_bytes, uploads);
+		}
+		// everything held: what the receiver knew of this holder before is replaced
+		ret.front().view_begin = true;
+		ret.back().view_end = true;
+		return ret;
+	}
+
+	std::optional<protocol::announce_data> announcement(crypto::public_key_id const& holder
+		, protocol::storage_id const& sid, data_id const& id) const {
+		std::optional<protocol::announce_data> ret;
+		auto const row = find(sid, id);
+		if(row) {
+			auto const signals = load();
+			ret.emplace(holder, std::vector<protocol::data_holding_entry>{{sid, id, row->have.count(), row->have.size()
+				, row->state == record_data_state::in_sync}}, signals.stored_bytes, static_cast<std::uint32_t>(signals.uploads_in_progress));
+		}
+		return ret;
+	}
+
 	std::weak_ptr<impl> weak_self() {
 		return std::static_pointer_cast<impl>(shared_from_this());
 	}
@@ -510,8 +606,6 @@ public:
 	std::map<protocol::storage_id, std::shared_ptr<server_data_store>> stores_;
 	std::set<crypto::public_key_id> issuers_;
 	crypto::public_key_id own_id_;
-	/// the data_server this is the inside of: the announcements are built from its view
-	data_server* owner_{};
 	std::vector<std::shared_ptr<link_state>> links_;
 	std::shared_ptr<data_replicator> replicator_;
 	/// who asked for the copy of a data: a record server's key, nullopt for the own record role
@@ -526,7 +620,6 @@ public:
 data_server::data_server(network::context& context, data_server_params params)
 : impl_(std::make_shared<impl>(context, std::move(params)))
 {
-	impl_->owner_ = this;
 }
 
 data_server::~data_server() {
@@ -577,20 +670,32 @@ std::size_t data_server::expire_incomplete() {
 }
 
 std::size_t data_server::release(protocol::storage_id const& sid, std::vector<data_id> const& ids) {
-	std::size_t released = 0;
-	// only a storage that has a store here: a release must not create one
-	for(auto const& [store_sid, store] : impl_->open_stores()) {
-		if(store_sid == sid) {
-			released += store->release(ids);
-		}
-	}
-	if(released != 0) {
-		LOG_INFO("released {} record data no record names any more (sid={})", released, to_hex(sid));
-	}
-	for(auto const& id : ids) {
-		impl_->forget_asker(id);
-	}
-	return released;
+	return impl_->release(sid, ids);
+}
+
+std::optional<data_state_row> data_server::find(protocol::storage_id const& sid, data_id const& id) {
+	return impl_->find(sid, id);
+}
+
+std::vector<std::pair<protocol::storage_id, data_state_row>> data_server::complete_holdings() {
+	return impl_->complete_holdings();
+}
+
+std::vector<protocol::announce_data> data_server::announcements(crypto::public_key_id const& holder) {
+	return impl_->announcements(holder);
+}
+
+std::optional<protocol::announce_data> data_server::announcement(crypto::public_key_id const& holder
+	, protocol::storage_id const& sid, data_id const& id) {
+	return impl_->announcement(holder, sid, id);
+}
+
+std::uint64_t data_server::stored_bytes() {
+	return impl_->load().stored_bytes;
+}
+
+std::uint64_t data_server::uploads_in_progress() {
+	return impl_->load().uploads_in_progress;
 }
 
 void data_server::set_replica_ticket_source(replica_ticket_source source) {
@@ -606,59 +711,6 @@ std::size_t data_server::pending_replications() const {
 	return impl_->pending_replications();
 }
 
-std::optional<data_state_row> data_server::find(protocol::storage_id const& sid, data_id const& id) {
-	std::optional<data_state_row> ret;
-	for(auto const& [store_sid, store] : impl_->open_stores()) {
-		if(!ret && store_sid == sid) {
-			ret = store->find(id);
-		}
-	}
-	return ret;
-}
-
-std::vector<std::pair<protocol::storage_id, data_state_row>> data_server::complete_holdings() {
-	std::vector<std::pair<protocol::storage_id, data_state_row>> ret;
-	for(auto const& [sid, store] : impl_->open_stores()) {
-		for(auto& row : store->complete_data()) {
-			ret.emplace_back(sid, std::move(row));
-		}
-	}
-	return ret;
-}
-
-std::vector<protocol::announce_data> data_server::announcements(crypto::public_key_id const& holder) {
-	std::size_t const batch = 500;
-	auto const stored = stored_bytes();
-	auto const uploads = static_cast<std::uint32_t>(uploads_in_progress());
-	std::vector<protocol::announce_data> ret;
-	std::vector<protocol::data_holding_entry> entries;
-	for(auto const& [sid, row] : complete_holdings()) {
-		entries.push_back({sid, row.descriptor.manifest_digest, row.have.count(), row.have.size(), true});
-		if(entries.size() == batch) {
-			ret.emplace_back(holder, std::move(entries), stored, uploads);
-			entries.clear();
-		}
-	}
-	if(!entries.empty() || ret.empty()) {
-		ret.emplace_back(holder, std::move(entries), stored, uploads);
-	}
-	// everything held: what the receiver knew of this holder before is replaced
-	ret.front().view_begin = true;
-	ret.back().view_end = true;
-	return ret;
-}
-
-std::optional<protocol::announce_data> data_server::announcement(crypto::public_key_id const& holder
-	, protocol::storage_id const& sid, data_id const& id) {
-	std::optional<protocol::announce_data> ret;
-	auto const row = find(sid, id);
-	if(row) {
-		ret.emplace(holder, std::vector<protocol::data_holding_entry>{{sid, id, row->have.count(), row->have.size()
-			, row->state == record_data_state::in_sync}}, stored_bytes(), static_cast<std::uint32_t>(uploads_in_progress()));
-	}
-	return ret;
-}
-
 std::vector<crypto::public_key_id> data_server::connected_record_servers() const {
 	std::vector<crypto::public_key_id> ret;
 	std::unique_lock lock{impl_->mutex_};
@@ -666,22 +718,6 @@ std::vector<crypto::public_key_id> data_server::connected_record_servers() const
 		if(state->link && state->link->ready()) {
 			ret.push_back(state->server.key);
 		}
-	}
-	return ret;
-}
-
-std::uint64_t data_server::stored_bytes() {
-	std::uint64_t ret = 0;
-	for(auto const& [sid, store] : impl_->open_stores()) {
-		ret += store->used_bytes();
-	}
-	return ret;
-}
-
-std::uint64_t data_server::uploads_in_progress() {
-	std::uint64_t ret = 0;
-	for(auto const& [sid, store] : impl_->open_stores()) {
-		ret += store->uploads_in_progress();
 	}
 	return ret;
 }

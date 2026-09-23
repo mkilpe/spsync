@@ -63,8 +63,7 @@ struct client_sync::impl : engine_output {
 	}
 
 	void init(storage_id const& storage_sid, network_connection& conn) {
-		// the way to the data servers comes with the data role (record_data.txt RDS 4/5):
-		// until then own data stays upload_pending
+		// with a data store the connection moves record data too (record_data.txt RD12)
 		storage_connection sconn{conn.create_storage_connection(storage_sid, storage, progress
 			, storage_modes{config.mode, config.auth_mode, config.replication}, data_store ? &*data_store : nullptr)};
 		engine = std::make_unique<sync_engine>(event_loop(), sconn.input(), crypto, config);

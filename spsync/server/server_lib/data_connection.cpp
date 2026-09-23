@@ -1,4 +1,5 @@
 #include "data_connection.hpp"
+#include "guarded.hpp"
 
 #include <spsync/core/sync_mode.hpp>
 #include <spsync/protocol/error.hpp>
@@ -62,29 +63,21 @@ void data_connection::handle(protocol::upload_data_manifest const& p) {
 	auto const& sid = p.ticket.storage_id();
 	auto const& id = p.ticket.data();
 	LOG_TRACE("upload_data_manifest of user {} [sid={}, data_id={}]", id_, to_hex(sid), to_hex(id));
-	util::result<have_bitmap> have{check_ticket(p.ticket, data_right::upload)};
-	try {
-		if(!have.get_error()) {
-			auto store = context_.acquire_store(sid);
-			have = store->open_upload(p.ticket.descriptor(), p.manifest, context_.now());
-			if(have) {
-				// a manifest again starts the upload over on this connection: partial chunks go
-				uploads_.erase(upload_key{sid, id});
-				uploads_[upload_key{sid, id}].store = std::move(store);
-			}
+	auto const have = guarded("opening an upload", sid, [&]() -> util::result<have_bitmap> {
+		if(auto const refused = check_ticket(p.ticket, data_right::upload)) {
+			return refused;
 		}
-	} catch(securepath::error const& err) {
-		LOG_WARN("exception while opening an upload: {} (sid={})", err, to_hex(sid));
-		have = err;
-	} catch(std::exception const& ex) {
-		LOG_WARN("exception while opening an upload: {} (sid={})", ex.what(), to_hex(sid));
-		have = make_error(securepath::errc::unknown_error);
-	}
-	if(have) {
-		send_packet(protocol::upload_data_manifest_reply{p.cid, sid, have->octets()});
-	} else {
-		send_packet(protocol::upload_data_manifest_reply{p.cid, sid, have.get_error()});
-	}
+		auto store = context_.acquire_store(sid);
+		auto opened = store->open_upload(p.ticket.descriptor(), p.manifest, context_.now());
+		if(opened) {
+			// a manifest again starts the upload over on this connection: partial chunks go
+			uploads_.erase(upload_key{sid, id});
+			uploads_[upload_key{sid, id}].store = std::move(store);
+		}
+		return opened;
+	});
+	send_packet(have ? protocol::upload_data_manifest_reply{p.cid, sid, have.value().octets()}
+		: protocol::upload_data_manifest_reply{p.cid, sid, have.get_error()});
 }
 
 /**
@@ -122,77 +115,56 @@ util::result<bool> data_connection::take_piece(upload& up, protocol::upload_data
 }
 
 void data_connection::handle(protocol::upload_data_chunk const& p) {
-	util::result<bool> complete{make_error(protocol::errc::no_such_upload)};
-	try {
+	auto const complete = guarded("storing a chunk", p.sid, [&]() -> util::result<bool> {
 		auto it = uploads_.find(upload_key{p.sid, p.data_id});
-		if(it != uploads_.end()) {
-			complete = take_piece(it->second, p);
-			if(complete && complete.value()) {
-				LOG_INFO("data complete [sid={}, data_id={}]", to_hex(p.sid), to_hex(p.data_id));
-				uploads_.erase(it);
-				context_.announce_complete(p.sid, p.data_id);
-			}
+		if(it == uploads_.end()) {
+			return make_error(protocol::errc::no_such_upload);
 		}
-	} catch(securepath::error const& err) {
-		LOG_WARN("exception while storing a chunk: {} (sid={})", err, to_hex(p.sid));
-		complete = err;
-	} catch(std::exception const& ex) {
-		LOG_WARN("exception while storing a chunk: {} (sid={})", ex.what(), to_hex(p.sid));
-		complete = make_error(securepath::errc::unknown_error);
-	}
-	if(complete) {
-		send_packet(protocol::upload_data_chunk_reply{p, complete.value()});
-	} else {
-		send_packet(protocol::upload_data_chunk_reply{p, complete.get_error()});
-	}
+		auto taken = take_piece(it->second, p);
+		if(taken && taken.value()) {
+			LOG_INFO("data complete [sid={}, data_id={}]", to_hex(p.sid), to_hex(p.data_id));
+			uploads_.erase(it);
+			context_.announce_complete(p.sid, p.data_id);
+		}
+		return taken;
+	});
+	send_packet(complete ? protocol::upload_data_chunk_reply{p, complete.value()}
+		: protocol::upload_data_chunk_reply{p, complete.get_error()});
 }
 
 void data_connection::handle(protocol::download_data_open const& p) {
 	auto const& sid = p.ticket.storage_id();
 	auto const& id = p.ticket.data();
 	LOG_TRACE("download_data_open of user {} [sid={}, data_id={}]", id_, to_hex(sid), to_hex(id));
-	util::result<served_data> served{check_download_ticket(p.ticket)};
-	try {
-		if(!served.get_error()) {
-			auto store = context_.acquire_store(sid);
-			served = store->open_download(p.ticket.descriptor());
-			if(served) {
-				downloads_[upload_key{sid, id}] = download{std::move(store), p.ticket.right() != data_right::replicate};
-			}
+	auto served = guarded("opening a download", sid, [&]() -> util::result<served_data> {
+		if(auto const refused = check_download_ticket(p.ticket)) {
+			return refused;
 		}
-	} catch(securepath::error const& err) {
-		LOG_WARN("exception while opening a download: {} (sid={})", err, to_hex(sid));
-		served = err;
-	} catch(std::exception const& ex) {
-		LOG_WARN("exception while opening a download: {} (sid={})", ex.what(), to_hex(sid));
-		served = make_error(securepath::errc::unknown_error);
-	}
-	if(served) {
-		send_packet(protocol::download_data_open_reply{p.cid, sid, std::move(served->manifest), served->have.octets()});
-	} else {
-		send_packet(protocol::download_data_open_reply{p.cid, sid, served.get_error()});
-	}
+		auto store = context_.acquire_store(sid);
+		auto opened = store->open_download(p.ticket.descriptor());
+		if(opened) {
+			downloads_[upload_key{sid, id}] = download{std::move(store), p.ticket.right() != data_right::replicate};
+		}
+		return opened;
+	});
+	send_packet(served ? protocol::download_data_open_reply{p.cid, sid, std::move(served.value().manifest), served.value().have.octets()}
+		: protocol::download_data_open_reply{p.cid, sid, served.get_error()});
 }
 
 void data_connection::handle(protocol::download_data_piece const& p) {
-	util::result<octet_vector> piece{make_error(protocol::errc::data_not_held)};
 	std::uint32_t retry_after = 0;
-	try {
+	auto piece = guarded("serving a piece", p.sid, [&]() -> util::result<octet_vector> {
 		auto it = downloads_.find(upload_key{p.sid, p.data_id});
-		if(it != downloads_.end()) {
-			auto const& [store, charged] = it->second;
-			piece = store->serve_piece(p.data_id, p.chunk_no, p.offset, p.size, context_.now(), charged);
-			if(piece.get_error().code() == make_error_code(protocol::errc::data_transfer_quota_exceeded)) {
-				retry_after = store->retry_after(context_.now());
-			}
+		if(it == downloads_.end()) {
+			return make_error(protocol::errc::data_not_held);
 		}
-	} catch(securepath::error const& err) {
-		LOG_WARN("exception while serving a piece: {} (sid={})", err, to_hex(p.sid));
-		piece = err;
-	} catch(std::exception const& ex) {
-		LOG_WARN("exception while serving a piece: {} (sid={})", ex.what(), to_hex(p.sid));
-		piece = make_error(securepath::errc::unknown_error);
-	}
+		auto const& [store, charged] = it->second;
+		auto served = store->serve_piece(p.data_id, p.chunk_no, p.offset, p.size, context_.now(), charged);
+		if(served.get_error().code() == make_error_code(protocol::errc::data_transfer_quota_exceeded)) {
+			retry_after = store->retry_after(context_.now());
+		}
+		return served;
+	});
 	if(piece) {
 		send_packet(protocol::download_data_piece_reply{p, std::move(piece.value())});
 	} else {

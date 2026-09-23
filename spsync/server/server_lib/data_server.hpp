@@ -81,6 +81,10 @@ public:
 	data_server(network::context&, data_server_params = {});
 	~data_server();
 
+	// one listener, one set of links: a copy would share them and close them with itself
+	data_server(data_server const&) = delete;
+	data_server& operator=(data_server const&) = delete;
+
 	void start();
 	void close();
 

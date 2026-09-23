@@ -1,19 +1,12 @@
 #include "chunk_crypto.hpp"
 
+#include <spsync/util/digest_buffer.hpp>
+
 #include <securepath/crypto/aes_gcm.hpp>
 #include <securepath/crypto/hash.hpp>
 #include <securepath/crypto/hkdf.hpp>
 
 namespace securepath::sync {
-namespace {
-
-void put_counter(octet_vector& out, std::uint64_t value) {
-	for(int i = 7; i >= 0; --i) {
-		out.push_back(static_cast<std::uint8_t>(value >> (8 * i)));
-	}
-}
-
-}
 
 octet_vector derive_data_key(octet_vector const& group_key, octet_vector const& nonce) {
 	static constexpr char const info[] = "spsync record data key v1";
@@ -23,13 +16,13 @@ octet_vector derive_data_key(octet_vector const& group_key, octet_vector const& 
 
 octet_vector chunk_iv(std::uint64_t chunk_no) {
 	octet_vector iv(crypto::aes_gcm_iv_size() - 8);
-	put_counter(iv, chunk_no);
+	util::append_big_endian(iv, chunk_no, 8);
 	return iv;
 }
 
 octet_vector chunk_aad(octet_vector const& nonce, std::uint64_t chunk_no) {
 	octet_vector aad = nonce;
-	put_counter(aad, chunk_no);
+	util::append_big_endian(aad, chunk_no, 8);
 	return aad;
 }
 

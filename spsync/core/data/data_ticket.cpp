@@ -9,14 +9,6 @@
 #include <chrono>
 
 namespace securepath::sync {
-namespace {
-
-std::uint64_t seconds_since_epoch(time_point t) {
-	return static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::seconds>(t.time_since_epoch()).count());
-}
-
-}
-
 data_ticket::data_ticket(octet_vector storage_id, data_descriptor descriptor, crypto::public_key_id member
 	, data_right right, time_point expiry)
 : storage_id_(std::move(storage_id))
@@ -31,7 +23,7 @@ octet_vector data_ticket::digest() const {
 	// the expiry travels in seconds: signed as it is read back
 	util::digest_buffer buf{"spsync-data-ticket"};
 	buf.sized(storage_id_).sized(descriptor_.manifest_digest).u64(descriptor_.enc_size).u32(descriptor_.chunk_size)
-		.sized(member_.data()).u32(right_).u64(seconds_since_epoch(expiry_));
+		.sized(member_.data()).u32(right_).u64(static_cast<std::uint64_t>(seconds_since_epoch(expiry_)));
 	return crypto::hash(buf.octets());
 }
 

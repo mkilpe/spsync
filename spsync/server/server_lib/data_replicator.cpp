@@ -136,7 +136,7 @@ private:
 		if(err) {
 			// what came is kept: the next sweep of the record server goes on from there
 			LOG_INFO("pull of a copy ended [data_id={}]: {} (sid={})", to_hex(id), *err, to_hex(sid));
-		} else if(store && store->replica_progress(id, hooks_.now())) {
+		} else if(store && store->replica_pulled(id, hooks_.now())) {
 			LOG_INFO("copy complete [data_id={}] (sid={})", to_hex(id), to_hex(sid));
 			hooks_.complete(sid, id);
 		}

@@ -1,5 +1,8 @@
 #include <securepath/test_frame/test_suite.hpp>
+
+#include <limits>
 #include <securepath/test_frame/test_utils.hpp>
+#include <spsync/test/test_record_data.hpp>
 
 #include <spsync/server/server_lib/data_connection.hpp>
 #include <spsync/protocol/error.hpp>
@@ -23,22 +26,9 @@ using namespace std::chrono_literals;
 
 std::filesystem::path const test_root = "data_connection_test";
 
-struct client_data {
-	data_descriptor descriptor;
-	data_manifest manifest;
-	std::map<std::uint64_t, octet_vector> chunks;
-};
-
-client_data make_data(std::size_t size, std::uint32_t chunk_size = 1000) {
-	encryption_key const key{sequence_number{1}, securepath::test::random_octet_vector(crypto::aes_gcm_key_size())};
-	client_data ret;
-	data_encryptor enc(key, chunk_size, [&](std::uint64_t no, octet_vector const& c) { ret.chunks[no] = c; });
-	enc.write(securepath::test::random_octet_vector(size));
-	auto result = enc.finish();
-	ret.descriptor = result.descriptor;
-	ret.manifest = result.manifest;
-	return ret;
-}
+using test::client_data;
+using test::is_error;
+auto const make_data = [](std::size_t size, std::uint32_t chunk_size = 1000) { return test::make_client_data(size, chunk_size); };
 
 /// the data server around a connection: stores under a test directory, a settable clock
 struct test_data_context : data_server_context {
@@ -118,9 +108,6 @@ struct test_connection : data_connection {
 	std::deque<reply> replies;
 };
 
-bool is_error(network::net_error const& err, protocol::errc code) {
-	return protocol::to_error(err).code() == make_error_code(code);
-}
 
 }
 
@@ -474,6 +461,20 @@ TEST_CASE("data connection download", "[unit]") {
 	CHECK(is_error(piece(0, 0, 0).error, protocol::errc::data_not_held));
 	CHECK(is_error(piece(0, 0, protocol::max_data_piece_size + 1).error, protocol::errc::data_not_held));
 	CHECK(!piece(0, chunk_size - 10, 10).error);
+
+	// (review 2026-09-21) an offset that wraps the range check: refused like any other
+	// range outside the chunk - it used to pass the check, fail at the file, count as a
+	// lost chunk and DELETE it, so a member could empty a data server piece by piece
+	auto const huge = std::numeric_limits<std::uint64_t>::max();
+	auto const wrapping = [&](std::uint64_t offset, std::uint32_t size) {
+		conn.handle(protocol::download_data_piece{9, sid, id, 0, offset, size});
+		return conn.take<protocol::download_data_piece_reply>();
+	};
+	CHECK(is_error(wrapping(huge, 2).error, protocol::errc::data_not_held));
+	CHECK(is_error(wrapping(huge - 5, 10).error, protocol::errc::data_not_held));
+	auto const still_there = piece(0, 0, chunk_size);
+	REQUIRE(!still_there.error);
+	CHECK(still_there.bytes == data.chunks.at(0));
 
 	// the download is of this storage
 	conn.handle(protocol::download_data_piece{8, securepath::test::random_octet_vector(16), id, 0, 0, 100});

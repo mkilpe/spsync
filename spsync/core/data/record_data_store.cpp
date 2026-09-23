@@ -8,6 +8,7 @@
 
 #include <algorithm>
 #include <cstring>
+#include <atomic>
 #include <mutex>
 #include <utility>
 
@@ -32,8 +33,7 @@ public:
 		if(row && row->have.test(chunk_no)) {
 			ret = files.read(id, chunk_no);
 			if(!ret) {
-				LOG_WARN("record data chunk lost [data_id={}, chunk={}]", to_hex(id), chunk_no);
-				drop_chunk(*row, chunk_no);
+				drop_if_lost(*row, chunk_no);
 			}
 		}
 		return ret;
@@ -59,37 +59,33 @@ public:
 		}
 	}
 
-	/// the staged chunks of a writer become a held, upload_pending data
-	void register_created(std::string const& stage, encrypted_data_result const& result) {
-		std::unique_lock lock{mutex};
-		// the row first: a crash in between leaves an unreferenced row for
-		// remove_unreferenced, never chunk files nothing knows of
-		auto const local_id = table.ensure(result.descriptor);
-		table.set_manifest(local_id, result.manifest);
-		table.set_header(local_id, result.header);
-		table.set_state(local_id, record_data_state::upload_pending);
-		files.commit_staging(stage, result.descriptor.manifest_digest);
-
-		have_bitmap have{result.descriptor.chunk_count()};
-		have.set_all();
-		table.set_have(local_id, have);
-	}
-
-	/// the staged chunks of a data rebuilt from held content (they verified against the
-	/// descriptor) become the data, in place of whatever part of it was held
-	void register_adopted(std::string const& stage, encrypted_data_result const& result) {
+	/**
+	 * The staged chunks of a whole data - a writer's (upload_pending), or rebuilt from
+	 * held content (in_sync, in place of whatever part of it was held) - become the data.
+	 * The row first: a crash in between leaves an unreferenced row for remove, never chunk
+	 * files nothing knows of; the row says what is held only once the files are there.
+	 */
+	void register_held(std::string const& stage, encrypted_data_result const& result, record_data_state state, bool replace) {
 		std::unique_lock lock{mutex};
 		auto const& id = result.descriptor.manifest_digest;
-		auto const local_id = table.ensure(result.descriptor);
-		files.remove(id);
+		std::uint64_t local_id{};
+		{
+			auto tact = table.transaction();
+			local_id = table.ensure(result.descriptor);
+			table.set_manifest(local_id, result.manifest);
+			table.set_header(local_id, result.header);
+		}
+		if(replace) {
+			files.remove(id);
+		}
 		files.commit_staging(stage, id);
-		table.set_manifest(local_id, result.manifest);
-		table.set_header(local_id, result.header);
-
-		have_bitmap have{result.descriptor.chunk_count()};
-		have.set_all();
-		table.set_have(local_id, have);
-		table.set_state(local_id, record_data_state::in_sync);
+		{
+			auto tact = table.transaction();
+			have_bitmap have{result.descriptor.chunk_count()};
+			have.set_all();
+			table.set_have(local_id, have);
+			table.set_state(local_id, state);
+		}
 	}
 
 	/// keep a chunk that verified against the manifest
@@ -115,16 +111,17 @@ public:
 		return known;
 	}
 
-	/// a piece of a held chunk; a chunk the bitmap promises but the disk lost is dropped
+	/// a piece of a held chunk; a chunk the bitmap promises but the disk lost is dropped.
+	/// The range is the asker's - over the wire, anybody's: one outside the chunk is
+	/// refused and says nothing about the chunk
 	std::optional<octet_vector> read_piece(data_id const& id, std::uint64_t chunk_no, std::uint64_t offset, std::size_t size) {
 		std::unique_lock lock{mutex};
 		std::optional<octet_vector> ret;
 		auto row = table.find(id);
-		if(row && row->have.test(chunk_no) && offset + size <= row->descriptor.chunk_enc_size(chunk_no)) {
+		if(row && row->have.test(chunk_no) && row->descriptor.chunk_holds_range(chunk_no, offset, size)) {
 			ret = files.read_piece(id, chunk_no, offset, size);
 			if(!ret) {
-				LOG_WARN("record data chunk lost [data_id={}, chunk={}]", to_hex(id), chunk_no);
-				drop_chunk(*row, chunk_no);
+				drop_if_lost(*row, chunk_no);
 			}
 		}
 		return ret;
@@ -140,8 +137,27 @@ private:
 		}
 	}
 
+	/**
+	 * A held chunk could not be read. Lost is a file that is not there or shorter than
+	 * the descriptor says: that chunk is dropped to be fetched again. A file of the right
+	 * size that does not open or read is trouble of the moment (descriptors, the disk),
+	 * and dropping it would throw a good chunk - maybe the only copy - away. Requires the
+	 * mutex.
+	 */
+	void drop_if_lost(data_state_row& row, std::uint64_t chunk_no) {
+		auto const& id = row.descriptor.manifest_digest;
+		auto const on_disk = files.size(id, chunk_no);
+		if(!on_disk || *on_disk < row.descriptor.chunk_enc_size(chunk_no)) {
+			LOG_WARN("record data chunk lost [data_id={}, chunk={}]", to_hex(id), chunk_no);
+			drop_chunk(row, chunk_no);
+		} else {
+			LOG_WARN("record data chunk could not be read, kept [data_id={}, chunk={}]", to_hex(id), chunk_no);
+		}
+	}
+
 	// requires the mutex
 	void drop_chunk(data_state_row& row, std::uint64_t chunk_no) {
+		++drops;
 		if(row.state == record_data_state::upload_pending) {
 			// nobody else has it yet: there is nothing to refetch from
 			table.set_state(row.local_id, record_data_state::invalid);
@@ -157,6 +173,9 @@ public:
 	std::mutex mutex;
 	data_state_table table;
 	chunk_files files;
+	/// counts the times held chunks went (eviction, prune, a lost chunk): a handle's cached
+	/// chunk is good for as long as this stands still
+	std::atomic<std::uint64_t> drops{0};
 };
 
 namespace {
@@ -185,7 +204,7 @@ public:
 	/// the octets of the data in held chunks; they need not be contiguous, read() stops at a gap
 	std::uint64_t available_size() const override {
 		std::uint64_t ret = 0;
-		auto const row = store_->table.find(local_id_);
+		auto const row = store_->table.find(id_);
 		if(row) {
 			std::unique_lock lock{mutex_};
 			for(std::uint64_t no = 0; no != row->have.size(); ++no) {
@@ -215,13 +234,17 @@ public:
 		throw make_error(sync::errc::constraint_violation, "stored record data is immutable");
 	}
 
+	// the row is addressed by the data id: the handle may outlive its row (a rollback,
+	// a sweep), and whatever comes after it is not this data
 	record_data_state state() const override {
-		auto const row = store_->table.find(local_id_);
+		auto const row = store_->table.find(id_);
 		return row ? row->state : record_data_state::invalid;
 	}
 
 	void set_state(record_data_state state) override {
-		store_->table.set_state(local_id_, state);
+		if(auto const row = store_->table.find(id_)) {
+			store_->table.set_state(row->local_id, state);
+		}
 	}
 
 	void remove_data() override;
@@ -251,6 +274,14 @@ private:
 
 	/// make the chunk the cached one; false when it is not held or does not decrypt
 	bool load(std::uint64_t chunk_no) {
+		// chunks went since the chunk was cached (an eviction, a prune, a lost chunk - by
+		// anybody): the cache is not what is held any more
+		auto const drops = store_->drops.load();
+		if(drops != cached_at_drops_) {
+			cached_no_.reset();
+			cached_.clear();
+			cached_at_drops_ = drops;
+		}
 		bool ok = cached_no_ == chunk_no;
 		if(!ok) {
 			auto const encrypted = store_->read_chunk(id_, chunk_no);
@@ -272,6 +303,8 @@ private:
 	std::shared_ptr<record_data_store_impl> store_;
 	std::uint64_t const local_id_{};
 	data_id const id_;
+	/// record_data_store_impl::drops when the cache was last known good
+	std::uint64_t cached_at_drops_{};
 	std::uint64_t const plain_size_{};
 	std::uint64_t const chunk_size_{};
 
@@ -286,6 +319,7 @@ private:
 
 /// the local chunks of a data go, the row and the manifest stay; the caller holds the lock
 void drop_chunks(record_data_store_impl& store, data_state_row& row, record_data_state state) {
+	++store.drops;
 	store.files.remove(row.descriptor.manifest_digest);
 	row.have.clear();
 	store.table.set_have(row.local_id, row.have);
@@ -297,8 +331,11 @@ bool evict_data(record_data_store_impl& store, data_id const& id) {
 	auto row = store.table.find(id);
 	bool const ok = row && row->state != record_data_state::upload_pending;
 	if(ok) {
-		bool const invalid = row->state == record_data_state::invalid;
-		drop_chunks(store, *row, invalid ? record_data_state::invalid : record_data_state::removed);
+		// removed is what a held data becomes; what was never held, is wanted, invalid or
+		// pruned stays that - the tombstone of a prune and a download that is on its way
+		// are not the eviction's to undo
+		bool const held = row->state == record_data_state::in_sync || row->state == record_data_state::removed;
+		drop_chunks(store, *row, held ? record_data_state::removed : row->state);
 	}
 	return ok;
 }
@@ -355,7 +392,7 @@ encrypted_data_result data_writer::finish() {
 		throw make_error(securepath::errc::invalid_state, "record data writer already finished");
 	}
 	auto result = encryptor_->finish();
-	store_->register_created(stage_, result);
+	store_->register_held(stage_, result, record_data_state::upload_pending, false);
 	encryptor_.reset();
 	return result;
 }
@@ -406,7 +443,14 @@ bool incoming_chunk::append(std::uint64_t offset, octet_span piece) {
 	bool const ok = open_ && offset == received_ && !piece.empty() && piece.size() <= expected_size_ - received_;
 	if(ok) {
 		// the staging area is this chunk's alone: no lock
-		store_->files.append_staged(stage_, chunk_no_, piece);
+		try {
+			store_->files.append_staged(stage_, chunk_no_, piece);
+		} catch(...) {
+			// a part of the piece may be in the file: the chunk starts over, a piece sent
+			// again must not land behind it
+			discard();
+			throw;
+		}
 		hash_.update(piece);
 		received_ += piece.size();
 	} else {
@@ -416,7 +460,10 @@ bool incoming_chunk::append(std::uint64_t offset, octet_span piece) {
 }
 
 bool incoming_chunk::finish() {
-	bool ok = open_ && complete() && hash_.final() == expected_digest_;
+	// the digest is of the pieces as they came, the file is what is kept: it has to be
+	// all of them and nothing else
+	bool ok = open_ && complete() && hash_.final() == expected_digest_
+		&& store_->files.staged_size(stage_, chunk_no_) == expected_size_;
 	if(ok) {
 		open_ = false;
 		ok = store_->adopt_chunk(id_, chunk_no_, stage_);
@@ -466,6 +513,10 @@ record_data_handle record_data_store::open(std::vector<encryption_key> const& gr
 		throw make_error(sync::errc::no_encryption_key_found, "no group key to open record data with");
 	}
 	record_data_handle ret;
+	if(!usable_data_descriptor(descriptor)) {
+		LOG_WARN("record data descriptor out of bounds [data_id={}]", to_hex(descriptor.manifest_digest));
+		return ret;
+	}
 	auto const local_id = impl_->table.ensure(descriptor);
 	auto const row = impl_->table.find(local_id);
 	if(row && row->descriptor == descriptor) {
@@ -515,7 +566,7 @@ bool record_data_store::adopt_content(record_data& source, encryption_key const&
 			// the same chunks only when the key and the content are the wanted data's
 			ok = result.descriptor == wanted && result.header.content_digest == wanted_header.content_digest;
 			if(ok) {
-				impl_->register_adopted(stage, result);
+				impl_->register_held(stage, result, record_data_state::in_sync, true);
 			} else {
 				impl_->files.discard_staging(stage);
 			}
@@ -548,16 +599,15 @@ bool record_data_store::prune(data_id const& id) {
 	return row.has_value();
 }
 
-std::size_t record_data_store::remove_unreferenced(std::function<bool(std::uint64_t)> const& is_referenced) {
+std::size_t record_data_store::remove(std::vector<data_id> const& ids) {
 	std::unique_lock lock{impl_->mutex};
 	std::size_t removed = 0;
-	for(auto const local_id : impl_->table.all_ids()) {
-		if(!is_referenced(local_id)) {
-			auto const row = impl_->table.find(local_id);
-			if(row) {
-				impl_->files.remove(row->descriptor.manifest_digest);
-			}
-			impl_->table.remove(local_id);
+	for(auto const& id : ids) {
+		auto const row = impl_->table.find(id);
+		if(row) {
+			++impl_->drops;
+			impl_->files.remove(id);
+			impl_->table.remove(row->local_id);
 			++removed;
 		}
 	}
@@ -576,7 +626,7 @@ bool record_data_store::set_manifest(data_id const& id, data_manifest const& man
 
 std::optional<data_state_row> record_data_store::register_data(data_descriptor const& descriptor, data_manifest const& manifest) {
 	std::optional<data_state_row> ret;
-	if(manifest.matches(descriptor)) {
+	if(usable_data_descriptor(descriptor) && manifest.matches(descriptor)) {
 		std::unique_lock lock{impl_->mutex};
 		auto const local_id = impl_->table.ensure(descriptor);
 		auto row = impl_->table.find(local_id);
@@ -589,10 +639,13 @@ std::optional<data_state_row> record_data_store::register_data(data_descriptor c
 }
 
 std::optional<data_state_row> record_data_store::register_data(data_descriptor const& descriptor) {
-	std::unique_lock lock{impl_->mutex};
-	auto row = impl_->table.find(impl_->table.ensure(descriptor));
-	if(row && row->descriptor != descriptor) {
-		row.reset();
+	std::optional<data_state_row> row;
+	if(usable_data_descriptor(descriptor)) {
+		std::unique_lock lock{impl_->mutex};
+		row = impl_->table.find(impl_->table.ensure(descriptor));
+		if(row && row->descriptor != descriptor) {
+			row.reset();
+		}
 	}
 	return row;
 }

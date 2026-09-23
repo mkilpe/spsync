@@ -1,5 +1,6 @@
 #include <securepath/test_frame/test_suite.hpp>
 #include <securepath/test_frame/test_utils.hpp>
+#include <spsync/test/test_record_data.hpp>
 
 #include <spsync/comm/data_uploader.hpp>
 
@@ -22,17 +23,12 @@ std::string const db_name = "data_uploader_test.db";
 std::filesystem::path const data_root = "data_uploader_test";
 
 database::connection_ptr fresh_database() {
-	std::remove(db_name.c_str());
-	std::filesystem::remove_all(data_root);
-	return database::sqlite::create_sqlite_connection(db_name);
+	return test::fresh_database(db_name, data_root);
 }
 
 /// a data of the given size in the store, upload_pending as the engine leaves it
 data_descriptor create_data(record_data_store& store, std::size_t size, std::uint32_t chunk_size = 1000) {
-	encryption_key const key{sequence_number{1}, securepath::test::random_octet_vector(crypto::aes_gcm_key_size())};
-	auto writer = store.create(key, chunk_size);
-	writer.write(securepath::test::random_octet_vector(size));
-	return writer.finish().descriptor;
+	return test::store_data(store, size, chunk_size).result.descriptor;
 }
 
 /**
@@ -164,31 +160,7 @@ private:
 	std::deque<std::move_only_function<void()>> answers_;
 };
 
-/// what the uploader reported
-struct upload_log {
-	data_uploader::done_callback done() {
-		return [this](data_id const& id, std::optional<error> err) {
-			std::unique_lock lock{mutex};
-			finished.emplace_back(id, std::move(err));
-		};
-	}
-
-	data_uploader::progress_callback progress() {
-		return [this](data_id const& id, std::uint64_t transferred, std::uint64_t total) {
-			std::unique_lock lock{mutex};
-			reports[id].emplace_back(transferred, total);
-		};
-	}
-
-	std::size_t finished_count() const {
-		std::unique_lock lock{mutex};
-		return finished.size();
-	}
-
-	mutable std::mutex mutex;
-	std::vector<std::pair<data_id, std::optional<error>>> finished;
-	std::map<data_id, std::vector<std::pair<std::uint64_t, std::uint64_t>>> reports;
-};
+using upload_log = test::transfer_log;
 
 }
 
@@ -242,9 +214,12 @@ TEST_CASE("data uploader uploads in queue order", "[unit]") {
 	}
 	for(auto const& d : {a, b, c}) {
 		CHECK(channel.held.at(d.manifest_digest).complete());
-		REQUIRE(!log.reports[d.manifest_digest].empty());
-		CHECK(log.reports[d.manifest_digest].front() == std::pair<std::uint64_t, std::uint64_t>{0, d.enc_size});
-		CHECK(log.reports[d.manifest_digest].back() == std::pair{d.enc_size, d.enc_size});
+		auto const reports = log.reports_of(d.manifest_digest);
+		REQUIRE(!reports.empty());
+		CHECK(reports.front().transferred == 0);
+		CHECK(reports.front().total == d.enc_size);
+		CHECK(reports.back().transferred == d.enc_size);
+		CHECK(reports.back().total == d.enc_size);
 	}
 	CHECK(channel.sent.size() == a.chunk_count() + b.chunk_count() + c.chunk_count());
 
@@ -275,8 +250,8 @@ TEST_CASE("data uploader resumes from what the holder has", "[unit]") {
 	REQUIRE(log.finished.size() == 1);
 	CHECK(!log.finished[0].second);
 	// progress starts from what the holder had
-	CHECK(log.reports[id].front().first == a.chunk_enc_size(0) + a.chunk_enc_size(2));
-	CHECK(log.reports[id].back().first == a.enc_size);
+	CHECK(log.reports_of(id).front().transferred == a.chunk_enc_size(0) + a.chunk_enc_size(2));
+	CHECK(log.reports_of(id).back().transferred == a.enc_size);
 }
 
 // the connection goes in the middle: nothing is reported, the next try sends the rest only
@@ -434,10 +409,10 @@ TEST_CASE("data uploader sends chunks in pieces", "[unit]") {
 	CHECK(total == a.enc_size);
 
 	// progress moves with every piece
-	auto const& reports = log.reports[id];
+	auto const reports = log.reports_of(id);
 	REQUIRE(reports.size() == 1 + expected.size());
-	CHECK(reports[1].first == 300);
-	CHECK(reports.back().first == a.enc_size);
+	CHECK(reports[1].transferred == 300);
+	CHECK(reports.back().transferred == a.enc_size);
 }
 
 // a channel answering inside the call must not nest rounds without end

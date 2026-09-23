@@ -66,6 +66,8 @@ public:
 
 	/// true for the link of a separate data server whose hello went through (RD12)
 	bool is_data_server_link() const;
+	/// the hello went through and the link is a data server's (true) or a replication peer's
+	bool ready_as(bool data_server_link) const;
 
 	/// tell a data server to hold copies of these data (RD13 replication); only a data
 	/// server link takes it. True when it was sent

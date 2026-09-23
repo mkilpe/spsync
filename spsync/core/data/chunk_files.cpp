@@ -37,21 +37,6 @@ void write_file(std::filesystem::path const& dir, std::string const& name, octet
 	std::filesystem::rename(tmp, dir / name);
 }
 
-std::optional<octet_vector> read_file(std::filesystem::path const& path) {
-	std::optional<octet_vector> ret;
-	std::error_code ec;
-	auto const size = std::filesystem::file_size(path, ec);
-	if(!ec) {
-		std::ifstream in(path, std::ios::binary);
-		octet_vector bytes(size);
-		in.read(reinterpret_cast<char*>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
-		if(in && static_cast<std::uintmax_t>(in.gcount()) == size) {
-			ret = std::move(bytes);
-		}
-	}
-	return ret;
-}
-
 std::optional<octet_vector> read_file_piece(std::filesystem::path const& path, std::uint64_t offset, std::size_t size) {
 	std::optional<octet_vector> ret;
 	std::error_code ec;
@@ -66,6 +51,13 @@ std::optional<octet_vector> read_file_piece(std::filesystem::path const& path, s
 		}
 	}
 	return ret;
+}
+
+/// the whole file
+std::optional<octet_vector> read_file(std::filesystem::path const& path) {
+	std::error_code ec;
+	auto const size = std::filesystem::file_size(path, ec);
+	return ec ? std::nullopt : read_file_piece(path, 0, static_cast<std::size_t>(size));
 }
 
 bool is_hex_name(std::string const& s) {
@@ -111,6 +103,12 @@ bool chunk_files::has(data_id const& id, std::uint64_t chunk_no) const {
 	return std::filesystem::is_regular_file(data_dir(id) / chunk_name(chunk_no), ec);
 }
 
+std::optional<std::uint64_t> chunk_files::size(data_id const& id, std::uint64_t chunk_no) const {
+	std::error_code ec;
+	auto const octets = std::filesystem::file_size(data_dir(id) / chunk_name(chunk_no), ec);
+	return ec ? std::nullopt : std::optional<std::uint64_t>{octets};
+}
+
 void chunk_files::remove_chunk(data_id const& id, std::uint64_t chunk_no) {
 	std::error_code ec;
 	std::filesystem::remove(data_dir(id) / chunk_name(chunk_no), ec);
@@ -139,6 +137,12 @@ void chunk_files::append_staged(std::string const& stage, std::uint64_t chunk_no
 	if(!out) {
 		throw io_error("failed to append to a staged chunk in " + dir.string());
 	}
+}
+
+std::optional<std::uint64_t> chunk_files::staged_size(std::string const& stage, std::uint64_t chunk_no) const {
+	std::error_code ec;
+	auto const octets = std::filesystem::file_size(stage_dir(stage) / chunk_name(chunk_no), ec);
+	return ec ? std::nullopt : std::optional<std::uint64_t>{octets};
 }
 
 void chunk_files::adopt_staged_chunk(std::string const& stage, std::uint64_t chunk_no, data_id const& id) {

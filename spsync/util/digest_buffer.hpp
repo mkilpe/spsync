@@ -13,6 +13,13 @@ namespace securepath::sync::util {
  * of a key, then the signed fields as fixed width big endian integers and length
  * prefixed octet strings, so two different field sequences never give the same octets.
  */
+/// append the lowest `octets` octets of v, big endian
+inline void append_big_endian(octet_vector& out, std::uint64_t v, int octets) {
+	for(int i = octets - 1; i >= 0; --i) {
+		out.push_back(std::uint8_t(v >> (i * 8)));
+	}
+}
+
 class digest_buffer {
 public:
 	explicit digest_buffer(std::string_view context)
@@ -20,16 +27,12 @@ public:
 	{}
 
 	digest_buffer& u32(std::uint32_t v) {
-		for(int i = 3; i >= 0; --i) {
-			octets_.push_back(std::uint8_t(v >> (i * 8)));
-		}
+		append_big_endian(octets_, v, 4);
 		return *this;
 	}
 
 	digest_buffer& u64(std::uint64_t v) {
-		for(int i = 7; i >= 0; --i) {
-			octets_.push_back(std::uint8_t(v >> (i * 8)));
-		}
+		append_big_endian(octets_, v, 8);
 		return *this;
 	}
 

@@ -1,6 +1,7 @@
 #include <securepath/test_frame/test_suite.hpp>
 #include <securepath/test_frame/test_utils.hpp>
 
+#include "data_server_fixtures.hpp"
 #include <spsync/server/server_lib/data_server.hpp>
 #include <spsync/server/server_lib/storage_server.hpp>
 #include <spsync/comm/data_downloader.hpp>
@@ -26,76 +27,17 @@ namespace {
 
 using namespace std::chrono_literals;
 
-/// an all-in-one server (RD12): record role and data role over one context and root
-struct all_in_one {
-	all_in_one(network::context& context, std::string root, std::uint16_t port, std::uint16_t s2s_port, std::vector<peer_config> peers)
-	: root(std::move(root))
-	, records(context, record_params(this->root, port, s2s_port, std::move(peers)))
-	, data(context, data_params(this->root))
-	{
-		records.attach_data_role(data);
-	}
+using test::all_in_one;
 
-	static storage_server_params record_params(std::string const& root, std::uint16_t port, std::uint16_t s2s_port, std::vector<peer_config> peers) {
-		storage_server_params p;
-		p.storage_root = root;
-		p.storage_server_endpoint = asio::ip::tcp::endpoint(asio::ip::address_v4::loopback(), port);
-		p.s2s_endpoint = asio::ip::tcp::endpoint(asio::ip::address_v4::loopback(), s2s_port);
-		p.peers = std::move(peers);
-		return p;
-	}
-
-	static data_server_params data_params(std::string const& root) {
-		data_server_params p;
-		p.enabled = true;
-		p.storage_root = root;
-		p.data_endpoint = asio::ip::tcp::endpoint(asio::ip::address_v4::loopback(), 0);
-		return p;
-	}
-
-	void start() {
-		data.start();
-		records.start();
-	}
-
-	void close() {
-		records.close();
-		data.close();
-	}
-
-	std::string root;
-	storage_server records;
-	data_server data;
-};
-
-/// upload one data to the server's data role with a ticket the server signs for itself
-data_descriptor upload_to(all_in_one& server, network::context& server_context, network::context& client_context
-	, crypto::public_key_id const& client, protocol::storage_id const& sid, record_data_store& store, std::size_t size) {
-	encryption_key const key{sequence_number{1}, securepath::test::random_octet_vector(crypto::aes_gcm_key_size())};
-	auto writer = store.create(key, 4096);
-	writer.write(securepath::test::random_octet_vector(size));
-	auto const descriptor = writer.finish().descriptor;
-
-	auto const server_key = crypto::my_private_key(server_context.private_data());
-	data_endpoint const endpoint{"127.0.0.1", server.data.local_endpoint()->port(), server_key.id(), {}, {}};
-	ticket_source source = [&, endpoint](data_descriptor const& d, data_right right, std::move_only_function<void(util::result<data_grant>)> cb) {
-		data_ticket ticket{sid, d, client, right, clock_type::now() + 10min};
-		ticket.sign(server_key);
-		cb(util::result<data_grant>{data_grant{std::move(ticket), {endpoint}}});
-	};
-
-	net_data_channel channel{client_context, source};
-	std::atomic<int> done{0};
-	std::atomic<bool> failed{false};
-	data_uploader uploader{store, channel, data_upload_config{}, [&](data_id const&, std::optional<error> err) {
-		failed = err.has_value();
-		++done;
-	}};
-	REQUIRE(uploader.enqueue(descriptor.manifest_digest));
-	WAIT_REQUIRE(done == 1, 20s);
-	REQUIRE(!failed);
+/// upload a new data of the store to the server's data role, with tickets the server
+/// signs for itself
+data_descriptor upload_to(all_in_one& server, network::context& client_context, crypto::public_key_id const& client
+	, protocol::storage_id const& sid, record_data_store& store, std::size_t size) {
+	auto const descriptor = test::store_data(store, size, 4096).result.descriptor;
+	REQUIRE(!test::upload(store, client_context, test::signed_tickets(server.key(), {server.endpoint()}, sid, client), descriptor.manifest_digest));
 	return descriptor;
 }
+
 
 }
 
@@ -116,16 +58,16 @@ TEST_CASE("data availability is announced to the peers", "[unit]") {
 	auto const key_a = tctx.key_id(0);
 	auto const key_b = tctx.key_id(1);
 
-	all_in_one a{tctx.client_context(0), "test-announce-a", 42770, 42780, {peer_config{"127.0.0.1", 42781, key_b}}};
-	auto b = std::make_unique<all_in_one>(tctx.client_context(1), "test-announce-b", 42771, 42781
-		, std::vector<peer_config>{peer_config{"127.0.0.1", 42780, key_a}});
+	all_in_one a{tctx.client_context(0), {.root = "test-announce-a", .port = 42770, .s2s_port = 42780, .peers = {peer_config{"127.0.0.1", 42781, key_b}}}};
+	auto b = std::make_unique<all_in_one>(tctx.client_context(1)
+		, test::all_in_one_params{.root = "test-announce-b", .port = 42771, .s2s_port = 42781, .peers = {peer_config{"127.0.0.1", 42780, key_a}}});
 
 	record_data_store store{database::sqlite::create_sqlite_connection("test-announce-client.db"), "test-announce-client"};
 	auto const sid = securepath::test::random_octet_vector(16);
 
 	// a data completed on A before B is there
 	a.start();
-	auto const early = upload_to(a, tctx.client_context(0), tctx.client_context(2), tctx.key_id(2), sid, store, 30000);
+	auto const early = upload_to(a, tctx.client_context(2), tctx.key_id(2), sid, store, 30000);
 	auto const own = a.records.availability().holdings(sid, early.manifest_digest);
 	REQUIRE(own.size() == 1);
 	CHECK(own[0] == data_holding{key_a, early.chunk_count(), early.chunk_count(), true});
@@ -137,7 +79,7 @@ TEST_CASE("data availability is announced to the peers", "[unit]") {
 	CHECK(b->records.availability().holdings(sid, early.manifest_digest)[0].holder == key_a);
 
 	// a data completed while the link is up is pushed
-	auto const late = upload_to(a, tctx.client_context(0), tctx.client_context(2), tctx.key_id(2), sid, store, 50000);
+	auto const late = upload_to(a, tctx.client_context(2), tctx.key_id(2), sid, store, 50000);
 	WAIT_CHECK(b->records.availability().holdings(sid, late.manifest_digest).size() == 1, 10s);
 	auto const seen = b->records.availability().holdings(sid, late.manifest_digest);
 	REQUIRE(seen.size() == 1);
@@ -150,7 +92,7 @@ TEST_CASE("data availability is announced to the peers", "[unit]") {
 	b->close();
 	b.reset();
 	a.close();
-	all_in_one restarted{tctx.client_context(0), "test-announce-a", 42770, 42780, {}};
+	all_in_one restarted{tctx.client_context(0), {.root = "test-announce-a", .port = 42770, .s2s_port = 42780}};
 	restarted.start();
 	CHECK(restarted.records.availability().holdings(sid, early.manifest_digest).size() == 1);
 	CHECK(restarted.records.availability().holdings(sid, late.manifest_digest).size() == 1);
@@ -311,13 +253,13 @@ TEST_CASE("all in one server releases the data of removed records", "[unit]") {
 	tctx.add_client(2);
 	tctx.share_client_keys();
 	network::enable_pk_handshake(tctx.client_context(0));
-	all_in_one server{tctx.client_context(0), "test-release-a", 42772, 42782, {}};
+	all_in_one server{tctx.client_context(0), {.root = "test-release-a", .port = 42772, .s2s_port = 42782}};
 	server.start();
 
 	record_data_store store{database::sqlite::create_sqlite_connection("test-announce-client.db"), "test-announce-client"};
 	auto const sid = securepath::test::random_octet_vector(16);
-	auto const kept = upload_to(server, tctx.client_context(0), tctx.client_context(1), tctx.key_id(1), sid, store, 30000);
-	auto const dead = upload_to(server, tctx.client_context(0), tctx.client_context(1), tctx.key_id(1), sid, store, 50000);
+	auto const kept = upload_to(server, tctx.client_context(1), tctx.key_id(1), sid, store, 30000);
+	auto const dead = upload_to(server, tctx.client_context(1), tctx.key_id(1), sid, store, 50000);
 	REQUIRE(server.records.availability().holdings(sid, dead.manifest_digest).size() == 1);
 
 	// the chain that names them. The descriptors of this test have small chunks, which

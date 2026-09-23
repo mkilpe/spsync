@@ -1,5 +1,6 @@
 #include <securepath/test_frame/test_suite.hpp>
 #include <securepath/test_frame/test_utils.hpp>
+#include <spsync/test/test_record_data.hpp>
 
 #include <spsync/core/data/data_ticket.hpp>
 
@@ -13,9 +14,7 @@ namespace {
 
 using namespace std::chrono_literals;
 
-data_descriptor test_descriptor() {
-	return data_descriptor{5080, 1000, securepath::test::random_octet_vector(64)};
-}
+using test::test_descriptor;
 
 /// the wire form of a ticket with everything in reach
 struct wire_ticket {

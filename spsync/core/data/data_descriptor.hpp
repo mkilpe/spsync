@@ -17,6 +17,10 @@ struct data_descriptor {
 	/// size of the given encrypted chunk incl. its tag; 0 past the end
 	std::uint64_t chunk_enc_size(std::uint64_t chunk_no) const;
 
+	/// true when [offset, offset + size) lies inside the given encrypted chunk. The values
+	/// come from the wire as they are: nothing here wraps
+	bool chunk_holds_range(std::uint64_t chunk_no, std::uint64_t offset, std::uint64_t size) const;
+
 	bool operator==(data_descriptor const&) const = default;
 
 	template<typename Ar>
@@ -52,6 +56,14 @@ std::uint64_t constexpr max_data_chunks{200000};
  * that makes at least one and at most max_data_chunks chunks.
  */
 [[nodiscard]] bool valid_data_descriptor(data_descriptor const&);
+
+/**
+ * What any holder can work with, whoever vouched for the descriptor: a data id, a chunk
+ * size, at least one and at most max_data_chunks chunks, and a last chunk that is more
+ * than its tag (anything less can never decrypt). Part of valid_data_descriptor; on its
+ * own the guard of the places that size a bitmap or a manifest from a descriptor.
+ */
+[[nodiscard]] bool usable_data_descriptor(data_descriptor const&);
 
 /**
  * The members-only half of the descriptor (RD2/RD3), inside the encrypted header:

@@ -1,5 +1,7 @@
 #pragma once
 
+#include <securepath/serialisation/sequence.hpp>
+
 #include <cstdint>
 #include <optional>
 #include <utility>
@@ -38,6 +40,9 @@ enum class replication_mode : std::int64_t {
  * expectation. Sizes in bytes.
  */
 struct storage_limits {
+	bool operator==(storage_limits const&) const = default;
+
+public:
 	/// the authenticated record content (chain_block::record_bytes); the signature and
 	/// the chain framing (a few KiB) come on top on the wire
 	std::uint32_t max_record_size{};
@@ -46,8 +51,6 @@ struct storage_limits {
 	/// retention at a history cut (RD9): how many of the newest data carrying versions of
 	/// an object below the cut keep their data; keep_all_data_versions = every one
 	std::uint32_t kept_data_versions{};
-
-	bool operator==(storage_limits const&) const = default;
 };
 
 /// the values a limit of a storage may be set to
@@ -150,6 +153,16 @@ inline std::uint32_t to_wire(auth_mode m) { return static_cast<std::uint32_t>(m)
 inline std::uint32_t to_wire(replication_mode m) { return static_cast<std::uint32_t>(m) + 1; }
 
 struct wire_modes {
+	/// the stated limits (0 = not stated)
+	storage_limits limits() const { return storage_limits{max_record_size, chunk_size, kept_data_versions}; }
+
+	template<typename Ar>
+	void serialise(Ar& ar) {
+		serialisation::sequence<Ar> seq(ar);
+		seq & mode & amode & repl & max_record_size & chunk_size & kept_data_versions;
+	}
+
+public:
 	std::uint32_t mode{};
 	std::uint32_t amode{};
 	std::uint32_t repl{};
@@ -179,7 +192,7 @@ inline std::optional<storage_modes> modes_from_wire(std::uint32_t mode, std::uin
 }
 
 inline std::optional<storage_modes> modes_from_wire(wire_modes const& w) {
-	return modes_from_wire(w.mode, w.amode, w.repl, storage_limits{w.max_record_size, w.chunk_size, w.kept_data_versions});
+	return modes_from_wire(w.mode, w.amode, w.repl, w.limits());
 }
 
 }

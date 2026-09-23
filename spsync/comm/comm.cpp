@@ -95,7 +95,7 @@ void comm::handle(protocol::response_sequence_number const& p) {
 		// so it needs no packet field (plan 4.5)
 		arg = result<sequence_info>{sequence_info{p.sequence
 			, nc_impl_->remote_key_id().value_or(crypto::public_key_id{})
-			, storage_limits{p.max_record_size, p.chunk_size, p.kept_data_versions}, p.data_endpoints}};
+			, p.modes.limits(), p.data_endpoints}};
 	}
 	output_->emit<comm_events::on_sequence_number_response>(p.cid, std::move(arg));
 	if(p.error && protocol::to_error(p.error).code() == make_error_code(protocol::errc::storage_syncing)) {

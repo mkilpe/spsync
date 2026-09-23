@@ -56,37 +56,24 @@ struct response_sequence_number : reply_base {
 	response_sequence_number(storage_request_base const& p, sequence_number seq, wire_modes m = {}, std::vector<data_endpoint> endpoints = {})
 	: reply_base(p)
 	, sequence(seq)
-	, mode(m.mode)
-	, amode(m.amode)
-	, repl(m.repl)
-	, max_record_size(m.max_record_size)
-	, chunk_size(m.chunk_size)
-	, kept_data_versions(m.kept_data_versions)
+	, modes(m)
 	, data_endpoints(std::move(endpoints))
 	{
 	}
 
 	sequence_number sequence;
 
-	/// the modes of the storage, wire encoded (0 = unknown)
-	std::uint32_t mode{0};
-	std::uint32_t amode{0};
-	std::uint32_t repl{0};
-	/// the validity limits of the storage (record_data.txt RD10): the client refuses
-	/// oversized changes before committing
-	std::uint32_t max_record_size{0};
-	std::uint32_t chunk_size{0};
-	/// the retention of the storage at a history cut (record_data.txt RD9): a client
-	/// pruning its history lets the data of older versions go alike
-	std::uint32_t kept_data_versions{0};
+	/// the modes of the storage, wire encoded (0 = unknown), with its limits: the
+	/// validity limits (record_data.txt RD10) a client refuses oversized changes by before
+	/// committing, and the retention at a history cut (RD9) it prunes its own history by
+	wire_modes modes;
 	/// the data-role servers of the storage (record_data.txt RD12); empty when it carries no record data
 	std::vector<data_endpoint> data_endpoints;
 
 	template<typename S>
 	void serialise(S& s) {
 		serialisation::sequence<S> seq(s);
-		seq & static_cast<reply_base&>(*this) & sequence & mode & amode & repl & max_record_size & chunk_size
-			& kept_data_versions & data_endpoints;
+		seq & static_cast<reply_base&>(*this) & sequence & modes & data_endpoints;
 	}
 };
 

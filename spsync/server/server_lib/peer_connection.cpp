@@ -1,4 +1,5 @@
 #include "peer_connection.hpp"
+#include "guarded.hpp"
 #include "storage.hpp"
 
 #include <spsync/protocol/error.hpp>
@@ -60,48 +61,38 @@ void peer_connection::set_disconnect_handler(std::function<void(securepath::erro
 	on_disconnect_ = std::move(f);
 }
 
+/// the hello exchange is done and the link is of the kind wanted: a replication peer
+/// (the record exchange, the announcements record servers make to each other) or a
+/// separate data server (releases, copies to hold)
+bool peer_connection::ready_as(bool data_server_link) const {
+	std::unique_lock lock{mutex_};
+	return peer_id_.has_value() && data_server_link_ == data_server_link;
+}
+
+bool peer_connection::is_data_server_link() const {
+	return ready_as(true);
+}
+
 void peer_connection::push(protocol::push_records const& p) {
-	bool ready{};
-	{
-		std::unique_lock lock{mutex_};
-		// a data server link takes no part in the record exchange
-		ready = peer_id_.has_value() && !data_server_link_;
-	}
-	if(ready) {
+	if(ready_as(false)) {
 		send_packet(p);
 	}
 }
 
 void peer_connection::announce_heads() {
-	bool ready{};
-	{
-		std::unique_lock lock{mutex_};
-		ready = peer_id_.has_value() && !data_server_link_;
-	}
-	if(ready) {
+	if(ready_as(false)) {
 		send_our_heads();
 	}
 }
 
 void peer_connection::announce(protocol::announce_data const& p) {
-	bool ready{};
-	{
-		std::unique_lock lock{mutex_};
-		// record servers tell each other; a data server has no use for it
-		ready = peer_id_.has_value() && !data_server_link_;
-	}
-	if(ready) {
+	if(ready_as(false)) {
 		send_packet(p);
 	}
 }
 
 void peer_connection::release(protocol::release_data const& p) {
-	bool ready{};
-	{
-		std::unique_lock lock{mutex_};
-		ready = peer_id_.has_value() && data_server_link_;
-	}
-	if(ready) {
+	if(ready_as(true)) {
 		send_packet(p);
 	}
 }
@@ -109,11 +100,6 @@ void peer_connection::release(protocol::release_data const& p) {
 void peer_connection::operator()(protocol::release_data const& p) {
 	// record servers tell data servers, nobody tells a record server
 	LOG_WARN("release_data for storage {} on a record server, ignored", to_hex(p.sid));
-}
-
-bool peer_connection::is_data_server_link() const {
-	std::unique_lock lock{mutex_};
-	return peer_id_.has_value() && data_server_link_;
 }
 
 bool peer_connection::replicate(protocol::replicate_data const& p) {
@@ -138,14 +124,9 @@ void peer_connection::operator()(protocol::request_replica_ticket const& p) {
 	if(!is_data_server_link()) {
 		LOG_WARN("request_replica_ticket for storage {} from a peer that is no data server, ignored", to_hex(p.sid));
 	} else {
-		util::result<issued_ticket> issued{make_error(securepath::errc::unknown_error)};
-		try {
-			issued = sctx_.issue_replica_ticket(p.sid, p.data_id, peer_id().value_or(crypto::public_key_id{}));
-		} catch(securepath::error const& err) {
-			issued = err;
-		} catch(std::exception const& ex) {
-			LOG_WARN("exception while issuing a replica ticket: {} (sid={})", ex.what(), to_hex(p.sid));
-		}
+		auto issued = guarded("issuing a replica ticket", p.sid, [&] {
+			return sctx_.issue_replica_ticket(p.sid, p.data_id, peer_id().value_or(crypto::public_key_id{}));
+		});
 		if(issued) {
 			send_packet(protocol::response_replica_ticket{p, std::move(issued.value().ticket), std::move(issued.value().holders)});
 		} else {

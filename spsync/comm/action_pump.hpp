@@ -1,5 +1,6 @@
 #pragma once
 
+#include <exception>
 #include <functional>
 #include <mutex>
 #include <vector>
@@ -21,17 +22,47 @@ public:
 	/// collect() returns the actions of the next round; it takes the owner's lock itself
 	template<typename Collect>
 	void run(Collect collect) {
-		bool more = enter();
-		while(more) {
-			std::vector<action> actions = collect();
-			for(auto& act : actions) {
-				act();
+		if(enter()) {
+			// a round that throws must not leave the pump taken for good: nothing would
+			// ever run again, for any transfer of the machine
+			unwind_guard guard{*this};
+			bool more = true;
+			while(more) {
+				std::vector<action> actions = collect();
+				for(auto& act : actions) {
+					act();
+				}
+				more = again();
 			}
-			more = again();
 		}
 	}
 
 private:
+	/// gives the pump up when the runner is left by an exception
+	struct unwind_guard {
+		explicit unwind_guard(action_pump& p) : pump(p) {}
+		unwind_guard(unwind_guard const&) = delete;
+		unwind_guard& operator=(unwind_guard const&) = delete;
+
+		~unwind_guard() {
+			// more in flight than when the runner started: this scope is being unwound
+			// (a count, not a flag - the runner may itself have been called during one)
+			if(std::uncaught_exceptions() > exceptions) {
+				pump.abandon();
+			}
+		}
+
+	public:
+		action_pump& pump;
+		int const exceptions{std::uncaught_exceptions()};
+	};
+
+	void abandon() {
+		std::unique_lock lock{mutex_};
+		running_ = false;
+		again_ = false;
+	}
+
 	/// true for the caller that becomes the runner; anybody else flags another round
 	bool enter() {
 		std::unique_lock lock{mutex_};

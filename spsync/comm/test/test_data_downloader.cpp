@@ -1,5 +1,6 @@
 #include <securepath/test_frame/test_suite.hpp>
 #include <securepath/test_frame/test_utils.hpp>
+#include <spsync/test/test_record_data.hpp>
 
 #include <spsync/comm/data_downloader.hpp>
 #include <spsync/protocol/error.hpp>
@@ -10,6 +11,7 @@
 #include <atomic>
 #include <deque>
 #include <filesystem>
+#include <fstream>
 #include <map>
 #include <mutex>
 
@@ -40,19 +42,9 @@ struct test_store {
 	record_data_store store;
 };
 
-/// what the author made: both descriptor halves, the manifest, the plaintext
-struct made_data {
-	encrypted_data_result result;
-	octet_vector plain;
-};
-
-made_data make_data(record_data_store& origin, std::size_t size, std::uint32_t chunk_size = 1000) {
-	made_data ret;
-	ret.plain = securepath::test::random_octet_vector(size);
-	auto writer = origin.create(test_key(), chunk_size);
-	writer.write(ret.plain);
-	ret.result = writer.finish();
-	return ret;
+/// what the author made under the shared key: both descriptor halves, the plaintext
+test::stored_data make_data(record_data_store& origin, std::size_t size, std::uint32_t chunk_size = 1000) {
+	return test::store_data(origin, size, chunk_size, test_key());
 }
 
 /// a holder serving out of the origin store; what it has of a data can be cut down
@@ -162,32 +154,8 @@ private:
 	std::deque<std::move_only_function<void()>> answers_;
 };
 
-struct download_log {
-	data_downloader::done_callback done() {
-		return [this](data_id const& id, std::optional<error> err) {
-			finished.emplace_back(id, std::move(err));
-		};
-	}
-
-	data_downloader::progress_callback progress() {
-		return [this](data_id const&, std::uint64_t transferred, std::uint64_t) {
-			reports.push_back(transferred);
-		};
-	}
-
-	bool ended_with(std::size_t i, protocol::errc code) const {
-		return i < finished.size() && finished[i].second && finished[i].second->code() == make_error_code(code);
-	}
-
-	std::vector<std::pair<data_id, std::optional<error>>> finished;
-	std::vector<std::uint64_t> reports;
-};
-
-octet_vector read_all(record_data& data) {
-	octet_vector ret(data.size());
-	ret.resize(data.read(0, ret.data(), ret.size()));
-	return ret;
-}
+using download_log = test::transfer_log;
+using test::read_all;
 
 }
 
@@ -244,8 +212,8 @@ TEST_CASE("data downloader fetches a data", "[unit]") {
 		total += p.size;
 	}
 	CHECK(total == d.enc_size);
-	CHECK(log.reports.front() == 0);
-	CHECK(log.reports.back() == d.enc_size);
+	CHECK(log.reports.front().transferred == 0);
+	CHECK(log.reports.back().transferred == d.enc_size);
 
 	// the store flipped the state with the last chunk; it reads as what was written
 	CHECK(handle->state() == record_data_state::in_sync);
@@ -296,7 +264,7 @@ TEST_CASE("data downloader with a holder that has a part", "[unit]") {
 	CHECK(handle->state() == record_data_state::in_sync);
 	CHECK(read_all(*handle) == data.plain);
 	// progress went on from what was held
-	CHECK(log.reports.back() == d.enc_size);
+	CHECK(log.reports.back().transferred == d.enc_size);
 }
 
 // what stops a download keeps the whole chunks: the next one goes on from there
@@ -311,6 +279,33 @@ TEST_CASE("data downloader stopped half way", "[unit]") {
 
 	fake_holder holder{origin.store};
 	download_log log;
+
+	SECTION("the local store fails") {
+		// (review 2026-09-21) the staging area is gone under the download's feet, so the
+		// next piece cannot be written: the download ends with that error - it used to
+		// escape into whoever delivered the answer (over the network: the link's packet
+		// handler, which closed the link every transfer shares) and skip the bookkeeping
+		holder.hold = true;
+		data_downloader downloader{local.store, holder, data_download_config{2, 1, 600}, log.done()};
+		CHECK(downloader.enqueue(id));
+		// the open is answered, the first piece is asked for
+		CHECK(holder.release(1) == 1);
+		std::filesystem::remove_all(local.root / ".staging");
+		{ std::ofstream in_the_way{local.root / ".staging"}; }
+		CHECK_NOTHROW(holder.release());
+		REQUIRE(log.finished.size() == 1);
+		CHECK(log.finished[0].second.has_value());
+		CHECK(downloader.in_flight() == 0);
+
+		// and the queue works on: the same data again, from a store that is whole
+		std::filesystem::remove(local.root / ".staging");
+		std::filesystem::create_directories(local.root / ".staging");
+		holder.hold = false;
+		CHECK(downloader.enqueue(id));
+		REQUIRE(log.finished.size() == 2);
+		CHECK(!log.finished[1].second);
+		CHECK(read_all(*handle) == data.plain);
+	}
 
 	SECTION("a transfer quota") {
 		// four pieces of 600: two whole chunks of 1016, then the refusal
@@ -410,7 +405,7 @@ TEST_CASE("data downloader verification", "[unit]") {
 TEST_CASE("data downloader queue", "[unit]") {
 	test_store origin{"origin"};
 	test_store local{"local"};
-	std::vector<made_data> datas;
+	std::vector<test::stored_data> datas;
 	for(int i = 0; i != 4; ++i) {
 		datas.push_back(make_data(origin.store, 2500));
 		REQUIRE(local.store.open({test_key()}, datas.back().result.descriptor, datas.back().result.header));
