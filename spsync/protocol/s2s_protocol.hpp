@@ -1,6 +1,7 @@
 #pragma once
 
 #include "protocol_base.hpp"
+#include "wire_modes.hpp"
 
 #include <spsync/core/data/data_descriptor.hpp>
 #include <spsync/core/data/data_ticket.hpp>

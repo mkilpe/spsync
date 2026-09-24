@@ -1,6 +1,7 @@
 #pragma once
 
 #include "protocol_base.hpp"
+#include "wire_modes.hpp"
 
 #include <securepath/util/typelist.hpp>
 #include <securepath/serialisation/choice.hpp>

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "protocol_base.hpp"
+#include "wire_modes.hpp"
 #include <spsync/core/data/data_ticket.hpp>
 #include <spsync/core/records/block_envelope.hpp>
 

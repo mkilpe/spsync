@@ -4,6 +4,7 @@
 
 #include <spsync/protocol/error.hpp>
 #include <spsync/protocol/server_protocol.hpp>
+#include <spsync/protocol/wire_modes.hpp>
 #include <securepath/serialisation/util.hpp>
 
 namespace securepath::sync {
@@ -53,7 +54,7 @@ void connection::handle(protocol::create_storage const& p) {
 	securepath::error error;
 	try {
 		// a creation always carries modes: the requested ones or the server defaults
-		auto handle = context_.acquire_sync(p.sid, modes_from_wire(p.modes).value_or(storage_modes{}));
+		auto handle = context_.acquire_sync(p.sid, protocol::modes_from_wire(p.modes).value_or(storage_modes{}));
 		syncs_.emplace(p.sid, handle);
 		handle->add_listener(shared_from_this());
 	} catch(securepath::error const& err) {
@@ -89,7 +90,7 @@ void connection::handle(protocol::request_sequence_number const& p) {
 			error = make_error(protocol::errc::storage_syncing);
 		} else if(handle) {
 			smodes = handle->modes();
-			auto expected = modes_from_wire(p.expected_mode, p.expected_amode, p.expected_repl);
+			auto expected = protocol::modes_from_wire(p.expected_mode, p.expected_amode, p.expected_repl);
 			if(expected && !modes_match(*expected, smodes)) {
 				LOG_INFO("storage mode mismatch for user {} (sid={})", id_, to_hex(p.sid));
 				error = make_error(protocol::errc::storage_mode_mismatch);
@@ -110,7 +111,7 @@ void connection::handle(protocol::request_sequence_number const& p) {
 	if(error) {
 		send_packet(protocol::response_sequence_number{p, error});
 	} else {
-		send_packet(protocol::response_sequence_number{p, seq, to_wire(std::optional<storage_modes>{smodes}), context_.data_endpoints()});
+		send_packet(protocol::response_sequence_number{p, seq, protocol::to_wire(std::optional<storage_modes>{smodes}), context_.data_endpoints()});
 	}
 }
 

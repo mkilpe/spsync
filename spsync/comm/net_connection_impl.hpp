@@ -6,6 +6,7 @@
 #include <spsync/protocol/client_protocol.hpp>
 #include <spsync/protocol/error.hpp>
 #include <spsync/protocol/server_protocol.hpp>
+#include <spsync/protocol/wire_modes.hpp>
 
 #include <securepath/crypto/random.hpp>
 #include <securepath/network/encryption/encrypted_connection.hpp>
@@ -114,7 +115,7 @@ struct network_connection_impl : network::encrypted_connection {
 
 	request_handle fetch_sequence_number(storage_id id, std::optional<storage_modes> expected_modes = {}) {
 		auto h = ++call_id;
-		auto const w = to_wire(expected_modes);
+		auto const w = protocol::to_wire(expected_modes);
 		send(protocol::request_sequence_number{h, std::move(id), w.mode, w.amode, w.repl});
 		return h;
 	}

@@ -5,6 +5,7 @@
 #include <spsync/protocol/client_protocol.hpp>
 #include <spsync/protocol/error.hpp>
 #include <spsync/protocol/server_protocol.hpp>
+#include <spsync/protocol/wire_modes.hpp>
 
 #include <securepath/crypto/random.hpp>
 #include <securepath/network/encryption/encrypted_connection.hpp>
@@ -64,7 +65,7 @@ bool network_connection::is_connected() const {
 
 storage_id network_connection::create_storage(std::optional<storage_modes> modes) {
 	storage_id id = crypto::random_octet_vector(16);
-	impl_->send(protocol::create_storage{++impl_->call_id, id, to_wire(modes)});
+	impl_->send(protocol::create_storage{++impl_->call_id, id, protocol::to_wire(modes)});
 	return id;
 }
 
