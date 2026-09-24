@@ -9,8 +9,9 @@
 
 namespace securepath::sync {
 
-connection::connection(storage_server_context& c)
+connection::connection(storage_server_context& c, storage_data_context& d)
 : context_(c)
+, data_(d)
 {
 }
 
@@ -111,7 +112,7 @@ void connection::handle(protocol::request_sequence_number const& p) {
 	if(error) {
 		send_packet(protocol::response_sequence_number{p, error});
 	} else {
-		send_packet(protocol::response_sequence_number{p, seq, protocol::to_wire(std::optional<storage_modes>{smodes}), context_.data_endpoints()});
+		send_packet(protocol::response_sequence_number{p, seq, protocol::to_wire(std::optional<storage_modes>{smodes}), data_.data_endpoints()});
 	}
 }
 
@@ -187,7 +188,7 @@ void connection::handle(protocol::request_data_ticket const& p) {
 			// the record naming the data may not have arrived here yet
 			return make_error(protocol::errc::storage_syncing);
 		}
-		return context_.issue_data_ticket(*handle, p.data_id, id_, p.right);
+		return data_.issue_data_ticket(*handle, p.data_id, id_, p.right);
 	});
 	if(issued) {
 		send_packet(protocol::response_data_ticket{p, std::move(issued.value().ticket), std::move(issued.value().holders)});

@@ -1,5 +1,6 @@
 #pragma once
 
+#include "storage_data_context.hpp"
 #include "storage_server_context.hpp"
 
 #include <flat_map>
@@ -17,7 +18,7 @@ namespace securepath::sync {
 
 class connection : public std::enable_shared_from_this<connection> {
 public:
-	connection(storage_server_context&);
+	connection(storage_server_context&, storage_data_context&);
 	virtual ~connection() = default;
 
 	securepath::error on_connect(protocol::client_hello const& p, crypto::public_key_id id);
@@ -41,6 +42,7 @@ private:
 	storage* find_storage(protocol::storage_id const&);
 private:
 	storage_server_context& context_;
+	storage_data_context& data_;
 	crypto::public_key_id id_;
 	std::flat_map<protocol::storage_id, std::shared_ptr<storage>> syncs_;
 };

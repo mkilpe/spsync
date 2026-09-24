@@ -1,5 +1,6 @@
 #pragma once
 
+#include "storage_data_context.hpp"
 #include "storage_server_context.hpp"
 
 #include <spsync/core/origin_head.hpp>
@@ -30,7 +31,7 @@ namespace securepath::sync {
  */
 class peer_connection : public network::encrypted_connection {
 public:
-	peer_connection(network::context&, storage_server_context&, network::handshake_data,
+	peer_connection(network::context&, storage_server_context&, storage_data_context&, network::handshake_data,
 		std::shared_ptr<network::encrypted_server> server = nullptr);
 	~peer_connection();
 
@@ -114,6 +115,7 @@ private:
 	// transport frame is the bound of a message
 	serialisation::packet_deserialiser<protocol::s2s_types> deser_{network::max_frame_size};
 	storage_server_context& sctx_;
+	storage_data_context& dctx_;
 
 	mutable std::mutex mutex_;
 	/// set for an outgoing connection: the peer this connection must reach

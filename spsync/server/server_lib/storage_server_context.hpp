@@ -1,7 +1,6 @@
 #pragma once
 
 #include "peer_config.hpp"
-#include "ticket_issuer.hpp"
 
 #include <spsync/core/sync_mode.hpp>
 #include <spsync/protocol/protocol_base.hpp>
@@ -15,7 +14,8 @@ namespace securepath::sync {
 
 class storage;
 
-/// Context interface individual connections will use to operate
+/// The record side of what a connection to the record role uses; the record data side is
+/// storage_data_context
 class storage_server_context {
 protected:
 	~storage_server_context() = default;
@@ -34,6 +34,10 @@ public:
 
 	/// An already open storage, or null; never creates one
 	virtual std::shared_ptr<storage> find_open_sync(protocol::storage_id const&) = 0;
+
+	/// The storage when it is open or exists under the storage root (opened now), else
+	/// null; never creates one. Throws when the storage on disk cannot be opened
+	virtual std::shared_ptr<storage> find_sync(protocol::storage_id const&) = 0;
 
 	/**
 	 * The replicated storage a peer refers to (plan 4.2/4.4): an open one, else one found
@@ -74,34 +78,6 @@ public:
 
 	/// Ids of the open storages that replicate to peers (replication mode != none)
 	virtual std::vector<protocol::storage_id> replicated_storages() const = 0;
-
-	// -- record data (record_data.txt RD12/RD13) --
-
-	/// the ticket for a data of the storage, issued to the member, with the data servers to use it at
-	virtual util::result<issued_ticket> issue_data_ticket(storage const&, data_id const&,
-		crypto::public_key_id const& member, std::uint32_t right) = 0;
-
-	/// the data-role servers of the storages of this server: the endpoint list of the storage info
-	virtual std::vector<data_endpoint> data_endpoints() const = 0;
-
-	/// a peer announced what its data role holds
-	virtual void data_announced(protocol::announce_data const&) = 0;
-
-	/**
-	 * True for the key of a configured data-role server that is no replication peer (the
-	 * separate data server of RD12): it may connect to the s2s listener to announce what
-	 * it holds, and nothing else.
-	 */
-	virtual bool is_data_server(crypto::public_key_id const&) const = 0;
-
-	/// the ticket of a replication pull (RD13 copy count) for a data server of this server:
-	/// right replicate, with the complete holders to pull from
-	virtual util::result<issued_ticket> issue_replica_ticket(protocol::storage_id const&, data_id const&,
-		crypto::public_key_id const& data_server) = 0;
-
-	/// what this server's own data role holds, as announcements for a peer whose link
-	/// just came up; empty without a data role
-	virtual std::vector<protocol::announce_data> own_data_announcements() = 0;
 };
 
 }

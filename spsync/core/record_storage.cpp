@@ -5,6 +5,7 @@
 #include <securepath/database/util.hpp>
 #include <securepath/serialisation/util.hpp>
 #include <securepath/util/conversions.hpp>
+#include <spsync/core/data/data_index.hpp>
 #include <spsync/core/data/data_state_table.hpp>
 #include <spsync/core/database_util.hpp>
 #include <securepath/serialisation/vector.hpp>
@@ -26,20 +27,6 @@ namespace {
 
 std::int64_t const seq_selector_value(1);
 
-/// the row of the data a record that is being stored names: every record naming the data
-/// shares it (reference counting by data_id, RD9). A data the retention policy had let go
-/// is wanted again by its new record.
-std::uint64_t reference_data(database::connection_ptr const& db, data_descriptor const& descriptor) {
-	// the storage made the table when it was opened
-	data_state_table table{db, data_state_table::existing_schema{}};
-	auto const local_id = table.ensure(descriptor);
-	auto const row = table.find(local_id);
-	if(row && row->state == record_data_state::pruned) {
-		table.set_state(local_id, record_data_state::deferred);
-	}
-	return local_id;
-}
-
 void create_object_records(database::connection_ptr db, octet_vector const& tag, data_change_record const& rec) {
 	for(auto& obj : rec) {
 		auto q = db->prepare(
@@ -49,7 +36,8 @@ void create_object_records(database::connection_ptr db, octet_vector const& tag,
 		q.bind(":prev_tag", obj.data.previous_oid_record_tag);
 		q.bind(":oid", obj.data.id.value());
 		if(obj.data.data && usable_data_descriptor(*obj.data.data)) {
-			q.bind(":data_ref", static_cast<std::int64_t>(reference_data(db, *obj.data.data)));
+			// every record naming the data shares its row (reference counting by data_id, RD9)
+			q.bind(":data_ref", static_cast<std::int64_t>(data_index{db}.reference(*obj.data.data)));
 		} else {
 			if(obj.data.data) {
 				// a server refuses such a record (chain validity); a client that is handed
@@ -520,13 +508,6 @@ struct record_storage::impl {
 	/// the rows of the data the retention policy lets go at a cut, see superseded_data_below
 	std::vector<data_state_row> superseded_rows(sequence_number below, std::uint32_t kept_versions);
 
-	std::uint64_t data_reference_count(std::uint64_t data_ref) const {
-		auto q = db->prepare("SELECT count(*) FROM record_objects WHERE data_ref = :d;");
-		q.bind(":d", static_cast<std::int64_t>(data_ref));
-		// a count is a plain integer (sequences are stored with the unsigned offset)
-		return static_cast<std::uint64_t>(q.execute().value<std::int64_t>(0).value_or(0));
-	}
-
 	std::vector<object_version> object_versions(object_head_row const& head) {
 		std::vector<object_version> ret;
 		std::unordered_set<record_tag> visited;
@@ -972,15 +953,8 @@ std::vector<data_state_row> record_storage::impl::superseded_rows(sequence_numbe
 				}
 			}
 		}
-		data_state_table table{db, data_state_table::existing_schema{}};
-		for(auto const& [data_ref, references] : superseded) {
-			auto row = table.find(data_ref);
-			// somebody else naming the data keeps it: a kept version, a record above the
-			// cut, a record that is not in sync yet
-			if(row && row->state != record_data_state::pruned && data_reference_count(data_ref) == references) {
-				ret.push_back(std::move(*row));
-			}
-		}
+		// somebody else naming the data keeps it
+		ret = data_index{db}.only_referenced_by(superseded);
 	}
 	return ret;
 }
@@ -994,37 +968,15 @@ std::vector<data_id> record_storage::superseded_data_below(sequence_number below
 }
 
 std::vector<data_id> record_storage::prune_superseded_data(sequence_number below, std::uint32_t kept_versions) {
-	std::vector<data_id> pruned;
-	data_state_table table{impl_->db, data_state_table::existing_schema{}};
-	auto tact = table.transaction();
-	for(auto const& row : impl_->superseded_rows(below, kept_versions)) {
-		table.set_state(row.local_id, record_data_state::pruned);
-		pruned.push_back(row.descriptor.manifest_digest);
-	}
-	return pruned;
+	return data_index{impl_->db}.prune(impl_->superseded_rows(below, kept_versions));
 }
 
 std::vector<data_id> record_storage::unreferenced_data() const {
-	std::vector<data_id> ret;
-	auto q = impl_->db->prepare(
-		"SELECT data_id FROM record_data"
-		" WHERE key NOT IN (SELECT data_ref FROM record_objects WHERE data_ref IS NOT NULL) ORDER BY key;");
-	for(auto res = q.execute(); res; res.next()) {
-		ret.push_back(res.value<octet_vector>(0).value_or(octet_vector{}));
-	}
-	return ret;
+	return data_index{impl_->db}.unreferenced();
 }
 
 std::vector<data_id> record_storage::remove_unreferenced_data() {
-	data_state_table table{impl_->db, data_state_table::existing_schema{}};
-	auto tact = table.transaction();
-	auto removed = unreferenced_data();
-	for(auto const& id : removed) {
-		if(auto const row = table.find(id)) {
-			table.remove(row->local_id);
-		}
-	}
-	return removed;
+	return data_index{impl_->db}.remove_unreferenced();
 }
 
 std::vector<data_endpoint> record_storage::data_endpoints() const {
@@ -1046,28 +998,11 @@ void record_storage::set_data_endpoints(std::vector<data_endpoint> const& endpoi
 }
 
 std::uint64_t record_storage::data_reference_count(std::uint64_t data_ref) const {
-	return impl_->data_reference_count(data_ref);
+	return data_index{impl_->db}.reference_count(data_ref);
 }
 
 std::vector<data_id> record_storage::confirmed_data_in_state(record_data_state state) const {
-	auto q = impl_->db->prepare(
-		"SELECT record_data.data_id, min(record.seq) AS first_seq FROM record_objects"
-		" JOIN record ON record.tag = record_objects.tag"
-		" JOIN record_data ON record_data.key = record_objects.data_ref"
-		" WHERE record_data.state = :ds AND (record.state = :s1 OR record.state = :s2)"
-		" GROUP BY record_data.key ORDER BY first_seq ASC;");
-	q.bind(":ds", static_cast<std::int64_t>(std::to_underlying(state)));
-	q.bind(":s1", std::to_underlying(record_state::in_sync));
-	q.bind(":s2", std::to_underlying(record_state::acked));
-
-	std::vector<data_id> ret;
-	for(auto res = q.execute(); res; res.next()) {
-		auto id = res.value<octet_vector>(0);
-		if(id) {
-			ret.push_back(std::move(*id));
-		}
-	}
-	return ret;
+	return data_index{impl_->db}.confirmed_in_state(state);
 }
 
 record_handle record_storage::find_internal(record_internal_id iid) const {

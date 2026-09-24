@@ -14,10 +14,11 @@
 
 namespace securepath::sync {
 
-peer_connection::peer_connection(network::context& c, storage_server_context& sctx,
+peer_connection::peer_connection(network::context& c, storage_server_context& sctx, storage_data_context& dctx,
 	network::handshake_data hdata, std::shared_ptr<network::encrypted_server> server)
 : encrypted_connection(c, std::move(hdata), std::move(server))
 , sctx_(sctx)
+, dctx_(dctx)
 {
 	LOG_TRACE("constructing peer_connection {}", static_cast<void const*>(this));
 }
@@ -125,7 +126,7 @@ void peer_connection::operator()(protocol::request_replica_ticket const& p) {
 		LOG_WARN("request_replica_ticket for storage {} from a peer that is no data server, ignored", to_hex(p.sid));
 	} else {
 		auto issued = guarded("issuing a replica ticket", p.sid, [&] {
-			return sctx_.issue_replica_ticket(p.sid, p.data_id, peer_id().value_or(crypto::public_key_id{}));
+			return dctx_.issue_replica_ticket(p.sid, p.data_id, peer_id().value_or(crypto::public_key_id{}));
 		});
 		if(issued) {
 			send_packet(protocol::response_replica_ticket{p, std::move(issued.value().ticket), std::move(issued.value().holders)});
@@ -160,7 +161,7 @@ bool peer_connection::authenticate_transport() {
 	auto const& peers = sctx_.identity().peers;
 	if(std::ranges::find(peers, *key, &peer_config::key) == peers.end()) {
 		// a separate data server announcing what it holds (RD12/RD13)
-		data_server_link_ = sctx_.is_data_server(*key);
+		data_server_link_ = dctx_.is_data_server(*key);
 		if(!data_server_link_) {
 			LOG_WARN("connection from an unknown peer [key={}]", *key);
 		}
@@ -270,7 +271,7 @@ void peer_connection::operator()(protocol::peer_hello const& p) {
 		if(!data_server_link) {
 			send_our_heads();
 			// RD13: the availability tables are transient, a link that comes up gets the whole view
-			for(auto const& announcement : sctx_.own_data_announcements()) {
+			for(auto const& announcement : dctx_.own_data_announcements()) {
 				send_packet(announcement);
 			}
 		}
@@ -281,7 +282,7 @@ void peer_connection::operator()(protocol::announce_data const& p) {
 	if(check_ready("data announcement")) {
 		// a record server announces its own data role only: nobody speaks for another holder
 		if(p.holder == peer_id().value_or(crypto::public_key_id{})) {
-			sctx_.data_announced(p);
+			dctx_.data_announced(p);
 		} else {
 			LOG_WARN("data announcement for holder {} from another peer, ignored", p.holder);
 		}

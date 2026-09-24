@@ -3,9 +3,7 @@
 
 #include <flat_map>
 #include "connection.hpp"
-#include "data_release.hpp"
-#include "data_replication_plan.hpp"
-#include "data_server.hpp"
+#include "data_coordinator.hpp"
 #include "peer_connection.hpp"
 #include "storage.hpp"
 
@@ -21,7 +19,6 @@
 #include <securepath/util/conversions.hpp>
 
 #include <algorithm>
-#include <map>
 #include <filesystem>
 
 namespace securepath::sync {
@@ -44,8 +41,9 @@ public:
 		network::context& c,
 		std::shared_ptr<network::encrypted_server> server,
 		network::handshake_data hdata,
-		storage_server_context& context)
-	: connection(context)
+		storage_server_context& context,
+		storage_data_context& data)
+	: connection(context, data)
 	, encrypted_connection(c, std::move(hdata), server)
 	{
 		LOG_TRACE("constructing storage_server_client {}", static_cast<void const*>(this));
@@ -139,14 +137,15 @@ private:
 /// and the s2s packet families stay apart
 class s2s_listener : public network::encrypted_server {
 public:
-	s2s_listener(network::context& context, storage_server_context& sctx, network::handshake_data hdata)
+	s2s_listener(network::context& context, storage_server_context& sctx, storage_data_context& dctx, network::handshake_data hdata)
 	: encrypted_server(context)
 	, sctx_(sctx)
+	, dctx_(dctx)
 	, hdata_(std::move(hdata))
 	{}
 
 	std::shared_ptr<network::encrypted_connection> create_connection() override {
-		auto conn = std::make_shared<peer_connection>(context(), sctx_, hdata_, shared_from_this());
+		auto conn = std::make_shared<peer_connection>(context(), sctx_, dctx_, hdata_, shared_from_this());
 		{
 			std::unique_lock lock{mutex_};
 			std::erase_if(incoming_, [](auto const& w) { return w.expired(); });
@@ -169,6 +168,7 @@ public:
 
 private:
 	storage_server_context& sctx_;
+	storage_data_context& dctx_;
 	network::handshake_data hdata_;
 	mutable std::mutex mutex_;
 	std::vector<std::weak_ptr<peer_connection>> incoming_;
@@ -208,7 +208,8 @@ public:
 	, context_(context)
 	, handshake_data_(network::handshake_tag::public_key)
 	, default_storage_config_(make_storage_config(params_))
-	, issuer_(params_.data_servers, availability_, params_.ticket_validity)
+	, data_(*this, context.private_data(), [this] { return peer_connections(); }
+		, data_coordinator::params{params_.data_servers, params_.ticket_validity, params_.data_copies})
 	{
 		LOG_TRACE("constructing storage_server::impl {}", static_cast<void const*>(this));
 	}
@@ -218,7 +219,7 @@ public:
 	}
 
 	virtual std::shared_ptr<network::encrypted_connection> create_connection() override {
-		return std::make_shared<storage_server_client>(context_, shared_from_this(), handshake_data_, *this);
+		return std::make_shared<storage_server_client>(context_, shared_from_this(), handshake_data_, *this, data_);
 	}
 
 	virtual void on_accept(std::shared_ptr<network::encrypted_connection> const&) override {
@@ -233,7 +234,7 @@ public:
 			std::shared_ptr<storage> p = std::make_shared<storage>(id, default_storage_config_, create_modes, &context_.public_keys(), &context_.private_data());
 			p->set_data_release([weak = weak_self()](protocol::storage_id const& sid, std::vector<data_id> const& ids) {
 					if(auto self = weak.lock()) {
-						self->release_data(sid, ids);
+						self->data_.release_data(sid, ids);
 					}
 				});
 			if(p->modes().replication != replication_mode::none) {
@@ -268,14 +269,21 @@ public:
 		return std::filesystem::exists(default_storage_config_.storage_root_path() + "/" + to_hex(id) + "/storage.db");
 	}
 
+	virtual std::shared_ptr<storage> find_sync(protocol::storage_id const& id) override {
+		std::shared_ptr<storage> ret = find_open_sync(id);
+		if(!ret && exists_on_disk(id)) {
+			ret = acquire_sync(id, std::optional<storage_modes>{});
+		}
+		return ret;
+	}
+
 	virtual std::shared_ptr<storage> acquire_replica(protocol::storage_id const& id,
 		std::optional<storage_modes> peer_modes) override
 	{
-		std::shared_ptr<storage> ret = find_open_sync(id);
+		std::shared_ptr<storage> ret;
 		try {
-			if(!ret && exists_on_disk(id)) {
-				ret = acquire_sync(id, std::optional<storage_modes>{});
-			} else if(!ret && peer_modes && peer_modes->replication != replication_mode::none
+			ret = find_sync(id);
+			if(!ret && peer_modes && peer_modes->replication != replication_mode::none
 				&& valid_storage_modes(*peer_modes)) {
 				LOG_INFO("creating the replica of storage {} with the modes a peer announced", to_hex(id));
 				ret = acquire_sync(id, *peer_modes);
@@ -402,168 +410,10 @@ public:
 		return ret;
 	}
 
-	// -- record data (record_data.txt RD12/RD13) --
+	// -- record data (record_data.txt RD12/RD13): the coordinator's, the timer is the s2s side's --
 
-	util::result<issued_ticket> issue_data_ticket(storage const& st, data_id const& id,
-		crypto::public_key_id const& member, std::uint32_t right) override {
-		return issuer_.issue(st.id(), st.committed_data(id), member, right
-			, context_.private_data().my_private_key(), clock_type::now());
-	}
-
-	std::vector<data_endpoint> data_endpoints() const override {
-		return issuer_.data_servers();
-	}
-
-	void data_announced(protocol::announce_data const& p) override {
-		LOG_TRACE("data announcement of holder {} [{} entries]", p.holder, p.entries.size());
-		availability_.set_load(p.holder, holder_load{p.stored_bytes, p.uploads_in_progress});
-		if(p.view_begin) {
-			availability_.forget_holder(p.holder);
-		}
-		std::vector<std::pair<protocol::storage_id, data_id>> complete;
-		for(auto const& e : p.entries) {
-			bool const news = availability_.announce(e.sid, e.data_id, data_holding{p.holder, e.have_chunks, e.total_chunks, e.complete});
-			auto const handle = news ? find_open_sync(e.sid) : nullptr;
-			if(handle) {
-				// RD4: clients waiting for the data fetch without polling
-				handle->notify_data(e.data_id, true);
-			}
-			if(e.complete) {
-				complete.emplace_back(e.sid, e.data_id);
-			}
-		}
-		// RD13 copy count: a complete copy is where the other primary holders get theirs,
-		// and after a whole view it is known what that holder lacks
-		look_after_copies(p.view_end ? availability_.known_data() : complete);
-	}
-
-	// -- copies of the data (record_data.txt RD13 copy count, RDS 10) --
-
-	/**
-	 * The storages a pass over many data looks at, each opened once for the time of the
-	 * pass when nobody has it open (a sweep asks about thousands of data of a storage:
-	 * opened per question it would be built and torn down as often) and given back at
-	 * the end, also when the pass is left by an exception.
-	 */
-	class storage_pass {
-	public:
-		explicit storage_pass(impl& server) : server_(server) {}
-		storage_pass(storage_pass const&) = delete;
-		storage_pass& operator=(storage_pass const&) = delete;
-
-		~storage_pass() {
-			for(auto& [sid, handle] : opened_) {
-				if(handle) {
-					server_.release_sync(std::move(handle));
-				}
-			}
-		}
-
-		/// the storage when it exists here, null otherwise
-		std::shared_ptr<storage> get(protocol::storage_id const& sid) {
-			auto it = opened_.find(sid);
-			if(it == opened_.end()) {
-				it = opened_.emplace(sid, open(sid)).first;
-			}
-			return it->second;
-		}
-
-	private:
-		std::shared_ptr<storage> open(protocol::storage_id const& sid) const {
-			std::shared_ptr<storage> handle;
-			try {
-				handle = server_.find_open_sync(sid);
-				if(!handle && server_.exists_on_disk(sid)) {
-					handle = server_.acquire_sync(sid, std::optional<storage_modes>{});
-				}
-			} catch(std::exception const& ex) {
-				LOG_WARN("cannot look at storage {}: {}", to_hex(sid), ex.what());
-			}
-			return handle;
-		}
-
-	private:
-		impl& server_;
-		std::map<protocol::storage_id, std::shared_ptr<storage>> opened_;
-	};
-
-	static data_standing standing_of(storage_pass& pass, protocol::storage_id const& sid, data_id const& id) {
-		data_standing ret;
-		if(auto const st = pass.get(sid)) {
-			auto const committed = st->committed_data(id);
-			if(committed) {
-				ret.descriptor = committed.value();
-			} else {
-				auto const code = committed.get_error().code();
-				// unknown here may be a record that has not arrived yet when other record
-				// servers have the storage as well
-				ret.dead = code == make_error_code(protocol::errc::data_pruned)
-					|| (code == make_error_code(protocol::errc::unknown_data) && st->modes().replication == replication_mode::none);
-			}
-		}
-		return ret;
-	}
-
-	std::shared_ptr<peer_connection> data_server_link(crypto::public_key_id const& key) {
-		std::shared_ptr<peer_connection> ret;
-		for(auto const& conn : peer_connections()) {
-			if(!ret && conn->is_data_server_link() && conn->peer_id() == key) {
-				ret = conn;
-			}
-		}
-		return ret;
-	}
-
-	/**
-	 * The primary holders of these data that lack a copy are told to get one - the own
-	 * data role directly, a separate data server over its link; the data role of another
-	 * all-in-one replica is looked after by its own record role, which hears of the same
-	 * copies - and data that are held though the storage let them go are released.
-	 */
-	void look_after_copies(std::vector<std::pair<protocol::storage_id, data_id>> const& data) {
-		if(data.empty() || issuer_.data_servers().empty()) {
-			return;
-		}
-		replication_plan plan;
-		{
-			storage_pass pass{*this};
-			replication_view const view{issuer_.data_servers(), availability_, params_.data_copies
-				, [this](crypto::public_key_id const& key) {
-					return (key == identity_.server_id && data_role_ != nullptr) || data_server_link(key) != nullptr;
-				}
-				, [&pass](protocol::storage_id const& sid, data_id const& id) { return standing_of(pass, sid, id); }};
-			plan = plan_replication(view, data);
-		}
-		for(auto const& [target, storages] : plan.copies) {
-			for(auto const& [sid, descriptors] : storages) {
-				tell_to_replicate(target, sid, descriptors);
-			}
-		}
-		for(auto const& [sid, ids] : plan.stale) {
-			LOG_INFO("{} record data held by data servers though the storage let them go: released (sid={})", ids.size(), to_hex(sid));
-			release_data(sid, ids);
-		}
-	}
-
-	void tell_to_replicate(crypto::public_key_id const& target, protocol::storage_id const& sid, std::vector<data_descriptor> const& descriptors) {
-		LOG_INFO("data server {} is to hold copies of {} record data (sid={})", target, descriptors.size(), to_hex(sid));
-		if(target == identity_.server_id && data_role_) {
-			data_role_->replicate(sid, descriptors);
-		} else if(auto const link = data_server_link(target)) {
-			for(auto const& packet : replicate_packets(sid, descriptors)) {
-				link->replicate(packet);
-			}
-		}
-	}
-
-	util::result<issued_ticket> issue_replica_ticket(protocol::storage_id const& sid, data_id const& id,
-		crypto::public_key_id const& data_server) override {
-		util::result<data_descriptor> committed{make_error(protocol::errc::no_such_storage)};
-		storage_pass pass{*this};
-		if(auto const st = pass.get(sid)) {
-			committed = st->committed_data(id);
-		}
-		return issuer_.issue_replica(sid, committed, data_server, context_.private_data().my_private_key(), clock_type::now());
+	void attach_data_role(data_server& role) {
+		data_.attach_data_role(role, weak_self());
 	}
 
 	void schedule_copy_sweep() {
@@ -576,7 +426,7 @@ public:
 			auto self = weak.lock();
 			if(self && !ec) {
 				try {
-					self->look_after_copies(self->availability_.known_data());
+					self->data_.sweep_copies();
 				} catch(std::exception const& ex) {
 					// the next sweep is another try; without it the copies would never be looked after again
 					LOG_WARN("the sweep for missing data copies failed: {}", ex.what());
@@ -586,92 +436,13 @@ public:
 		});
 	}
 
-	bool is_data_server(crypto::public_key_id const& key) const override {
-		auto const& servers = issuer_.data_servers();
-		return key != identity_.server_id && std::ranges::find(servers, key, &data_endpoint::key) != servers.end();
-	}
-
-	/// a data server other than this server is configured: it will dial the s2s listener
-	bool has_separate_data_servers() const {
-		return std::ranges::any_of(issuer_.data_servers(), [this](data_endpoint const& e) { return e.key != identity_.server_id; });
-	}
-
-	std::vector<protocol::announce_data> own_data_announcements() override {
-		std::vector<protocol::announce_data> ret;
-		if(data_role_ && identity_.server_id.is_valid()) {
-			ret = data_role_->announcements(identity_.server_id);
-		}
-		return ret;
-	}
-
-	/// the own data role completed a data: into the table here, and to the peers (RD13)
-	void on_data_complete(protocol::storage_id const& sid, data_id const& id) {
-		auto const announcement = identity_.server_id.is_valid()
-			? data_role_->announcement(identity_.server_id, sid, id) : std::nullopt;
-		if(announcement) {
-			data_announced(*announcement);
-			for(auto const& conn : peer_connections()) {
-				conn->announce(*announcement);
-			}
-		}
-	}
-
-	/**
-	 * No record of the storage names these data any more (RD9): nobody is sent to a
-	 * holder for them again, the own data role drops them and the separate data servers
-	 * are told over their links. A data server that is not connected now keeps its
-	 * chunks: the release is not repeated (see record_data.txt RDS 9).
-	 */
-	void release_data(protocol::storage_id const& sid, std::vector<data_id> const& ids) {
-		for(auto const& id : ids) {
-			availability_.forget(sid, id);
-		}
-		if(data_role_) {
-			data_role_->release(sid, ids);
-		}
-		auto const connections = peer_connections();
-		for(auto const& packet : release_packets(sid, ids)) {
-			for(auto const& conn : connections) {
-				conn->release(packet);
-			}
-		}
-	}
-
-	void attach_data_role(data_server& role) {
-		data_role_ = &role;
-		role.set_complete_handler([weak = weak_self()](protocol::storage_id const& sid, data_id const& id) {
-			if(auto self = weak.lock()) {
-				self->on_data_complete(sid, id);
-			}
-		});
-		// the pulls this record role asks its own data role to make get their tickets here
-		role.set_replica_ticket_source([weak = weak_self()](protocol::storage_id const& sid, data_descriptor const& descriptor
-			, std::move_only_function<void(util::result<data_grant>)> answer) {
-			auto self = weak.lock();
-			auto issued = self ? self->issue_replica_ticket(sid, descriptor.manifest_digest, self->identity_.server_id)
-				: util::result<issued_ticket>{make_error(securepath::errc::invalid_state, "the record role is gone")};
-			if(issued) {
-				answer(data_grant{std::move(issued.value().ticket), std::move(issued.value().holders)});
-			} else {
-				answer(issued.get_error());
-			}
-		});
-	}
-
-	/// what the own data role held before this start goes into the table as well
-	void announce_own_data() {
-		for(auto const& announcement : own_data_announcements()) {
-			data_announced(announcement);
-		}
-	}
-
 	/// start the s2s side when peers are configured (plan 4.1)
 	void start_s2s() {
 		// peers exchange records over it, separate data servers announce what they hold
-		if(identity_.peers.empty() && !(identity_.server_id.is_valid() && has_separate_data_servers())) {
+		if(identity_.peers.empty() && !(identity_.server_id.is_valid() && data_.has_separate_data_servers())) {
 			return;
 		}
-		s2s_ = std::make_shared<s2s_listener>(context_, *this, handshake_data_);
+		s2s_ = std::make_shared<s2s_listener>(context_, *this, data_, handshake_data_);
 		s2s_->start(params_.create_s2s_endpoint(), params_.timeout);
 		LOG_INFO("s2s listening on port {}", s2s_->local_endpoint().port());
 		for(auto const& peer : identity_.peers) {
@@ -717,7 +488,7 @@ public:
 	}
 
 	void connect_link(std::shared_ptr<peer_link> const& link) {
-		auto conn = std::make_shared<peer_connection>(context_, *this, handshake_data_);
+		auto conn = std::make_shared<peer_connection>(context_, *this, data_, handshake_data_);
 		conn->set_disconnect_handler([weak = weak_self(), wlink = std::weak_ptr<peer_link>(link)](securepath::error const&) {
 			auto self = weak.lock();
 			auto l = wlink.lock();
@@ -822,11 +593,8 @@ public:
 	storage_config default_storage_config_;
 	server_identity identity_;
 
-	// -- record data (record_data.txt RD12/RD13) --
-	data_availability availability_;
-	ticket_issuer issuer_;
-	/// the data role of this server when it has one (all-in-one)
-	data_server* data_role_{};
+	/// the record data side (record_data.txt RD12/RD13); after the params it is made of
+	data_coordinator data_;
 
 	// -- the s2s side (plan 4.1) --
 	std::shared_ptr<s2s_listener> s2s_;
@@ -856,7 +624,7 @@ void storage_server::start() {
 	if(!impl_->identity_.peers.empty()) {
 		impl_->open_replicated_storages();
 	}
-	impl_->announce_own_data();
+	impl_->data_.announce_own_data();
 	impl_->start_s2s();
 }
 
@@ -865,7 +633,7 @@ void storage_server::attach_data_role(data_server& role) {
 }
 
 data_availability const& storage_server::availability() const {
-	return impl_->availability_;
+	return impl_->data_.availability();
 }
 
 bool storage_server::has_storage(protocol::storage_id const& sid) const {
