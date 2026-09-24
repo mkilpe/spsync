@@ -56,6 +56,11 @@ public:
 
 	void set_manifest(std::uint64_t local_id, data_manifest const&);
 	std::optional<data_manifest> manifest(std::uint64_t local_id) const;
+	bool has_manifest(std::uint64_t local_id) const;
+
+	/// one digest of the manifest, read on its own: what a chunk on its way is checked
+	/// against (a manifest may name max_data_chunks digests - it is not decoded per chunk)
+	std::optional<octet_vector> chunk_digest(std::uint64_t local_id, std::uint64_t chunk_no) const;
 
 	/**
 	 * The members-only half of the descriptor, once a record was read that carries it
@@ -72,6 +77,9 @@ public:
 
 	/// a transaction over the connection, for writes that belong together
 	database::transaction transaction();
+
+private:
+	void migrate_manifests();
 
 private:
 	database::connection_ptr db_;

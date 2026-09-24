@@ -4,6 +4,7 @@
 
 #include <securepath/serialisation/vector.hpp>
 
+#include <optional>
 #include <vector>
 
 namespace securepath::sync {
@@ -21,6 +22,13 @@ struct data_manifest {
 
 	/// true when the encrypted chunk is the one the manifest names at that position
 	bool verify_chunk(std::uint64_t chunk_no, octet_span encrypted) const;
+
+	/// the digests as one blob, in order: what a store keeps, so that one digest can be
+	/// read without the whole manifest (each crypto::hash_digest_size() octets)
+	octet_vector octets() const;
+
+	/// the manifest of such a blob; nullopt when it is not one
+	static std::optional<data_manifest> from_octets(octet_span);
 
 	bool operator==(data_manifest const&) const = default;
 

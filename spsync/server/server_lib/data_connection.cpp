@@ -1,6 +1,8 @@
 #include "data_connection.hpp"
 #include "guarded.hpp"
 
+#include <algorithm>
+
 #include <spsync/core/sync_mode.hpp>
 #include <spsync/protocol/error.hpp>
 
@@ -10,9 +12,34 @@
 
 namespace securepath::sync {
 
-data_connection::data_connection(data_server_context& c)
+data_connection::data_connection(data_server_context& c, data_connection_limits limits)
 : context_(c)
+, limits_(limits)
 {
+}
+
+void data_connection::trim_idle(time_point now) {
+	auto const idle = [&](auto const& transfer) { return transfer.second.last_used + limits_.transfer_idle_limit < now; };
+	std::erase_if(uploads_, idle);
+	std::erase_if(downloads_, idle);
+}
+
+template<typename Transfer>
+void data_connection::make_room(std::map<upload_key, Transfer>& transfers) {
+	if(transfers.size() >= limits_.max_transfers && !transfers.empty()) {
+		auto const oldest = std::ranges::min_element(transfers, {}, [](auto const& t) { return t.second.last_used; });
+		transfers.erase(oldest);
+	}
+}
+
+std::uint64_t data_connection::staged_bytes() const {
+	std::uint64_t ret = 0;
+	for(auto const& [key, up] : uploads_) {
+		for(auto const& [chunk_no, incoming] : up.incoming) {
+			ret += incoming.expected_size();
+		}
+	}
+	return ret;
 }
 
 template<typename T>
@@ -63,6 +90,7 @@ void data_connection::handle(protocol::upload_data_manifest const& p) {
 	auto const& sid = p.ticket.storage_id();
 	auto const& id = p.ticket.data();
 	LOG_TRACE("upload_data_manifest of user {} [sid={}, data_id={}]", id_, to_hex(sid), to_hex(id));
+	trim_idle(context_.now());
 	auto const have = guarded("opening an upload", sid, [&]() -> util::result<have_bitmap> {
 		if(auto const refused = check_ticket(p.ticket, data_right::upload)) {
 			return refused;
@@ -72,7 +100,8 @@ void data_connection::handle(protocol::upload_data_manifest const& p) {
 		if(opened) {
 			// a manifest again starts the upload over on this connection: partial chunks go
 			uploads_.erase(upload_key{sid, id});
-			uploads_[upload_key{sid, id}].store = std::move(store);
+			make_room(uploads_);
+			uploads_[upload_key{sid, id}] = upload{std::move(store), {}, context_.now()};
 		}
 		return opened;
 	});
@@ -88,13 +117,17 @@ void data_connection::handle(protocol::upload_data_manifest const& p) {
  */
 util::result<bool> data_connection::take_piece(upload& up, protocol::upload_data_chunk const& p) {
 	util::result<bool> ret{make_error(protocol::errc::invalid_data_chunk)};
+	up.last_used = context_.now();
 	if(p.offset == 0) {
 		up.incoming.erase(p.chunk_no);
 		if(up.incoming.size() < max_incoming_chunks) {
 			auto begun = up.store->begin_chunk(p.data_id, p.chunk_no, context_.now());
-			if(begun) {
+			// a chunk on its way takes its whole size on disk once it is in: bounded over
+			// every upload of the connection, in octets; one over the limit is not begun
+			bool const room = begun && staged_bytes() + begun.value().expected_size() <= limits_.max_staged_bytes;
+			if(room) {
 				up.incoming.emplace(p.chunk_no, std::move(begun.value()));
-			} else {
+			} else if(!begun) {
 				ret = begun.get_error();
 			}
 		}
@@ -115,6 +148,7 @@ util::result<bool> data_connection::take_piece(upload& up, protocol::upload_data
 }
 
 void data_connection::handle(protocol::upload_data_chunk const& p) {
+	trim_idle(context_.now());
 	auto const complete = guarded("storing a chunk", p.sid, [&]() -> util::result<bool> {
 		auto it = uploads_.find(upload_key{p.sid, p.data_id});
 		if(it == uploads_.end()) {
@@ -136,6 +170,7 @@ void data_connection::handle(protocol::download_data_open const& p) {
 	auto const& sid = p.ticket.storage_id();
 	auto const& id = p.ticket.data();
 	LOG_TRACE("download_data_open of user {} [sid={}, data_id={}]", id_, to_hex(sid), to_hex(id));
+	trim_idle(context_.now());
 	auto served = guarded("opening a download", sid, [&]() -> util::result<served_data> {
 		if(auto const refused = check_download_ticket(p.ticket)) {
 			return refused;
@@ -143,7 +178,9 @@ void data_connection::handle(protocol::download_data_open const& p) {
 		auto store = context_.acquire_store(sid);
 		auto opened = store->open_download(p.ticket.descriptor());
 		if(opened) {
-			downloads_[upload_key{sid, id}] = download{std::move(store), p.ticket.right() != data_right::replicate};
+			downloads_.erase(upload_key{sid, id});
+			make_room(downloads_);
+			downloads_[upload_key{sid, id}] = download{std::move(store), p.ticket.right() != data_right::replicate, context_.now()};
 		}
 		return opened;
 	});
@@ -153,12 +190,14 @@ void data_connection::handle(protocol::download_data_open const& p) {
 
 void data_connection::handle(protocol::download_data_piece const& p) {
 	std::uint32_t retry_after = 0;
+	trim_idle(context_.now());
 	auto piece = guarded("serving a piece", p.sid, [&]() -> util::result<octet_vector> {
 		auto it = downloads_.find(upload_key{p.sid, p.data_id});
 		if(it == downloads_.end()) {
 			return make_error(protocol::errc::data_not_held);
 		}
-		auto const& [store, charged] = it->second;
+		it->second.last_used = context_.now();
+		auto const& [store, charged, last_used] = it->second;
 		auto served = store->serve_piece(p.data_id, p.chunk_no, p.offset, p.size, context_.now(), charged);
 		if(served.get_error().code() == make_error_code(protocol::errc::data_transfer_quota_exceeded)) {
 			retry_after = store->retry_after(context_.now());

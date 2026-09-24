@@ -58,6 +58,9 @@ public:
 	/// octets so far: the offset the next piece must have
 	std::uint64_t received() const { return received_; }
 
+	/// octets of the whole chunk: what its staged file takes when it is in
+	std::uint64_t expected_size() const { return expected_size_; }
+
 	/// every octet of the chunk arrived
 	bool complete() const { return received_ == expected_size_; }
 
@@ -188,6 +191,8 @@ public:
 	std::optional<data_state_row> register_data(data_descriptor const&);
 
 	std::optional<data_manifest> manifest(data_id const&) const;
+	/// the manifest is known: what an upload needs before its chunks; cheaper than the manifest
+	bool has_manifest(data_id const&) const;
 
 	/**
 	 * Keep a received chunk: it must be the one the manifest names, so the manifest

@@ -21,17 +21,18 @@ comm::comm(network_connection_impl* nc_impl, storage_id sid, record_storage& s, 
 		download_channel = download_channel ? download_channel : own_channel_.get();
 	}
 	if(data) {
+		// the transfers run their rounds on the io context, not on whoever queued a data
+		auto& io = nc_impl_->context().io_context();
 		uploader_ = std::make_unique<data_uploader>(*data, *channel, data_upload_config{}
 			, [this](data_id const& id, std::optional<error> err) { on_upload_done(id, std::move(err)); }
 			, [this](data_id const& id, std::uint64_t transferred, std::uint64_t total) {
 				progress_.emit<progress_events::on_data_progress>(id, transferred, total, true);
-			});
+			}, &io);
 		downloader_ = std::make_unique<data_downloader>(*data, *download_channel, data_download_config{}
 			, [this](data_id const& id, std::optional<error> err) { on_download_done(id, std::move(err)); }
 			, [this](data_id const& id, std::uint64_t transferred, std::uint64_t total) {
 				progress_.emit<progress_events::on_data_progress>(id, transferred, total, false);
-			});
-		auto& io = nc_impl_->context().io_context();
+			}, &io);
 		upload_retry_ = std::make_unique<transfer_retry>(io, transfer_retry_config{}, [this](data_id const& id) { uploader_->enqueue(id); });
 		download_retry_ = std::make_unique<transfer_retry>(io, transfer_retry_config{}, [this](data_id const& id) { downloader_->enqueue(id); });
 	}
@@ -54,11 +55,19 @@ void comm::set_output(event_system::event_handler& handler) {
 
 void comm::on_connected() {
 	assert(output_);
+	{
+		std::unique_lock lock{upload_mutex_};
+		connected_ = true;
+	}
 	output_->emit<comm_events::on_connected>();
 }
 
 void comm::on_disconnected(error const& err) {
 	assert(output_);
+	{
+		std::unique_lock lock{upload_mutex_};
+		connected_ = false;
+	}
 	if(uploader_) {
 		// what the server got stays there, what arrived here too; the engine asks again
 		// after the reconnect
@@ -164,8 +173,14 @@ ticket_source comm::tickets() {
 	return [this](data_descriptor const& d, data_right right, std::move_only_function<void(util::result<data_grant>)> cb) {
 		// registered before the request leaves: the answer may be quicker than this thread
 		std::unique_lock lock{upload_mutex_};
-		auto const handle = nc_impl_->request_data_ticket(sid_, d.manifest_digest, right);
-		ticket_requests_.emplace(handle, std::move(cb));
+		if(!connected_) {
+			// a request would go into a connection that is not there: answered here
+			lock.unlock();
+			cb(util::result<data_grant>{make_error(securepath::errc::invalid_state, "not connected to the record server")});
+		} else {
+			auto const handle = nc_impl_->request_data_ticket(sid_, d.manifest_digest, right);
+			ticket_requests_.emplace(handle, std::move(cb));
+		}
 	};
 }
 
@@ -254,7 +269,14 @@ request_handle comm::upload_data(data_id const& id) {
  * hears of it when it ends for good. Whatever wait was running for the data is over.
  */
 bool comm::retried(transfer_retry* retry, data_id const& id, std::optional<error> const& err) {
-	bool const again = retry && err && retryable_transfer_error(*err);
+	bool connected{};
+	{
+		std::unique_lock lock{upload_mutex_};
+		connected = connected_;
+	}
+	// a transfer that ended after the connection went is over: the engine queues it
+	// again after the reconnect, a retry would only ask for a ticket nobody answers
+	bool const again = connected && retry && err && retryable_transfer_error(*err);
 	if(again) {
 		retry->schedule(id, protocol::retry_after(*err));
 	} else if(retry) {

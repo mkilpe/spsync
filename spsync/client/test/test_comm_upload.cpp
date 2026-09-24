@@ -2,6 +2,7 @@
 #include <securepath/test_frame/test_utils.hpp>
 
 #include <spsync/comm/data_channel.hpp>
+#include <spsync/comm/comm.hpp>
 #include <spsync/comm/net_connection.hpp>
 #include <spsync/core/data/record_data_store.hpp>
 #include <spsync/core/progress.hpp>
@@ -131,6 +132,13 @@ struct null_handler : event_system::event_handler {
 	void handle_event(std::unique_ptr<event_system::event_base>) override {}
 };
 
+/// the storage connection as after the server's hello: comm asks for tickets and tries
+/// transfers again only while it believes it is connected (review O2) - there is no server
+/// here, the fake channels answer everything
+void pretend_connected(storage_connection& sconn) {
+	dynamic_cast<comm&>(sconn.input()).on_connected();
+}
+
 data_descriptor create_data(record_data_store& store, std::size_t size) {
 	encryption_key const key{sequence_number{1}, securepath::test::random_octet_vector(crypto::aes_gcm_key_size())};
 	auto writer = store.create(key, 1000);
@@ -190,12 +198,16 @@ TEST_CASE("comm upload data", "[unit]") {
 
 	SECTION("the real channel is made when none is given") {
 		// (RDS 5) its tickets come over the record connection: not connected here, so the
-		// request waits - and is answered when the storage connection goes away
+		// request is answered at once - a request into a connection that is not there
+		// would be lost with it (review O2) - and nothing is tried again while disconnected
 		auto sconn = net.create_storage_connection(octet_vector(16, 2), storage, progress, {}, &store);
 		sconn.attach(output);
-		sconn.input().upload_data(data.manifest_digest);
-		std::this_thread::sleep_for(200ms);
-		CHECK(output.answered == 0);
+		auto const h = sconn.input().upload_data(data.manifest_digest);
+		WAIT_CHECK(output.answered == 1, 2s);
+		REQUIRE(output.answers.size() == 1);
+		CHECK(output.answers[0].first == h);
+		REQUIRE(output.answers[0].second);
+		CHECK(output.answers[0].second->code() == make_error_code(securepath::errc::invalid_state));
 		CHECK(channel.chunks == 0);
 		net.detach(octet_vector(16, 2));
 	}
@@ -226,6 +238,7 @@ TEST_CASE("comm retries transfers", "[unit]") {
 		flaky_channel channel;
 		auto sconn = net.create_storage_connection(sid, storage, progress, {}, &store, &channel);
 		sconn.attach(output);
+		pretend_connected(sconn);
 		auto const h = sconn.input().upload_data(data.manifest_digest);
 
 		// nothing is reported while it is tried again...
@@ -249,6 +262,7 @@ TEST_CASE("comm retries transfers", "[unit]") {
 		channel.failure = make_error(protocol::errc::invalid_data_ticket);
 		auto sconn = net.create_storage_connection(sid, storage, progress, {}, &store, &channel);
 		sconn.attach(output);
+		pretend_connected(sconn);
 		sconn.input().upload_data(data.manifest_digest);
 		WAIT_CHECK(output.answered == 1, 2s);
 		REQUIRE(output.answers.size() == 1);
@@ -272,6 +286,7 @@ TEST_CASE("comm retries transfers", "[unit]") {
 		quota_holder holder{origin};
 		auto sconn = net.create_storage_connection(sid, storage, progress, {}, &store, &upload_channel, &holder);
 		sconn.attach(output);
+		pretend_connected(sconn);
 		auto const started = std::chrono::steady_clock::now();
 		auto const h = sconn.input().fetch_data(data.descriptor.manifest_digest);
 
@@ -292,6 +307,7 @@ TEST_CASE("comm retries transfers", "[unit]") {
 		channel.failures = 100;
 		auto sconn = net.create_storage_connection(sid, storage, progress, {}, &store, &channel);
 		sconn.attach(output);
+		pretend_connected(sconn);
 		sconn.input().upload_data(data.manifest_digest);
 		WAIT_CHECK(channel.opens == 1, 2s);
 		net.detach(sid);

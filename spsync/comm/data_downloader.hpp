@@ -5,6 +5,8 @@
 
 #include <spsync/core/data/record_data_store.hpp>
 
+#include <asio/io_context.hpp>
+
 #include <functional>
 #include <memory>
 #include <optional>
@@ -26,7 +28,10 @@ using data_download_config = transfer_config;
  * the holder lacked chunks (the upload is still in progress: remote_not_complete), else
  * with what stopped it. The store flips the data to in_sync itself with the last chunk.
  *
- * Thread safe; the channel and the callbacks are called without the lock (action_pump).
+ * Thread safe; the channel and the callbacks are called without the lock (action_pump),
+ * the store - the staged files a chunk arrives into - under it, from the thread that
+ * delivers the piece. reset() as for data_uploader: what came is kept chunk by chunk, a
+ * done collected before the reset may still be made after it.
  */
 class data_downloader {
 public:
@@ -35,7 +40,8 @@ public:
 	/// encrypted octets held here, of the data's enc_size
 	using progress_callback = transfer_progress_callback;
 
-	data_downloader(record_data_store&, data_download_channel&, data_download_config, done_callback, progress_callback = {});
+	/// with an io context the transfers run on it (transfer_queue.hpp); without one on the caller
+	data_downloader(record_data_store&, data_download_channel&, data_download_config, done_callback, progress_callback = {}, asio::io_context* = nullptr);
 	~data_downloader();
 
 	/// queue a data a stored record names; false when it is already queued or on its way

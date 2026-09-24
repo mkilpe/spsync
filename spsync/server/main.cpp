@@ -42,6 +42,7 @@ struct spsync_server_commands : sync::spsync_server_params, command_parser {
 			, "newest data versions of an object that keep their data at a history cut, new storages (4294967295 = all)");
 		add(storage_params.data_servers, "data_servers", "", "data-role servers of the storages as host:port/keyid-hex[/region]; an all-in-one server lists itself");
 		add(ticket_validity, "ticket_validity", "", "seconds an issued data ticket is valid");
+		add(data_params.max_sessions_per_key, "max_sessions_per_key", "", "data connections one client key may have open at once");
 		add(storage_params.data_copies, "data_copies", "", "data servers that are to hold a copy of every data (1 = no replication among data servers)");
 		add(data_replication_interval, "data_replication_interval", "", "seconds between the sweeps that look for missing data copies");
 		add(data_params.enabled, "data_role", "", "serve record data: run the data listener");

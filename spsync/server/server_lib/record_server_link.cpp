@@ -6,16 +6,19 @@
 
 namespace securepath::sync {
 
-record_server_link::record_server_link(network::context& context, peer_config record_server, crypto::public_key_id own_id, hooks h)
+record_server_link::record_server_link(network::context& context, peer_config record_server, crypto::public_key_id own_id, hooks h
+	, std::chrono::seconds silence_limit)
 : encrypted_connection(context)
 , record_server_(std::move(record_server))
 , own_id_(std::move(own_id))
 , hooks_(std::move(h))
+, silence_limit_(silence_limit)
+, silence_(context.io_context())
 {
 }
 
 record_server_link::~record_server_link() {
-	encrypted_connection::close();
+	close();
 	// close() tells nobody: whoever still waits for a ticket is answered here
 	fail_requests(make_error(securepath::errc::invalid_state, "the link to the record server is gone"));
 }
@@ -23,6 +26,51 @@ record_server_link::~record_server_link() {
 void record_server_link::start(std::chrono::seconds timeout) {
 	LOG_INFO("connecting to record server {}", record_server_);
 	connect(record_server_.host, record_server_.port, timeout);
+	watch();
+}
+
+void record_server_link::close() {
+	{
+		std::unique_lock lock{mutex_};
+		silence_.cancel();
+	}
+	encrypted_connection::close();
+}
+
+void record_server_link::watch() {
+	std::unique_lock lock{mutex_};
+	silence_.expires_after(std::chrono::duration_cast<std::chrono::milliseconds>(silence_limit_) / 2);
+	silence_.async_wait([weak = weak_from_this()](std::error_code const& ec) {
+		auto self = weak.lock();
+		if(self && !ec) {
+			self->post_on_strand([self] {
+				if(self->check_overdue()) {
+					self->watch();
+				}
+			});
+		}
+	});
+}
+
+bool record_server_link::check_overdue() {
+	std::vector<ticket_callback> overdue;
+	bool ready{};
+	{
+		std::unique_lock lock{mutex_};
+		ready = ready_;
+		overdue = requests_.take_older_than(silence_limit_);
+	}
+	auto const err = make_error(securepath::errc::timeout, "the record server did not answer a ticket request");
+	for(auto& answer : overdue) {
+		answer(err);
+	}
+	if(!overdue.empty()) {
+		// a record server that does not answer is one to connect to anew
+		LOG_WARN("record server {} did not answer {} ticket requests in time, link given up", record_server_, overdue.size());
+		encrypted_connection::close();
+		on_disconnected(err);
+	}
+	return overdue.empty() && ready;
 }
 
 bool record_server_link::ready() const {
@@ -46,7 +94,7 @@ void record_server_link::request_ticket(protocol::storage_id const& sid, data_id
 		std::unique_lock lock{mutex_};
 		if(ready_) {
 			cid = next_call_++;
-			requests_.emplace(cid, std::move(answer));
+			requests_.add(cid, std::move(answer));
 		}
 	}
 	if(cid != 0) {
@@ -57,12 +105,12 @@ void record_server_link::request_ticket(protocol::storage_id const& sid, data_id
 }
 
 void record_server_link::fail_requests(securepath::error const& err) {
-	std::map<protocol::call_id, ticket_callback> requests;
+	std::vector<ticket_callback> requests;
 	{
 		std::unique_lock lock{mutex_};
-		requests.swap(requests_);
+		requests = requests_.take_all();
 	}
-	for(auto& [cid, answer] : requests) {
+	for(auto& answer : requests) {
 		answer(err);
 	}
 }
@@ -137,19 +185,15 @@ void record_server_link::operator()(protocol::replicate_data const& p) {
 }
 
 void record_server_link::operator()(protocol::response_replica_ticket const& p) {
-	ticket_callback answer;
+	std::optional<ticket_callback> answer;
 	{
 		std::unique_lock lock{mutex_};
-		auto it = requests_.find(p.cid);
-		if(it != requests_.end()) {
-			answer = std::move(it->second);
-			requests_.erase(it);
-		}
+		answer = requests_.take(p.cid);
 	}
 	if(answer && p.error) {
-		answer(protocol::to_error(p.error));
+		(*answer)(protocol::to_error(p.error));
 	} else if(answer) {
-		answer(data_grant{p.ticket, p.holders});
+		(*answer)(data_grant{p.ticket, p.holders});
 	}
 }
 

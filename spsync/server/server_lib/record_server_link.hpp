@@ -10,6 +10,9 @@
 #include <securepath/serialisation/util.hpp>
 
 #include <spsync/comm/net_data_channel.hpp>
+#include <spsync/comm/pending_calls.hpp>
+
+#include <asio/steady_timer.hpp>
 
 #include <functional>
 #include <map>
@@ -27,7 +30,7 @@ namespace securepath::sync {
  * against the root: handing it to the trust function is how a separate data server
  * learns the keys its tickets are signed with.
  */
-class record_server_link : public network::encrypted_connection {
+class record_server_link : public network::encrypted_connection, public std::enable_shared_from_this<record_server_link> {
 public:
 	struct hooks {
 		/// the announcements of everything held, for a link that just came up
@@ -44,10 +47,14 @@ public:
 		std::function<void()> connected;
 	};
 
-	record_server_link(network::context&, peer_config record_server, crypto::public_key_id own_id, hooks);
+	/// silence_limit: how long the record server may take to answer a ticket request
+	/// before the request fails and the link is given up (reconnected by the owner)
+	record_server_link(network::context&, peer_config record_server, crypto::public_key_id own_id, hooks
+		, std::chrono::seconds silence_limit = std::chrono::seconds{60});
 	~record_server_link();
 
 	void start(std::chrono::seconds timeout);
+	void close() override;
 
 	/// send when the link is up; dropped otherwise (the whole view follows the next connect)
 	void announce(protocol::announce_data const&);
@@ -83,6 +90,10 @@ private:
 	void send_packet(auto const& packet);
 	/// answer the ticket requests still out: the link is gone
 	void fail_requests(securepath::error const&);
+	/// look every half limit whether a request is overdue, on the strand
+	void watch();
+	/// an overdue request fails and the link is given up; true while it goes on
+	bool check_overdue();
 
 private:
 	peer_config const record_server_;
@@ -92,10 +103,13 @@ private:
 	// role yet may send it: taken and dropped rather than refused
 	serialisation::packet_deserialiser<protocol::s2s_types> deser_{network::max_frame_size};
 
+	std::chrono::seconds const silence_limit_;
+
 	mutable std::mutex mutex_;
 	bool ready_{};
 	protocol::call_id next_call_{1};
-	std::map<protocol::call_id, ticket_callback> requests_;
+	pending_calls<protocol::call_id, ticket_callback> requests_;
+	asio::steady_timer silence_;
 };
 
 }

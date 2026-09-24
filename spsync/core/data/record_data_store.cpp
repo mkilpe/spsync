@@ -677,11 +677,18 @@ bool record_data_store::store_chunk(data_id const& id, std::uint64_t chunk_no, o
 std::optional<incoming_chunk> record_data_store::begin_chunk(data_id const& id, std::uint64_t chunk_no) {
 	std::optional<incoming_chunk> ret;
 	auto const row = impl_->table.find(id);
-	auto const known = manifest(id);
-	if(row && known && chunk_no < known->chunk_digests.size() && chunk_no < row->descriptor.chunk_count()) {
-		ret.emplace(impl_, id, chunk_no, row->descriptor.chunk_enc_size(chunk_no), known->chunk_digests[chunk_no]);
+	// the one digest of the manifest this chunk is checked against: the whole manifest
+	// may name max_data_chunks of them, it is not decoded per chunk
+	auto const digest = row && chunk_no < row->descriptor.chunk_count() ? impl_->table.chunk_digest(row->local_id, chunk_no) : std::nullopt;
+	if(digest) {
+		ret.emplace(impl_, id, chunk_no, row->descriptor.chunk_enc_size(chunk_no), *digest);
 	}
 	return ret;
+}
+
+bool record_data_store::has_manifest(data_id const& id) const {
+	auto const row = impl_->table.find(id);
+	return row && impl_->table.has_manifest(row->local_id);
 }
 
 std::optional<octet_vector> record_data_store::read_chunk(data_id const& id, std::uint64_t chunk_no) const {

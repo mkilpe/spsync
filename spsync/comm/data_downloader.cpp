@@ -19,8 +19,8 @@ struct download : transfer_state {
 class data_downloader::impl : public transfer_queue<download> {
 public:
 	impl(record_data_store& store, data_download_channel& channel, transfer_config config
-		, done_callback done, progress_callback progress)
-	: transfer_queue("download", store, config, std::move(done), std::move(progress))
+		, done_callback done, progress_callback progress, asio::io_context* io)
+	: transfer_queue("download", store, config, std::move(done), std::move(progress), io)
 	, channel_(channel)
 	{}
 
@@ -154,13 +154,13 @@ private:
 };
 
 data_downloader::data_downloader(record_data_store& store, data_download_channel& channel, transfer_config config
-	, done_callback done, progress_callback progress)
-: impl_(std::make_shared<impl>(store, channel, config, std::move(done), std::move(progress)))
+	, done_callback done, progress_callback progress, asio::io_context* io)
+: impl_(std::make_shared<impl>(store, channel, config, std::move(done), std::move(progress), io))
 {
 }
 
 data_downloader::~data_downloader() {
-	impl_->reset();
+	impl_->close();
 }
 
 bool data_downloader::enqueue(data_id const& id) {

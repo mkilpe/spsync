@@ -89,6 +89,9 @@ private:
 
 	record_data_store* const data_{};
 	std::mutex upload_mutex_;
+	/// the record connection is up: tickets can be asked, a transfer that ended may be
+	/// tried again. Without it a done that came late or a retry that fired late does nothing
+	bool connected_{};
 	/// the request handles of the uploads and downloads on their way
 	transfers uploads_;
 	transfers downloads_;

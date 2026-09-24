@@ -85,17 +85,18 @@ storage_connection network_connection::create_storage_connection(storage_id id, 
 }
 
 void network_connection::detach(storage_id const& id) {
-	std::unique_lock lock{impl_->mutex};
+	// taken out under the lock, destroyed without it: the comm's destructor closes data
+	// connections and answers what is out, which must not wait for an io thread that is
+	// waiting for this lock
+	std::unique_ptr<comm> attached;
+	std::unique_ptr<comm> waiting;
 	{
-		auto it = impl_->attached_comms.find(id);
-		if(it != impl_->attached_comms.end()) {
-			impl_->attached_comms.erase(id);
+		std::unique_lock lock{impl_->mutex};
+		if(auto node = impl_->attached_comms.extract(id)) {
+			attached = std::move(node.mapped());
 		}
-	}
-	{
-		auto it = impl_->comms.find(id);
-		if(it != impl_->comms.end()) {
-			impl_->comms.erase(id);
+		if(auto node = impl_->comms.extract(id)) {
+			waiting = std::move(node.mapped());
 		}
 	}
 }

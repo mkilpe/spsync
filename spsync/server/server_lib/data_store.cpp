@@ -82,8 +82,13 @@ util::result<bool> server_data_store::store_chunk(data_id const& id, std::uint64
 
 util::result<incoming_chunk> server_data_store::begin_chunk(data_id const& id, std::uint64_t chunk_no, time_point now) {
 	// an incoming chunk moves but is not assigned: every outcome is returned where it is known
-	if(!store_.manifest(id)) {
+	if(!store_.has_manifest(id)) {
 		return make_error(protocol::errc::no_such_upload);
+	}
+	auto const row = store_.find(id);
+	if(row && row->have.test(chunk_no)) {
+		// held already: nothing to stage for it, whatever a stale sender thinks
+		return make_error(protocol::errc::invalid_data_chunk);
 	}
 	auto incoming = store_.begin_chunk(id, chunk_no);
 	if(!incoming) {

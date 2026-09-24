@@ -13,7 +13,8 @@ namespace securepath::sync {
 class data_replicator::impl : public std::enable_shared_from_this<impl> {
 public:
 	impl(network::context& context, data_replicator_hooks hooks, data_download_config config, std::chrono::seconds timeout)
-	: hooks_(std::move(hooks))
+	: io_(context.io_context())
+	, hooks_(std::move(hooks))
 	, config_(config)
 	, channel_(context, [this](data_descriptor const& d, data_right, std::move_only_function<void(util::result<data_grant>)> answer) {
 			ask_ticket(d, std::move(answer));
@@ -71,7 +72,7 @@ private:
 					if(auto self = weak.lock()) {
 						self->on_done(sid, id, err);
 					}
-				});
+				}, data_downloader::progress_callback{}, &io_);
 			lock.lock();
 			// two callers may have met here: the first one's stays
 			it = storages_.try_emplace(sid, std::move(pulls)).first;
@@ -149,6 +150,7 @@ private:
 		data_descriptor descriptor;
 	};
 
+	asio::io_context& io_;
 	data_replicator_hooks const hooks_;
 	data_download_config const config_;
 

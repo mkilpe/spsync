@@ -38,6 +38,7 @@ public:
 		, network::handshake_data hdata, data_server_context& context)
 	: data_connection(context)
 	, encrypted_connection(c, std::move(hdata), server)
+	, context_(context)
 	{}
 
 	~data_server_client() {
@@ -67,6 +68,9 @@ public:
 
 	void on_disconnected(securepath::error const& error) override {
 		LOG_TRACE("data client disconnected ({}): {}", remote_key_id().value_or(crypto::public_key_id{}), error);
+		if(std::exchange(admitted_, false)) {
+			context_.leave(*remote_key_id());
+		}
 	}
 
 	void on_received(octet_span s) override {
@@ -83,12 +87,17 @@ public:
 
 	void operator()(protocol::data_hello const& p) {
 		auto const key_id = remote_key_id();
-		auto const err = (key_id && !connection_good_) ? data_connection::on_connect(p, *key_id)
+		auto err = (key_id && !connection_good_) ? data_connection::on_connect(p, *key_id)
 			: make_error(protocol::errc::invalid_state);
+		if(!err && !context_.admit(*key_id)) {
+			LOG_INFO("client {} has too many data connections open", *key_id);
+			err = make_error(protocol::errc::invalid_state, "too many connections");
+		}
 		if(err) {
 			LOG_INFO("data hello refused, closing connection...");
 			terminate(err);
 		} else {
+			admitted_ = true;
 			connection_good_ = true;
 		}
 	}
@@ -107,7 +116,9 @@ private:
 	// a chunk packet is up to chunk_size_range.highest and a manifest up to max_data_chunks digests:
 	// the transport frame is the bound, not the deserialiser's 1 MiB default
 	serialisation::packet_deserialiser<protocol::c2d_types> deser_{network::max_frame_size};
+	data_server_context& context_;
 	bool connection_good_{};
+	bool admitted_{};
 };
 
 }
@@ -442,6 +453,24 @@ public:
 		return clock_type::now();
 	}
 
+	bool admit(crypto::public_key_id const& key) override {
+		std::unique_lock lock{mutex_};
+		auto& sessions = sessions_[key];
+		bool const room = sessions < params_.max_sessions_per_key;
+		if(room) {
+			++sessions;
+		}
+		return room;
+	}
+
+	void leave(crypto::public_key_id const& key) override {
+		std::unique_lock lock{mutex_};
+		auto it = sessions_.find(key);
+		if(it != sessions_.end() && --it->second == 0) {
+			sessions_.erase(it);
+		}
+	}
+
 	// -- expiry of incomplete uploads --
 
 	std::size_t expire_incomplete() {
@@ -604,6 +633,8 @@ public:
 	network::context& context_;
 	network::handshake_data handshake_data_;
 	std::map<protocol::storage_id, std::shared_ptr<server_data_store>> stores_;
+	/// connections open per client key
+	std::map<crypto::public_key_id, std::size_t> sessions_;
 	std::set<crypto::public_key_id> issuers_;
 	crypto::public_key_id own_id_;
 	std::vector<std::shared_ptr<link_state>> links_;

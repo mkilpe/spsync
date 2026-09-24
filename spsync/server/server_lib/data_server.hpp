@@ -60,6 +60,10 @@ struct data_server_params {
 	/// the pulls of copies this server is to hold (RD13 replication): queue sizes as for a client
 	data_download_config replication;
 
+	/// connections one client key may have open at once: a client keeps one per storage
+	/// and data server, a data server one per source
+	std::size_t max_sessions_per_key{64};
+
 	/// an upload nothing touched for this long is dropped and its reservation freed
 	std::chrono::seconds incomplete_upload_expiry{24h};
 

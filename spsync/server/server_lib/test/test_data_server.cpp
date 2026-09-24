@@ -34,7 +34,7 @@ std::filesystem::path const reader_root = "data_server_test_reader";
 
 /// a data server on an ephemeral port, a record server key it trusts, one client
 struct data_server_fixture {
-	explicit data_server_fixture(transfer_quota transfer = {}) {
+	explicit data_server_fixture(transfer_quota transfer = {}, std::size_t max_sessions_per_key = 64) {
 		net.add_client(2);
 		net.add_client_keys_for_server();
 		net.server_context().public_keys().insert(record_server.public_key());
@@ -46,6 +46,7 @@ struct data_server_fixture {
 		// trusted for its tickets; there is no record server to keep a link to here
 		params.record_servers = {peer_config{"", 0, record_server.id()}};
 		params.transfer = transfer;
+		params.max_sessions_per_key = max_sessions_per_key;
 		server = std::make_unique<data_server>(net.server_context(), params);
 		server->set_complete_handler([this](protocol::storage_id const&, data_id const& id) {
 			std::unique_lock lock{mutex};
@@ -212,6 +213,87 @@ TEST_CASE("data channel close does not fail over", "[unit]") {
 	std::this_thread::sleep_for(500ms);
 	CHECK(!f.server->find(f.sid, data.manifest_digest));
 	silent.close();
+}
+
+// (review O1) a holder that says nothing ends the transfer: given up after the silence
+// limit as a holder that is down, so the next one gets it; a record server that does not
+// answer a ticket request ends it with a timeout
+TEST_CASE("data channel gives a silent holder up", "[unit]") {
+	data_server_fixture f;
+	auto const data = f.create_data(3000);
+
+	// a holder that takes the connection and never says a word
+	asio::ip::tcp::acceptor silent{f.net.client_context(0).io_context(), asio::ip::tcp::endpoint{asio::ip::address_v4::loopback(), 0}};
+	std::vector<asio::ip::tcp::socket> taken;
+	std::function<void()> accept = [&] {
+		silent.async_accept([&](std::error_code const& ec, asio::ip::tcp::socket socket) {
+			if(!ec) {
+				taken.push_back(std::move(socket));
+				accept();
+			}
+		});
+	};
+	accept();
+	data_endpoint const mute{"127.0.0.1", silent.local_endpoint().port(), f.endpoint().key, {}};
+
+	SECTION("the next holder gets the upload") {
+		net_data_channel channel{f.net.client_context(0), f.tickets({mute, f.endpoint()}), 10s, 1s};
+		upload_log log;
+		data_uploader uploader{f.store, channel, data_upload_config{}, log.done()};
+		auto const started = std::chrono::steady_clock::now();
+		REQUIRE(uploader.enqueue(data.manifest_digest));
+		WAIT_REQUIRE(log.count == 1, 10s);
+		CHECK(!log.finished.back().second);
+		CHECK(std::chrono::steady_clock::now() - started >= 900ms);
+		WAIT_CHECK(f.completed_count() == 1, 2s);
+	}
+
+	SECTION("a ticket nobody answers") {
+		net_data_channel channel{f.net.client_context(0), [](data_descriptor const&, data_right, auto) {}, 10s, 1s};
+		upload_log log;
+		data_uploader uploader{f.store, channel, data_upload_config{}, log.done()};
+		REQUIRE(uploader.enqueue(data.manifest_digest));
+		WAIT_REQUIRE(log.count == 1, 10s);
+		REQUIRE(log.finished.back().second);
+		CHECK(log.finished.back().second->code() == make_error_code(securepath::errc::timeout));
+		CHECK(f.completed_count() == 0);
+	}
+	silent.close();
+}
+
+// (review O4) the connections one client key has open are capped: the one over the cap is
+// refused at its hello, a connection that went makes room
+TEST_CASE("data server caps the connections of a key", "[unit]") {
+	data_server_fixture f{{}, 2};
+	std::vector<data_descriptor> datas;
+	for(int i = 0; i != 4; ++i) {
+		datas.push_back(f.create_data(3000));
+	}
+
+	// declared before the uploaders that use them
+	std::vector<std::unique_ptr<net_data_channel>> channels;
+	std::vector<std::unique_ptr<upload_log>> logs;
+	std::vector<std::unique_ptr<data_uploader>> uploaders;
+	auto const upload_over_new_connection = [&](data_descriptor const& d) {
+		channels.push_back(std::make_unique<net_data_channel>(f.net.client_context(0), f.tickets({f.endpoint()})));
+		logs.push_back(std::make_unique<upload_log>());
+		uploaders.push_back(std::make_unique<data_uploader>(f.store, *channels.back(), data_upload_config{}, logs.back()->done()));
+		REQUIRE(uploaders.back()->enqueue(d.manifest_digest));
+		WAIT_REQUIRE(logs.back()->count == 1, 20s);
+		return !logs.back()->finished[0].second.has_value();
+	};
+	CHECK(upload_over_new_connection(datas[0]));
+	CHECK(upload_over_new_connection(datas[1]));
+	// the third connection of the key is refused
+	CHECK(!upload_over_new_connection(datas[2]));
+	WAIT_CHECK(f.completed_count() == 2, 2s);
+
+	// a connection that went makes room
+	uploaders[0].reset();
+	channels[0].reset();
+	std::this_thread::sleep_for(300ms);
+	CHECK(upload_over_new_connection(datas[3]));
+	WAIT_CHECK(f.completed_count() == 3, 2s);
 }
 
 // chunks of the biggest size the limits allow go through: a chunk travels in pieces, so

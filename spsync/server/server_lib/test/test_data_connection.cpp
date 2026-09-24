@@ -58,6 +58,9 @@ struct test_data_context : data_server_context {
 
 	time_point now() const override { return clock; }
 
+	bool admit(crypto::public_key_id const&) override { return true; }
+	void leave(crypto::public_key_id const&) override {}
+
 	/// a complete data in the storage's store, as an upload left it
 	void hold(protocol::storage_id const& sid, client_data const& data, std::uint64_t chunks) {
 		auto store = acquire_store(sid);
@@ -573,6 +576,108 @@ TEST_CASE("data connection serves a replica pull", "[unit]") {
 	CHECK(!member_conn.take<protocol::download_data_piece_reply>().error);
 	member_conn.handle(protocol::download_data_piece{3, sid, id, 1, 0, 1000});
 	CHECK(is_error(member_conn.take<protocol::download_data_piece_reply>().error, protocol::errc::data_transfer_quota_exceeded));
+}
+
+// (review O4/O6) what a connection keeps open is bounded: a transfer nothing moved on for
+// the idle limit goes, the least recently used goes when the cap is reached, the staged
+// pieces of every upload together stay under a limit, and a chunk that is held already
+// is not staged again
+TEST_CASE("data connection bounds what a client keeps open", "[unit]") {
+	test_data_context context;
+	auto const member = crypto::generate_private_key().id();
+	auto const sid = securepath::test::random_octet_vector(16);
+	data_connection_limits limits;
+	limits.max_transfers = 2;
+	limits.max_staged_bytes = 2500;
+	limits.transfer_idle_limit = 60s;
+	test_connection conn{context, limits};
+	REQUIRE(!conn.on_connect(protocol::data_hello{}, member));
+	conn.replies.clear();
+
+	auto const open = [&](client_data const& data, std::uint32_t cid) {
+		conn.handle(protocol::upload_data_manifest{cid, context.ticket(sid, data.descriptor, member), data.manifest});
+		return conn.take<protocol::upload_data_manifest_reply>();
+	};
+	auto const piece = [&](client_data const& data, std::uint64_t chunk_no, std::size_t from, std::size_t to) {
+		auto const& chunk = data.chunks.at(chunk_no);
+		conn.handle(protocol::upload_data_chunk{9, sid, data.descriptor.manifest_digest, chunk_no, from
+			, octet_vector(chunk.begin() + static_cast<std::ptrdiff_t>(from), chunk.begin() + static_cast<std::ptrdiff_t>(to))});
+		return conn.take<protocol::upload_data_chunk_reply>();
+	};
+	auto const staged_files = [&] {
+		std::size_t n = 0;
+		std::error_code ec;
+		for(auto const& e : std::filesystem::recursive_directory_iterator{std::filesystem::path{test_root} / to_hex(sid) / "data" / ".staging", ec}) {
+			n += e.is_regular_file() ? 1 : 0;
+		}
+		return n;
+	};
+
+	SECTION("idle transfers go, their staged pieces with them") {
+		auto const data = make_data(2500);
+		REQUIRE(!open(data, 1).error);
+		CHECK(!piece(data, 0, 0, 400).error);
+		CHECK(staged_files() == 1);
+		context.clock += 61s;
+		CHECK(is_error(piece(data, 0, 400, 1016).error, protocol::errc::no_such_upload));
+		CHECK(staged_files() == 0);
+		// opened again it is fine
+		CHECK(!open(data, 2).error);
+		CHECK(!piece(data, 0, 0, 1016).error);
+
+		// downloads alike
+		context.hold(sid, data, 3);
+		conn.handle(protocol::download_data_open{3, context.ticket(sid, data.descriptor, member, data_right::download)});
+		REQUIRE(!conn.take<protocol::download_data_open_reply>().error);
+		conn.handle(protocol::download_data_piece{4, sid, data.descriptor.manifest_digest, 0, 0, 100});
+		CHECK(!conn.take<protocol::download_data_piece_reply>().error);
+		context.clock += 61s;
+		conn.handle(protocol::download_data_piece{5, sid, data.descriptor.manifest_digest, 0, 0, 100});
+		CHECK(is_error(conn.take<protocol::download_data_piece_reply>().error, protocol::errc::data_not_held));
+	}
+
+	SECTION("the least recently used goes when the cap is reached") {
+		auto const a = make_data(2500);
+		auto const b = make_data(2500);
+		auto const c = make_data(2500);
+		REQUIRE(!open(a, 1).error);
+		context.clock += 1s;
+		REQUIRE(!open(b, 2).error);
+		context.clock += 1s;
+		// a moves on, so b is the one nothing happened to for longest
+		CHECK(!piece(a, 0, 0, 400).error);
+		context.clock += 1s;
+		REQUIRE(!open(c, 3).error);
+		CHECK(is_error(piece(b, 0, 0, 400).error, protocol::errc::no_such_upload));
+		CHECK(!piece(a, 0, 400, 1016).error);
+		CHECK(!piece(c, 0, 0, 400).error);
+	}
+
+	SECTION("the staged pieces of every upload together stay under the limit") {
+		auto const a = make_data(2500);
+		auto const b = make_data(2500);
+		REQUIRE(!open(a, 1).error);
+		REQUIRE(!open(b, 2).error);
+		// a chunk on its way takes its whole 1016 octets: two fit, a third would not
+		CHECK(!piece(a, 0, 0, 400).error);
+		CHECK(!piece(b, 0, 0, 400).error);
+		CHECK(is_error(piece(a, 1, 0, 400).error, protocol::errc::invalid_data_chunk));
+		CHECK(staged_files() == 2);
+		// a chunk that came in whole makes room
+		CHECK(!piece(a, 0, 400, 1016).error);
+		CHECK(!piece(a, 1, 0, 400).error);
+		CHECK(staged_files() == 2);
+	}
+
+	SECTION("a chunk that is held is not staged again") {
+		auto const data = make_data(2500);
+		context.hold(sid, data, 3);
+		auto const opened = open(data, 1);
+		REQUIRE(!opened.error);
+		CHECK(have_bitmap(3, opened.have).complete());
+		CHECK(is_error(piece(data, 0, 0, 400).error, protocol::errc::invalid_data_chunk));
+		CHECK(staged_files() == 0);
+	}
 }
 
 }

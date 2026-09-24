@@ -9,6 +9,11 @@
 #include <securepath/serialisation/util.hpp>
 #include <securepath/util/conversions.hpp>
 
+#include "pending_calls.hpp"
+
+#include <asio/steady_timer.hpp>
+
+#include <algorithm>
 #include <atomic>
 #include <map>
 #include <mutex>
@@ -31,12 +36,20 @@ std::string endpoint_name(data_endpoint const& e) {
 	return e.host + ":" + std::to_string(e.port) + "/" + to_hex(e.key.data());
 }
 
-/// the connection to one data server: calls answered by their reply packets, by call id
-class data_link : public network::encrypted_connection {
+/**
+ * The connection to one data server: calls answered by their reply packets, by call id.
+ * A server that says nothing for the silence limit while calls are out is given up
+ * (the calls fail as a transport failure: the next holder). Closed on its own strand,
+ * where a close is immediate - from anywhere else it would wait for the strand, which
+ * the one io thread of a small client cannot do.
+ */
+class data_link : public network::encrypted_connection, public std::enable_shared_from_this<data_link> {
 public:
-	data_link(network::context& context, data_endpoint endpoint)
+	data_link(network::context& context, data_endpoint endpoint, std::chrono::seconds silence_limit)
 	: encrypted_connection(context)
 	, endpoint_(std::move(endpoint))
+	, silence_limit_(silence_limit)
+	, silence_(context.io_context())
 	{}
 
 	~data_link() {
@@ -45,7 +58,12 @@ public:
 
 	void start(std::chrono::seconds timeout) {
 		LOG_TRACE("connecting to data server {}", endpoint_name(endpoint_));
+		{
+			std::unique_lock lock{mutex_};
+			last_received_ = std::chrono::steady_clock::now();
+		}
 		connect(endpoint_.host, endpoint_.port, timeout);
+		watch();
 	}
 
 	bool dead() const {
@@ -53,11 +71,56 @@ public:
 		return dead_;
 	}
 
-	/// the channel closes: what is out ends here - not "this holder is down, the next one"
+	/// the channel closes: what is out ends here - not "this holder is down, the next
+	/// one" - as soon as the strand gets to it
+	void close_later() {
+		post_on_strand([self = shared_from_this()] { self->shutdown(); });
+	}
+
+private:
 	void shutdown() {
+		{
+			std::unique_lock lock{mutex_};
+			silence_.cancel();
+		}
 		encrypted_connection::close();
 		fail_all(make_error(securepath::errc::invalid_state, "data channel closed"), false);
 	}
+
+	/// look every half limit whether the server went silent, on the strand
+	void watch() {
+		std::unique_lock lock{mutex_};
+		silence_.expires_after(std::chrono::duration_cast<std::chrono::milliseconds>(silence_limit_) / 2);
+		silence_.async_wait([weak = weak_from_this()](std::error_code const& ec) {
+			auto self = weak.lock();
+			if(self && !ec) {
+				self->post_on_strand([self] {
+					if(self->check_silence()) {
+						self->watch();
+					}
+				});
+			}
+		});
+	}
+
+	/// calls out and nothing received for the limit: the link is given up. True while it goes on
+	bool check_silence() {
+		bool silent{};
+		bool dead{};
+		{
+			std::unique_lock lock{mutex_};
+			dead = dead_;
+			silent = !dead_ && !calls_.empty() && std::chrono::steady_clock::now() - last_received_ >= silence_limit_;
+		}
+		if(silent) {
+			LOG_WARN("data server {} says nothing: given up with {} calls out", endpoint_name(endpoint_), calls_.size());
+			encrypted_connection::close();
+			fail_all(make_error(securepath::errc::timeout, "the data server says nothing"));
+		}
+		return !silent && !dead;
+	}
+
+public:
 
 	/**
 	 * Make a call: make(cid) is the packet, handler gets its Reply, or the error and
@@ -87,7 +150,7 @@ private:
 			lock.unlock();
 			answer(util::result<reply_packet>{err}, true);
 		} else {
-			calls_.emplace(cid, std::move(answer));
+			calls_.add(cid, std::move(answer));
 			// sent with the lock held: the pieces of a chunk must leave in the order they
 			// were posted, also while the outbox is being flushed
 			if(ready_) {
@@ -99,6 +162,7 @@ private:
 	}
 
 	void on_connected() override {
+		heard();
 		auto const remote = remote_key_id();
 		if(endpoint_.key.is_valid() && remote != endpoint_.key) {
 			LOG_WARN("data server {} authenticated with another key than the grant names", endpoint_name(endpoint_));
@@ -115,7 +179,13 @@ private:
 		fail_all(err ? err : make_error(securepath::errc::invalid_state, "data connection closed"));
 	}
 
+	void heard() {
+		std::unique_lock lock{mutex_};
+		last_received_ = std::chrono::steady_clock::now();
+	}
+
 	void on_received(octet_span s) override {
+		heard();
 		try {
 			deser_.handle(s, [this](auto const& packet) { this->handle(packet); });
 		} catch(std::exception const& ex) {
@@ -142,52 +212,48 @@ private:
 	/// every other packet is the reply to a call
 	template<typename Reply>
 	void handle(Reply const& p) {
-		auto answer = take(p.cid);
+		std::optional<pending_call> answer;
+		{
+			std::unique_lock lock{mutex_};
+			answer = calls_.take(p.cid);
+		}
 		if(answer) {
-			answer(util::result<reply_packet>{reply_packet{p}}, false);
+			(*answer)(util::result<reply_packet>{reply_packet{p}}, false);
 		}
-	}
-
-	pending_call take(protocol::call_id cid) {
-		pending_call ret;
-		std::unique_lock lock{mutex_};
-		auto it = calls_.find(cid);
-		if(it != calls_.end()) {
-			ret = std::move(it->second);
-			calls_.erase(it);
-		}
-		return ret;
 	}
 
 	/// the link is gone: every call still out gets the error, new ones too. An open that
 	/// is out may go on at the next holder when the transport failed (RD13 failover)
 	void fail_all(error const& err, bool transport_failure = true) {
-		std::map<protocol::call_id, pending_call> calls;
+		std::vector<pending_call> calls;
 		{
 			std::unique_lock lock{mutex_};
 			if(!dead_) {
 				dead_ = true;
 				failure_ = err;
 			}
-			calls.swap(calls_);
+			calls = calls_.take_all();
 			outbox_.clear();
 		}
-		for(auto& [cid, answer] : calls) {
+		for(auto& answer : calls) {
 			answer(util::result<reply_packet>{err}, transport_failure);
 		}
 	}
 
 private:
 	data_endpoint const endpoint_;
+	std::chrono::seconds const silence_limit_;
 	std::atomic<protocol::call_id> call_id_{0};
 	// a manifest reply names up to max_data_chunks digests: the transport frame is the bound
 	serialisation::packet_deserialiser<protocol::d2c_types> deser_{network::max_frame_size};
 
 	mutable std::mutex mutex_;
-	std::map<protocol::call_id, pending_call> calls_;
+	pending_calls<protocol::call_id, pending_call> calls_;
 	/// packets waiting for the hello to be answered
 	std::vector<octet_vector> outbox_;
 	error failure_;
+	std::chrono::steady_clock::time_point last_received_;
+	asio::steady_timer silence_;
 	bool ready_{};
 	bool dead_{};
 };
@@ -212,10 +278,11 @@ error channel_closed() {
 
 class net_data_channel::impl : public std::enable_shared_from_this<impl> {
 public:
-	impl(network::context& context, ticket_source tickets, std::chrono::seconds timeout)
+	impl(network::context& context, ticket_source tickets, std::chrono::seconds timeout, std::chrono::seconds silence_limit)
 	: context_(context)
 	, tickets_(std::move(tickets))
 	, timeout_(timeout)
+	, silence_limit_(silence_limit)
 	{}
 
 	void open_upload(data_descriptor const& descriptor, data_manifest const& manifest, open_callback cb) {
@@ -257,7 +324,7 @@ public:
 			downloads_.clear();
 		}
 		for(auto& [name, link] : links) {
-			link->shutdown();
+			link->close_later();
 		}
 	}
 
@@ -266,18 +333,47 @@ private:
 	struct route {
 		octet_vector sid;
 		std::shared_ptr<data_link> link;
+		std::chrono::steady_clock::time_point last_used;
 	};
 	using routes = std::map<data_id, route>;
+
+	/// routes nothing moved on for this long go, and the least recently used one when
+	/// this many are kept: a transfer that ended is not told to the channel
+	static constexpr std::chrono::minutes route_idle_limit{10};
+	static constexpr std::size_t max_routes{256};
 
 	/// one attempt to open a transfer: the grant and how far down its holder list we are
 	template<typename Result>
 	struct attempt {
+		attempt(asio::io_context& io, data_descriptor d, data_manifest m, std::move_only_function<void(util::result<Result>)> cb)
+		: descriptor(std::move(d))
+		, manifest(std::move(m))
+		, callback(std::move(cb))
+		, wait(io)
+		{}
+
+		/// the ticket is answered once: by the record server, or by the wait for it
+		/// running out. True for the caller that gets to answer
+		bool first_answer() {
+			std::unique_lock lock{mutex};
+			bool const first = !answered;
+			answered = true;
+			if(first) {
+				wait.cancel();
+			}
+			return first;
+		}
+
+	public:
 		data_descriptor descriptor;
 		/// what an upload opens with; a download opens with the ticket alone
 		data_manifest manifest;
 		data_grant grant;
 		std::move_only_function<void(util::result<Result>)> callback;
 		std::size_t holder{};
+		std::mutex mutex;
+		asio::steady_timer wait;
+		bool answered{};
 	};
 
 	/// what the opening of an upload and of a download differ in
@@ -302,11 +398,20 @@ private:
 	template<typename Result>
 	void open_transfer(opening<Result> const& how, data_descriptor const& descriptor, data_manifest const& manifest
 		, std::move_only_function<void(util::result<Result>)> cb) {
-		auto att = std::make_shared<attempt<Result>>(attempt<Result>{descriptor, manifest, {}, std::move(cb)});
+		auto att = std::make_shared<attempt<Result>>(context_.io_context(), descriptor, manifest, std::move(cb));
 		std::weak_ptr<impl> weak = shared_from_this();
+		// the record server has the silence limit to answer the ticket request
+		att->wait.expires_after(silence_limit_);
+		att->wait.async_wait([att](std::error_code const& ec) {
+			if(!ec && att->first_answer()) {
+				att->callback(util::result<Result>{make_error(securepath::errc::timeout, "no answer to the ticket request")});
+			}
+		});
 		tickets_(descriptor, how.right, [weak, att, &how](util::result<data_grant> grant) {
 			auto self = weak.lock();
-			if(!self) {
+			if(!att->first_answer()) {
+				LOG_INFO("a ticket came after the wait for it ran out, dropped");
+			} else if(!self) {
 				att->callback(util::result<Result>{channel_closed()});
 			} else if(!grant) {
 				att->callback(util::result<Result>{grant.get_error()});
@@ -343,14 +448,26 @@ private:
 	template<typename Result>
 	void remember(opening<Result> const& how, data_ticket const& ticket, std::shared_ptr<data_link> link) {
 		std::unique_lock lock{mutex_};
-		(this->*how.routes_of)[ticket.data()] = route{ticket.storage_id(), std::move(link)};
+		auto& of = this->*how.routes_of;
+		trim_routes(of);
+		of[ticket.data()] = route{ticket.storage_id(), std::move(link), std::chrono::steady_clock::now()};
 	}
 
-	std::optional<route> find_route(routes const& of, data_id const& id) {
+	/// requires the mutex: the idle routes go, and the least recently used when full
+	static void trim_routes(routes& of) {
+		auto const now = std::chrono::steady_clock::now();
+		std::erase_if(of, [&](auto const& r) { return now - r.second.last_used > route_idle_limit; });
+		if(of.size() >= max_routes) {
+			of.erase(std::ranges::min_element(of, {}, [](auto const& r) { return r.second.last_used; }));
+		}
+	}
+
+	std::optional<route> find_route(routes& of, data_id const& id) {
 		std::unique_lock lock{mutex_};
 		std::optional<route> ret;
 		auto it = of.find(id);
 		if(it != of.end()) {
+			it->second.last_used = std::chrono::steady_clock::now();
 			ret = it->second;
 		}
 		return ret;
@@ -365,7 +482,7 @@ private:
 			auto& slot = links_[endpoint_name(endpoint)];
 			is_new = !slot || slot->dead();
 			if(is_new) {
-				slot = std::make_shared<data_link>(context_, endpoint);
+				slot = std::make_shared<data_link>(context_, endpoint, silence_limit_);
 			}
 			link = slot;
 		}
@@ -430,6 +547,7 @@ private:
 	network::context& context_;
 	ticket_source const tickets_;
 	std::chrono::seconds const timeout_;
+	std::chrono::seconds const silence_limit_;
 
 	opening<have_bitmap> const upload_opening_{data_right::upload
 		, make_error(securepath::errc::no_such_data, "the grant names no data server"), &is_full, &impl::uploads_, &open_upload_at};
@@ -445,8 +563,9 @@ private:
 	routes downloads_;
 };
 
-net_data_channel::net_data_channel(network::context& context, ticket_source tickets, std::chrono::seconds timeout)
-: impl_(std::make_shared<impl>(context, std::move(tickets), timeout))
+net_data_channel::net_data_channel(network::context& context, ticket_source tickets, std::chrono::seconds timeout
+	, std::chrono::seconds silence_limit)
+: impl_(std::make_shared<impl>(context, std::move(tickets), timeout, silence_limit))
 {
 }
 

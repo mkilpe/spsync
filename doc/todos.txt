@@ -68,10 +68,13 @@
   * client side interface to send and receive such messages
   * message encrypted using storage encryption key?
 * review of the record data work (doc/review_2026-09-21.txt): F1-F14 fixed, duplication
-  D1-D7 and test helpers T1 fixed 2026-09-22; open O1-O9 (liveness timeouts on data links,
-  retry vs reset on disconnect, detach with one io thread, staged pieces outside the quota,
-  manifest decoded per chunk, per connection state never trimmed, transfers running on the
-  caller of pump()), dead code C1/C2/C5, long test cases and fixed sleeps T2/T3
+  D1-D7 and test helpers T1 fixed 2026-09-22, robustness O1-O9 fixed 2026-09-23 (liveness
+  on the data links and ticket requests, retry vs reset, detach, staged pieces and sessions
+  capped, one digest per chunk, idle transfers trimmed, rounds on the io context); open:
+  dead code C1/C2/C5, long test cases and fixed sleeps T2/T3
+* securepath: encrypted_connection::post_on_strand (added 2026-09-23 for the timer driven
+  closes) is a submodule edit that needs its own commit there, like the packet_deserialiser
+  ctor forwarding before it
 * review backlog (see doc/review_2026-09-08.txt, "Backlog as of 2026-09-09")
   - R1 groupchat blocking create_account/register_my_key, swallowed on_create/connect errors
   - R2 strict mode on a different replica (phase 6)

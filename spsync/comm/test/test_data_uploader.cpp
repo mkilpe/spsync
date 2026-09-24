@@ -471,4 +471,37 @@ TEST_CASE("data uploader with answers from another thread", "[unit]") {
 	}
 }
 
+// (review O7) with an io context the rounds run on it: whoever queues a data is not the
+// one that reads its chunks and calls the channel
+TEST_CASE("data uploader runs on the io context", "[unit]") {
+	record_data_store store{fresh_database(), data_root};
+	auto const a = create_data(store, 4500);
+	fake_channel channel;
+	upload_log log;
+	asio::io_context io;
+	data_uploader uploader{store, channel, data_upload_config{}, log.done(), {}, &io};
+
+	CHECK(uploader.enqueue(a.manifest_digest));
+	// nothing happened on this thread
+	CHECK(channel.opened.empty());
+	CHECK(log.finished_count() == 0);
+	CHECK(uploader.queued() == 1);
+	// the io context does the work, rounds and all
+	CHECK(io.poll() > 0);
+	CHECK(channel.opened.size() == 1);
+	CHECK(log.finished_count() == 1);
+	CHECK(!log.finished[0].second);
+	CHECK(channel.sent.size() == a.chunk_count());
+
+	// a round queued for an uploader that went does nothing
+	{
+		upload_log late;
+		data_uploader gone{store, channel, data_upload_config{}, late.done(), {}, &io};
+		CHECK(gone.enqueue(a.manifest_digest));
+	}
+	io.restart();
+	CHECK(io.poll() > 0);
+	CHECK(channel.opened.size() == 1);
+}
+
 }

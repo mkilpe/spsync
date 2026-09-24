@@ -1,5 +1,6 @@
 #include <securepath/test_frame/test_suite.hpp>
 #include <securepath/test_frame/test_utils.hpp>
+#include <securepath/serialisation/util.hpp>
 #include <spsync/test/test_record_data.hpp>
 
 #include <spsync/core/data/chunk_files.hpp>
@@ -238,16 +239,57 @@ TEST_CASE("data state table", "[unit]") {
 	CHECK(row->have.count() == 1);
 	CHECK(row->have.test(2));
 	CHECK(table.manifest(local_id) == manifest);
+	// (review O5) one digest at a time, without the manifest
+	CHECK(table.has_manifest(local_id));
+	for(std::uint64_t i = 0; i != d.chunk_count(); ++i) {
+		CHECK(table.chunk_digest(local_id, i) == manifest.chunk_digests[i]);
+	}
+	CHECK(!table.chunk_digest(local_id, d.chunk_count()));
+	CHECK(!table.chunk_digest(local_id + 100, 0));
 
 	// another data gets another row
 	data_descriptor const other{4112, 4096, securepath::test::random_octet_vector(64)};
 	CHECK(table.ensure(other) != local_id);
 	CHECK(table.all_ids().size() == 2);
 
+	CHECK(!table.has_manifest(table.find(other.manifest_digest)->local_id));
+
 	table.remove(local_id);
 	CHECK(!table.find(local_id));
 	CHECK(!table.find(d.manifest_digest));
 	CHECK(table.all_ids().size() == 1);
+}
+
+// (review O5) a table from before the digests were kept as one blob carries serialised
+// manifests: they move over when it is opened
+TEST_CASE("data state table manifest migration", "[unit]") {
+	auto db = fresh_database();
+	data_descriptor const d{5080, 1000, securepath::test::random_octet_vector(64)};
+	data_manifest manifest;
+	for(std::uint64_t i = 0; i != d.chunk_count(); ++i) {
+		manifest.chunk_digests.push_back(securepath::test::random_octet_vector(64));
+	}
+	CHECK(data_manifest::from_octets(manifest.octets()) == manifest);
+	CHECK(!data_manifest::from_octets(octet_vector(65)));
+
+	std::uint64_t local_id = 0;
+	{
+		data_state_table table{db};
+		local_id = table.ensure(d);
+		db->prepare("ALTER TABLE record_data DROP COLUMN digests;").execute();
+		db->prepare("ALTER TABLE record_data ADD COLUMN manifest BLOB;").execute();
+		auto q = db->prepare("UPDATE record_data SET manifest = :m WHERE key = :k;");
+		q.bind(":m", serialisation::asn_der_serialise(manifest));
+		q.bind(":k", static_cast<std::int64_t>(local_id));
+		q.execute();
+	}
+	data_state_table table{db};
+	CHECK(table.manifest(local_id) == manifest);
+	CHECK(table.chunk_digest(local_id, 1) == manifest.chunk_digests[1]);
+	auto old_column = db->prepare("SELECT manifest FROM record_data WHERE key = :k;");
+	old_column.bind(":k", static_cast<std::int64_t>(local_id));
+	auto res = old_column.execute();
+	CHECK(!res.value<octet_vector>(0));
 }
 
 // RD6: writes in any pieces, reads at any offset, both across chunk boundaries

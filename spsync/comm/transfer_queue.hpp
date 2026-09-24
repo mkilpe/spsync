@@ -9,6 +9,9 @@
 #include <securepath/log/log.hpp>
 #include <securepath/util/conversions.hpp>
 
+#include <asio/io_context.hpp>
+#include <asio/post.hpp>
+
 #include <deque>
 #include <iterator>
 #include <map>
@@ -42,6 +45,11 @@ struct transfer_state {
  * answers still coming for it fall on the floor (generation). The direction says what
  * opens a transfer, what moves a piece and what a transfer ends with.
  *
+ * With an io_context the rounds run on it: enqueue() and the answers only queue one,
+ * so neither the thread that queues a data (the engine, with its mutex held) nor the
+ * one that delivers an answer (a connection's strand) reads chunks and sends packets.
+ * Without one (tests) the caller runs the round itself, at once.
+ *
  * Everything but the public functions requires the mutex unless said otherwise.
  */
 template<typename Transfer>
@@ -50,15 +58,23 @@ public:
 	using action = action_pump::action;
 
 	transfer_queue(char const* direction, record_data_store& store, transfer_config config
-		, transfer_done_callback done, transfer_progress_callback progress)
+		, transfer_done_callback done, transfer_progress_callback progress, asio::io_context* io)
 	: direction_(direction)
 	, store_(store)
 	, config_(config)
 	, done_(std::move(done))
 	, progress_(std::move(progress))
+	, io_(io)
 	{}
 
 	virtual ~transfer_queue() = default;
+
+	/// the owner goes: like reset(), and no round runs any more (one may be queued)
+	void close() {
+		std::unique_lock lock{mutex_};
+		closed_ = true;
+		forget();
+	}
 
 	/// queue a data; false when it is already queued or on its way
 	bool enqueue(data_id const& id) {
@@ -78,10 +94,7 @@ public:
 
 	void reset() {
 		std::unique_lock lock{mutex_};
-		++generation_;
-		queue_.clear();
-		active_.clear();
-		notifications_.clear();
+		forget();
 	}
 
 	std::size_t queued() const {
@@ -174,11 +187,27 @@ protected:
 private:
 	using active_iterator = typename std::map<data_id, Transfer>::iterator;
 
-	/// do what the state asks for, outside the lock (see action_pump)
+	void forget() {
+		++generation_;
+		queue_.clear();
+		active_.clear();
+		notifications_.clear();
+	}
+
+	/// do what the state asks for, outside the lock (see action_pump): on the io
+	/// context when there is one, else here
 	void pump() {
+		if(io_) {
+			asio::post(*io_, [self = this->shared_from_this()] { self->run_rounds(); });
+		} else {
+			run_rounds();
+		}
+	}
+
+	void run_rounds() {
 		pump_.run([this] {
 			std::unique_lock lock{mutex_};
-			return collect();
+			return closed_ ? std::vector<action>{} : collect();
 		});
 	}
 
@@ -292,6 +321,7 @@ private:
 	transfer_config const config_;
 	transfer_done_callback const done_;
 	transfer_progress_callback const progress_;
+	asio::io_context* const io_;
 
 	mutable std::mutex mutex_;
 	/// waiting datas in the order they were queued
@@ -301,6 +331,7 @@ private:
 	std::vector<action> notifications_;
 	/// answers to calls made before a reset carry an older generation and are ignored
 	std::uint64_t generation_{};
+	bool closed_{};
 	action_pump pump_;
 };
 
