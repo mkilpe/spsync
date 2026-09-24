@@ -1,6 +1,6 @@
 #include <securepath/test_frame/test_suite.hpp>
 
-#include <spsync/comm/action_pump.hpp>
+#include <spsync/transfer/action_pump.hpp>
 
 #include <stdexcept>
 

@@ -2,8 +2,8 @@
 
 #include "data_store.hpp"
 
-#include <spsync/comm/data_downloader.hpp>
-#include <spsync/comm/net_data_channel.hpp>
+#include <spsync/transfer/data_downloader.hpp>
+#include <spsync/core/data/data_grant.hpp>
 #include <spsync/protocol/protocol_base.hpp>
 
 #include <securepath/network/encryption/context.hpp>

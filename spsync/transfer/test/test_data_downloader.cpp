@@ -2,7 +2,7 @@
 #include <securepath/test_frame/test_utils.hpp>
 #include <spsync/test/test_record_data.hpp>
 
-#include <spsync/comm/data_downloader.hpp>
+#include <spsync/transfer/data_downloader.hpp>
 #include <spsync/protocol/error.hpp>
 
 #include <securepath/crypto/aes_gcm.hpp>

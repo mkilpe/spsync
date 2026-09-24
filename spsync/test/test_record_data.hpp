@@ -1,6 +1,6 @@
 #pragma once
 
-#include <spsync/comm/transfer_config.hpp>
+#include <spsync/transfer/transfer_config.hpp>
 #include <spsync/core/data/data_encryptor.hpp>
 #include <spsync/core/data/record_data_store.hpp>
 #include <spsync/core/record_data.hpp>

@@ -3,9 +3,9 @@
 
 #include "data_server_fixtures.hpp"
 #include <spsync/server/server_lib/data_server.hpp>
-#include <spsync/comm/data_downloader.hpp>
-#include <spsync/comm/data_uploader.hpp>
-#include <spsync/comm/net_data_channel.hpp>
+#include <spsync/transfer/data_downloader.hpp>
+#include <spsync/transfer/data_uploader.hpp>
+#include <spsync/transfer/net_data_channel.hpp>
 #include <spsync/protocol/data_protocol.hpp>
 #include <spsync/protocol/error.hpp>
 #include <spsync/test/test_context.hpp>

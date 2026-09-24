@@ -73,8 +73,8 @@ void network_connection::destroy_storage(storage_id const&) {
 }
 
 storage_connection network_connection::create_storage_connection(storage_id id, record_storage& storage, sync::progress& progress, std::optional<storage_modes> expected_modes
-	, record_data_store* data, data_channel* channel, data_download_channel* download_channel) {
-	auto p = std::make_unique<comm>(&*impl_, id, storage, progress, expected_modes, data, channel, download_channel);
+	, record_data_store* data, std::unique_ptr<data_transfers> transfers) {
+	auto p = std::make_unique<comm>(&*impl_, id, storage, progress, expected_modes, data, std::move(transfers));
 	std::unique_lock lock{impl_->mutex};
 	auto ret = impl_->comms.insert(std::make_pair(id, std::move(p)));
 	if(!ret.second || impl_->attached_comms.count(id)) {

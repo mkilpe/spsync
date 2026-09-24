@@ -1,7 +1,7 @@
 #include <securepath/test_frame/test_suite.hpp>
 #include <securepath/test_frame/test_utils.hpp>
 
-#include <spsync/comm/piece_cursor.hpp>
+#include <spsync/transfer/piece_cursor.hpp>
 
 namespace securepath::sync {
 

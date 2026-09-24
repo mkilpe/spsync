@@ -1,7 +1,7 @@
 #pragma once
 
-#include <spsync/comm/data_uploader.hpp>
-#include <spsync/comm/net_data_channel.hpp>
+#include <spsync/transfer/data_uploader.hpp>
+#include <spsync/transfer/net_data_channel.hpp>
 #include <spsync/server/server_lib/data_server.hpp>
 #include <spsync/server/server_lib/storage.hpp>
 #include <spsync/server/server_lib/storage_server.hpp>

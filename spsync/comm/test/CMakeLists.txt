@@ -1,1 +1,0 @@
-add_sp_test_application(test_spsync_comm spsync_comm)

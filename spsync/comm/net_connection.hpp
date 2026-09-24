@@ -1,6 +1,7 @@
 #pragma once
 
 #include <spsync/comm/interface.hpp>
+#include <spsync/core/data/data_transfers.hpp>
 #include <spsync/core/sync_mode.hpp>
 #include <securepath/network/encryption/context.hpp>
 #include <securepath/event_system/event_loop.hpp>
@@ -11,8 +12,6 @@ namespace securepath::sync {
 
 using storage_id = octet_vector;
 class network_connection_impl;
-struct data_channel;
-struct data_download_channel;
 
 /**
  * Helper to connect input and output of storage to the network connection
@@ -75,9 +74,10 @@ public:
 
 	/// Create storage connection, returns storage connection helper. Nothing is received before the attach on the returned object is called.
 	/// When expected_modes is set, the server rejects the connection flow with storage_mode_mismatch if the storage modes differ.
-	/// data is the storage's record data store, channel the way to its data servers (RD12); a storage without them carries no record data
+	/// data is the storage's record data store and transfers what moves its datas to the storage's data servers (RD12,
+	/// net_data_transfers over the network); a storage without them carries no record data
 	storage_connection create_storage_connection(storage_id, record_storage&, sync::progress&, std::optional<storage_modes> expected_modes = {}
-		, record_data_store* data = nullptr, data_channel* channel = nullptr, data_download_channel* download_channel = nullptr);
+		, record_data_store* data = nullptr, std::unique_ptr<data_transfers> transfers = {});
 
 	/// This will destroy the underlying comm_input, so make sure nothing is using it any more when this is called
 	void detach(storage_id const& id);

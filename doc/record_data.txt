@@ -457,12 +457,15 @@ Implementation steps
         on_data_uploaded; comm_input::data() gives the engine the store (null =
         no record data). comm owns a data_uploader when it has a store and a
         data_channel (both optional parameters of create_storage_connection).
-      + data_channel (comm/data_channel.hpp): open_upload(descriptor, manifest)
+        (Since 2026-09-24 comm owns a data_transfers port instead - core/data/
+        data_transfers.hpp - and transfer/net_data_transfers is what is
+        behind it, given by client_sync; review_2026-09-24_architecture R1.)
+      + data_channel (transfer/data_channel.hpp): open_upload(descriptor, manifest)
         -> the holder's have-bitmap, send_chunk(data_id, no, bytes) -> ack, both
         answered once through a callback from any thread. What is behind it -
         ticket from the record server, choice of the holder, data connection -
         is the implementation's business (RDS 4/5).
-      + data_uploader (comm/data_uploader): queue in call order, max_datas = 2 on
+      + data_uploader (transfer/data_uploader): queue in call order, max_datas = 2 on
         their way, per data manifest first, then only the chunks the holder
         lacks with window = 6 unanswered; resume is the same flow. A failure
         stops sending for that data and reports once the outstanding answers are
@@ -560,7 +563,7 @@ Implementation steps
         incomplete_upload_expiry (24 h). spsync_server has the role behind
         --data_role with --data_port, --record_servers, --max_data_size,
         --max_storage_data, --upload_expiry; the data root is the storage root.
-      + client: net_data_channel (comm/net_data_channel) implements the
+      + client: net_data_channel (transfer/net_data_channel) implements the
         data_channel of RDS 3 over the network: grant (ticket + ordered
         holders) from the ticket_source, the manifest goes to the first holder
         that can be reached - a transport failure moves down the list (RD13
@@ -641,7 +644,9 @@ Implementation steps
         transient, nothing is persisted. A peer may only announce itself as the
         holder.
       + client: comm makes the net_data_channel itself when the storage has a
-        data store (an explicit channel is still taken, for tests); its
+        data store (an explicit channel is still taken, for tests; since
+        2026-09-24 net_data_transfers does this, comm only provides the
+        ticket_source through the data_transfers port); the
         ticket_source sends request_data_ticket over the record connection,
         answers are matched by call id, a disconnect fails the requests still
         out. client_sync needed no change beyond RDS 3's data_root.
@@ -817,8 +822,9 @@ Implementation steps
       + a record connection that goes takes the data connections along: comm
         closes its net_data_channel on disconnect (tickets come over the record
         connection; a killed client drops both anyway).
-      + transfer retry (comm/transfer_retry): a transfer that ended with an
-        error another try may lift is tried again by comm after a wait, with
+      + transfer retry (transfer/transfer_retry): a transfer that ended with an
+        error another try may lift is tried again by comm (since 2026-09-24:
+        by net_data_transfers behind comm's port) after a wait, with
         its handle kept - the owner hears once, when it ended for good. Wait =
         what the error says, else the data's backoff (1 s doubling to 60 s,
         forgotten when the data's transfer ends for good); cancelled on
@@ -1100,7 +1106,7 @@ Implementation steps
         response_replica_ticket {ticket, holders} (tags 12/13) on the link of
         the record server that asked for the copy (own record role: direct
         call, data_server::set_replica_ticket_source). This is exactly the
-        ticket_source callback of comm/net_data_channel.
+        ticket_source callback of transfer/net_data_channel.
       + the ticket: new data_right::replicate, issued by
         ticket_issuer::issue_replica to keys of the configured data servers
         only - issue(), the members' path, refuses the right - member = the
@@ -1110,8 +1116,8 @@ Implementation steps
         download ticket, and does NOT charge the storage's transfer quota for
         it (that quota is about what members move); the test cluster runs with
         1000 B/h of member quota.
-      + server_lib/data_replicator on the data server: comm/net_data_channel +
-        one comm/data_downloader per storage (spsync_server_lib links
+      + server_lib/data_replicator on the data server: transfer/net_data_channel +
+        one transfer/data_downloader per storage (spsync_server_lib links
         spsync_comm now) working on the store's chunk store -
         server_data_store::open_replica (known by descriptor first:
         record_data_store::register_data(descriptor); reserves its size like

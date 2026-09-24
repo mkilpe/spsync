@@ -1,0 +1,1 @@
+add_sp_test_application(test_spsync_transfer spsync_transfer crypto_test_support)

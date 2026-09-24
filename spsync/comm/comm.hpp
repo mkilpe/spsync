@@ -1,10 +1,8 @@
 #pragma once
 
-#include "data_downloader.hpp"
-#include "data_uploader.hpp"
 #include "interface.hpp"
-#include "net_data_channel.hpp"
-#include "transfer_retry.hpp"
+#include <spsync/core/data/data_grant.hpp>
+#include <spsync/core/data/data_transfers.hpp>
 #include <spsync/core/sync_mode.hpp>
 #include <spsync/protocol/server_protocol.hpp>
 
@@ -25,13 +23,13 @@ class network_connection_impl;
 class comm : public comm_input {
 public:
 	/**
-	 * data is the storage's record data store; without one the storage uploads nothing
-	 * (upload_data answers not_supported). channel is the way to the storage's data
-	 * servers: when none is given comm makes the real one (net_data_channel) with tickets
-	 * asked from the record server over this connection (record_data.txt RD12).
+	 * data is the storage's record data store and transfers what moves its datas to the
+	 * storage's data servers and back, with tickets asked from the record server over
+	 * this connection (record_data.txt RD12); without them the storage carries no record
+	 * data (upload_data and fetch_data answer not_supported).
 	 */
 	comm(network_connection_impl* nc_impl, storage_id, record_storage&, sync::progress&, std::optional<storage_modes> expected_modes = {}
-		, record_data_store* data = nullptr, data_channel* channel = nullptr, data_download_channel* download_channel = nullptr);
+		, record_data_store* data = nullptr, std::unique_ptr<data_transfers> transfers = {});
 	~comm();
 
 	/// set the handler for incoming event from network
@@ -74,8 +72,6 @@ private:
 	std::optional<request_handle> end_transfer(transfers&, data_id const&);
 	void on_upload_done(data_id const&, std::optional<error>);
 	void on_download_done(data_id const&, std::optional<error>);
-	/// true when the ended transfer is tried again by itself: nothing is reported yet
-	bool retried(transfer_retry*, data_id const&, std::optional<error> const&);
 	void fail_ticket_requests(error const&);
 
 private:
@@ -87,24 +83,17 @@ private:
 	event_system::event_handler* output_{};
 
 	record_data_store* const data_{};
-	std::mutex upload_mutex_;
-	/// the record connection is up: tickets can be asked, a transfer that ended may be
-	/// tried again. Without it a done that came late or a retry that fired late does nothing
+	std::mutex mutex_;
+	/// the record connection is up: tickets can be asked. Without it a request would go
+	/// into a connection that is not there, so it is answered here
 	bool connected_{};
 	/// the request handles of the uploads and downloads on their way
 	transfers uploads_;
 	transfers downloads_;
 	/// ticket requests without an answer yet
 	std::map<request_handle, std::move_only_function<void(util::result<data_grant>)>> ticket_requests_;
-	/// the real data channel, made here when the storage has a data store and no channel was given
-	std::unique_ptr<net_data_channel> own_channel_;
-	/// set when the storage has a data store; declared after the channel they use
-	std::unique_ptr<data_uploader> uploader_;
-	std::unique_ptr<data_downloader> downloader_;
-	/// tries ended transfers again without waiting for a reconnect (RDS 7); declared last,
-	/// so they go first
-	std::unique_ptr<transfer_retry> upload_retry_;
-	std::unique_ptr<transfer_retry> download_retry_;
+	/// the transfers behind upload_data and fetch_data; their ticket source is this object
+	std::unique_ptr<data_transfers> transfers_;
 };
 
 }

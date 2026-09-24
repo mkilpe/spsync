@@ -13,6 +13,7 @@
 #include <spsync/engine/sync_engine.hpp>
 #include <spsync/engine/record_verifier.hpp>
 #include <spsync/comm/net_connection.hpp>
+#include <spsync/transfer/net_data_transfers.hpp>
 
 #include <securepath/common/key_value_database.hpp>
 #include <securepath/util/error.hpp>
@@ -64,8 +65,12 @@ struct client_sync::impl : engine_output {
 
 	void init(storage_id const& storage_sid, network_connection& conn) {
 		// with a data store the connection moves record data too (record_data.txt RD12)
+		std::unique_ptr<data_transfers> transfers;
+		if(data_store) {
+			transfers = std::make_unique<net_data_transfers>(conn.context(), *data_store, progress);
+		}
 		storage_connection sconn{conn.create_storage_connection(storage_sid, storage, progress
-			, storage_modes{config.mode, config.auth_mode, config.replication}, data_store ? &*data_store : nullptr)};
+			, storage_modes{config.mode, config.auth_mode, config.replication}, data_store ? &*data_store : nullptr, std::move(transfers))};
 		engine = std::make_unique<sync_engine>(event_loop(), sconn.input(), crypto, config);
 		engine->set_output(this);
 		net = &conn;

@@ -1,7 +1,7 @@
 #include <securepath/test_frame/test_suite.hpp>
 #include <securepath/test_frame/test_utils.hpp>
 
-#include <spsync/comm/transfer_retry.hpp>
+#include <spsync/transfer/transfer_retry.hpp>
 #include <spsync/protocol/error.hpp>
 
 #include <securepath/network/net_error.hpp>

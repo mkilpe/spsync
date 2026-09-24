@@ -2,7 +2,7 @@
 #include <securepath/test_frame/test_utils.hpp>
 #include <spsync/test/test_record_data.hpp>
 
-#include <spsync/comm/data_uploader.hpp>
+#include <spsync/transfer/data_uploader.hpp>
 
 #include <securepath/crypto/aes_gcm.hpp>
 #include <securepath/database/sqlite/connection.hpp>

@@ -1,5 +1,7 @@
 #include "data_replicator.hpp"
 
+#include <spsync/transfer/net_data_channel.hpp>
+
 #include <spsync/protocol/error.hpp>
 
 #include <securepath/log/log.hpp>

@@ -4,9 +4,9 @@
 #include "data_server_fixtures.hpp"
 #include <spsync/server/server_lib/data_server.hpp>
 #include <spsync/server/server_lib/storage_server.hpp>
-#include <spsync/comm/data_downloader.hpp>
-#include <spsync/comm/data_uploader.hpp>
-#include <spsync/comm/net_data_channel.hpp>
+#include <spsync/transfer/data_downloader.hpp>
+#include <spsync/transfer/data_uploader.hpp>
+#include <spsync/transfer/net_data_channel.hpp>
 #include <spsync/server/server_lib/storage.hpp>
 #include <spsync/server/server_lib/ticket_issuer.hpp>
 #include <spsync/test/test_block_creator.hpp>

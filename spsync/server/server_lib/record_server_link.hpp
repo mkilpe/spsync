@@ -9,8 +9,8 @@
 #include <securepath/network/encryption/framing.hpp>
 #include <securepath/serialisation/util.hpp>
 
-#include <spsync/comm/net_data_channel.hpp>
-#include <spsync/comm/pending_calls.hpp>
+#include <spsync/core/data/data_grant.hpp>
+#include <spsync/transfer/pending_calls.hpp>
 
 #include <asio/steady_timer.hpp>
 
