@@ -7,6 +7,7 @@
 #include <securepath/util/conversions.hpp>
 
 #include <chrono>
+#include <algorithm>
 #include <set>
 #include <vector>
 
@@ -29,6 +30,10 @@ server_data_store::server_data_store(database::connection_ptr db, std::filesyste
 			"data_id BLOB PRIMARY KEY,"
 			"touched INTEGER);").execute();
 	}
+	// the counters start from the tables, once
+	used_bytes_ = table_.total_enc_size();
+	auto activity = db_->prepare("SELECT count(*) FROM data_activity;");
+	uploads_in_progress_ = static_cast<std::uint64_t>(activity.execute().value<std::int64_t>(0).value_or(0));
 }
 
 util::result<have_bitmap> server_data_store::open(data_descriptor const& descriptor, data_manifest const* manifest, time_point now) {
@@ -38,12 +43,15 @@ util::result<have_bitmap> server_data_store::open(data_descriptor const& descrip
 	if(quota_.max_data_size != 0 && descriptor.enc_size > quota_.max_data_size) {
 		ret = make_error(protocol::errc::data_too_big);
 	} else if(!known && quota_.max_storage_bytes != 0
-		&& table_.total_enc_size() + descriptor.enc_size > quota_.max_storage_bytes) {
+		&& used_bytes_ + descriptor.enc_size > quota_.max_storage_bytes) {
 		// a known data holds its reservation already: a resume is never refused
 		ret = make_error(protocol::errc::data_quota_exceeded);
 	} else {
 		auto row = manifest ? store_.register_data(descriptor, *manifest) : store_.register_data(descriptor);
 		if(row) {
+			if(!known) {
+				used_bytes_ += descriptor.enc_size;
+			}
 			if(row->state != record_data_state::in_sync) {
 				touch(descriptor.manifest_digest, now);
 			}
@@ -65,19 +73,6 @@ util::result<have_bitmap> server_data_store::open_replica(data_descriptor const&
 
 bool server_data_store::replica_pulled(data_id const& id, time_point now) {
 	return chunk_kept(id, now);
-}
-
-util::result<bool> server_data_store::store_chunk(data_id const& id, std::uint64_t chunk_no, octet_span encrypted, time_point now) {
-	util::result<bool> ret;
-	if(!store_.manifest(id)) {
-		ret = make_error(protocol::errc::no_such_upload);
-	} else if(!store_.store_chunk(id, chunk_no, encrypted)) {
-		LOG_INFO("refused a chunk that is not the manifest's [data_id={}, chunk={}]", to_hex(id), chunk_no);
-		ret = make_error(protocol::errc::invalid_data_chunk);
-	} else {
-		ret = chunk_kept(id, now);
-	}
-	return ret;
 }
 
 util::result<incoming_chunk> server_data_store::begin_chunk(data_id const& id, std::uint64_t chunk_no, time_point now) {
@@ -156,12 +151,8 @@ std::optional<data_state_row> server_data_store::find(data_id const& id) const {
 	return store_.find(id);
 }
 
-std::optional<octet_vector> server_data_store::read_chunk(data_id const& id, std::uint64_t chunk_no) const {
-	return store_.read_chunk(id, chunk_no);
-}
-
 std::uint64_t server_data_store::used_bytes() const {
-	return table_.total_enc_size();
+	return used_bytes_;
 }
 
 std::vector<data_state_row> server_data_store::complete_data() const {
@@ -176,9 +167,19 @@ std::vector<data_state_row> server_data_store::complete_data() const {
 }
 
 std::uint64_t server_data_store::uploads_in_progress() const {
-	auto q = db_->prepare("SELECT count(*) FROM data_activity;");
-	// a count is a plain integer
-	return static_cast<std::uint64_t>(q.execute().value<std::int64_t>(0).value_or(0));
+	return uploads_in_progress_;
+}
+
+std::size_t server_data_store::drop(std::vector<data_id> const& ids) {
+	std::uint64_t freed = 0;
+	for(auto const& id : ids) {
+		if(auto const row = store_.find(id)) {
+			freed += row->descriptor.enc_size;
+		}
+	}
+	auto const removed = store_.remove(ids);
+	used_bytes_ -= std::min<std::uint64_t>(freed, used_bytes_);
+	return removed;
 }
 
 std::size_t server_data_store::release(std::vector<data_id> const& ids) {
@@ -186,7 +187,7 @@ std::size_t server_data_store::release(std::vector<data_id> const& ids) {
 	for(auto const& id : ids) {
 		forget_activity(id);
 	}
-	return store_.remove(ids);
+	return drop(ids);
 }
 
 std::size_t server_data_store::expire_incomplete(time_point untouched_since) {
@@ -209,10 +210,20 @@ std::size_t server_data_store::expire_incomplete(time_point untouched_since) {
 		}
 		forget_activity(id);
 	}
-	return store_.remove(expired);
+	return drop(expired);
+}
+
+bool server_data_store::has_activity(data_id const& id) const {
+	auto q = db_->prepare("SELECT count(*) FROM data_activity WHERE data_id = :id;");
+	q.bind(":id", id);
+	auto res = q.execute();
+	return res.value<std::int64_t>(0).value_or(0) != 0;
 }
 
 void server_data_store::touch(data_id const& id, time_point now) {
+	if(!has_activity(id)) {
+		++uploads_in_progress_;
+	}
 	auto q = db_->prepare(
 		"INSERT INTO data_activity(data_id, touched) VALUES(:id, :t)"
 		" ON CONFLICT(data_id) DO UPDATE SET touched = excluded.touched;");
@@ -222,9 +233,12 @@ void server_data_store::touch(data_id const& id, time_point now) {
 }
 
 void server_data_store::forget_activity(data_id const& id) {
-	auto q = db_->prepare("DELETE FROM data_activity WHERE data_id = :id;");
-	q.bind(":id", id);
-	q.execute();
+	if(has_activity(id)) {
+		--uploads_in_progress_;
+		auto q = db_->prepare("DELETE FROM data_activity WHERE data_id = :id;");
+		q.bind(":id", id);
+		q.execute();
+	}
 }
 
 }

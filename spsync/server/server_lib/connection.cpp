@@ -142,11 +142,6 @@ void connection::handle(protocol::request_records const& p) {
 	}
 }
 
-void connection::handle(protocol::request_data const& p) {
-	//t: implement
-	send_packet(protocol::response_data{p, make_error(securepath::errc::not_implemented)});
-}
-
 void connection::handle(protocol::request_commit const& p) {
 	LOG_TRACE("request_commit for user {}", id_);
 	securepath::error error;

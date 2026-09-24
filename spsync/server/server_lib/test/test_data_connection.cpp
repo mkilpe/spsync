@@ -3,6 +3,7 @@
 #include <limits>
 #include <securepath/test_frame/test_utils.hpp>
 #include <spsync/test/test_record_data.hpp>
+#include "data_server_fixtures.hpp"
 
 #include <spsync/server/server_lib/data_connection.hpp>
 #include <spsync/protocol/error.hpp>
@@ -66,7 +67,7 @@ struct test_data_context : data_server_context {
 		auto store = acquire_store(sid);
 		REQUIRE(store->open_upload(data.descriptor, data.manifest, clock));
 		for(std::uint64_t no = 0; no != chunks; ++no) {
-			REQUIRE(store->store_chunk(data.descriptor.manifest_digest, no, data.chunks.at(no), clock));
+			REQUIRE(test::store_whole_chunk(*store, data.descriptor.manifest_digest, no, data.chunks.at(no), clock));
 		}
 	}
 
@@ -298,7 +299,7 @@ TEST_CASE("data connection takes chunks in pieces", "[unit]") {
 	CHECK(!last.error);
 	CHECK(!last.complete);
 	CHECK(held() == 1);
-	CHECK(context.stores.at(sid)->read_chunk(id, 0) == data.chunks.at(0));
+	CHECK(context.stores.at(sid)->chunks().read_chunk(id, 0) == data.chunks.at(0));
 	CHECK(std::filesystem::is_empty(staging));
 
 	// two chunks interleaved, as a window sends them

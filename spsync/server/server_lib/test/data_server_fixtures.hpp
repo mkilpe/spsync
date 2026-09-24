@@ -129,6 +129,25 @@ inline std::optional<error> upload(record_data_store& store, network::context& c
 	return log.finished.front().second;
 }
 
+/// a whole chunk into an opened upload, the way the wire brings it: as one piece. A
+/// chunk held already stays as it is (the store refuses to stage it again): true when the
+/// data is complete
+inline util::result<bool> store_whole_chunk(server_data_store& store, data_id const& id, std::uint64_t chunk_no
+	, octet_span chunk, time_point now) {
+	auto const row = store.find(id);
+	if(row && row->have.test(chunk_no)) {
+		return row->state == record_data_state::in_sync;
+	}
+	auto begun = store.begin_chunk(id, chunk_no, now);
+	if(!begun) {
+		return begun.get_error();
+	}
+	if(!begun.value().append(0, chunk)) {
+		return make_error(protocol::errc::invalid_data_chunk);
+	}
+	return store.finish_chunk(id, begun.value(), now);
+}
+
 /// the data server holds the whole data
 inline bool holds(data_server& server, protocol::storage_id const& sid, data_id const& id) {
 	auto const row = server.find(sid, id);

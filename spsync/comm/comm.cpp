@@ -148,10 +148,6 @@ void comm::handle(protocol::response_commit const& p) {
 	output_->emit<comm_events::on_commit_response>(p.cid, std::move(arg));
 }
 
-void comm::handle(protocol::response_data const& p) {
-	assert(output_);
-}
-
 void comm::handle(protocol::response_data_ticket const& p) {
 	std::move_only_function<void(util::result<data_grant>)> callback;
 	{

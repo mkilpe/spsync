@@ -98,16 +98,6 @@ struct response_records : reply_base {
 	}
 };
 
-struct response_data : reply_base {
-	using reply_base::reply_base;
-
-	template<typename S>
-	void serialise(S& s) {
-		serialisation::sequence<S> seq(s);
-		seq & static_cast<reply_base&>(*this);
-	}
-};
-
 struct response_commit : reply_base {
 	using reply_base::reply_base;
 
@@ -199,7 +189,6 @@ using s2c_types =
 			type_tag<storage_management_reply, 4>,
 			type_tag<response_sequence_number, 5>,
 			type_tag<response_records, 6>,
-			type_tag<response_data, 7>,
 			type_tag<response_commit, 8>,
 			type_tag<notify_record, 9>,
 			type_tag<response_data_ticket, 10>,

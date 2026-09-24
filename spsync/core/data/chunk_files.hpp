@@ -61,8 +61,10 @@ public:
 	/// one staged chunk becomes a chunk of the data, replacing a previous one; the staging area goes
 	void adopt_staged_chunk(std::string const& stage, std::uint64_t chunk_no, data_id const&);
 
-	/// the staged chunks become the chunks of the data; a data already held keeps its chunks
-	void commit_staging(std::string const& stage, data_id const&);
+	/// the staged chunks become the chunks of the data. replace: in place of whatever
+	/// is held of the data; else a data with chunks in place keeps them (the same id is
+	/// the same chunks) - the caller says which, a directory that merely exists does not
+	void commit_staging(std::string const& stage, data_id const&, bool replace);
 
 	/// drop a staging area; fine when it does not exist
 	void discard_staging(std::string const& stage);

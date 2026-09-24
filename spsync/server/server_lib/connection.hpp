@@ -28,7 +28,6 @@ public:
 	void handle(protocol::storage_management const&);
 	void handle(protocol::request_sequence_number const&);
 	void handle(protocol::request_records const&);
-	void handle(protocol::request_data const&);
 	void handle(protocol::request_commit const&);
 	void handle(protocol::request_data_ticket const&);
 

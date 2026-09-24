@@ -153,11 +153,13 @@ void chunk_files::adopt_staged_chunk(std::string const& stage, std::uint64_t chu
 	std::filesystem::remove_all(source);
 }
 
-void chunk_files::commit_staging(std::string const& stage, data_id const& id) {
+void chunk_files::commit_staging(std::string const& stage, data_id const& id, bool replace) {
 	auto const target = data_dir(id);
 	auto const source = stage_dir(stage);
+	if(replace) {
+		std::filesystem::remove_all(target);
+	}
 	if(std::filesystem::exists(target)) {
-		// the same id is the same chunks: keep what is held
 		std::filesystem::remove_all(source);
 	} else {
 		std::filesystem::rename(source, target);

@@ -176,15 +176,21 @@ TEST_CASE("chunk files", "[unit]") {
 		files.write_staged(stage, 0, c0);
 		files.write_staged(stage, 1, c1);
 		CHECK(!files.has(id, 0));
-		files.commit_staging(stage, id);
+		files.commit_staging(stage, id, false);
 		CHECK(files.read(id, 0) == c0);
 		CHECK(files.read(id, 1) == c1);
 
-		// a data already held keeps its chunks
+		// a data already held keeps its chunks, unless the caller says replace (C4)
 		auto const again = files.begin_staging();
 		files.write_staged(again, 0, c1);
-		files.commit_staging(again, id);
+		files.commit_staging(again, id, false);
 		CHECK(files.read(id, 0) == c0);
+		CHECK(files.read(id, 1) == c1);
+		auto const anew = files.begin_staging();
+		files.write_staged(anew, 0, c1);
+		files.commit_staging(anew, id, true);
+		CHECK(files.read(id, 0) == c1);
+		CHECK(!files.has(id, 1));
 
 		auto const dropped = files.begin_staging();
 		files.write_staged(dropped, 0, c0);
@@ -193,7 +199,8 @@ TEST_CASE("chunk files", "[unit]") {
 		files.write_staged(stale, 0, c0);
 		files.clear_staging();
 		CHECK(!std::filesystem::exists(data_root / ".staging"));
-		CHECK(files.read(id, 0) == c0);
+		// what was committed is untouched by the staging work after it
+		CHECK(files.read(id, 0) == c1);
 	}
 }
 

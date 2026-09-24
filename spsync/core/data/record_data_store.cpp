@@ -75,10 +75,7 @@ public:
 			table.set_manifest(local_id, result.manifest);
 			table.set_header(local_id, result.header);
 		}
-		if(replace) {
-			files.remove(id);
-		}
-		files.commit_staging(stage, id);
+		files.commit_staging(stage, id, replace);
 		{
 			auto tact = table.transaction();
 			have_bitmap have{result.descriptor.chunk_count()};

@@ -121,18 +121,6 @@ struct request_records : storage_request_base {
 	}
 };
 
-struct request_data : storage_request_base {
-	util::sequence_number record;
-	/// data from position [start, end];
-	std::uint64_t start, end;
-
-	template<typename S>
-	void serialise(S& s) {
-		serialisation::sequence<S> seq(s);
-		seq & static_cast<storage_request_base&>(*this) & record & start & end;
-	}
-};
-
 struct request_commit : storage_request_base {
 	request_commit(call_id cid = 0, storage_id sid = {}, chain_block record = {})
 	: storage_request_base(cid, sid)
@@ -180,7 +168,6 @@ using c2s_types =
 			type_tag<storage_management, 4>,
 			type_tag<request_sequence_number, 5>,
 			type_tag<request_records, 6>,
-			type_tag<request_data, 7>,
 			type_tag<request_commit, 8>,
 			type_tag<request_data_ticket, 9> >;
 

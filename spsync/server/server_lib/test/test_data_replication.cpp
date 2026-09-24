@@ -148,7 +148,7 @@ TEST_CASE("data copies among separate data servers", "[unit]") {
 		// the same bytes, verified chunk by chunk against the manifest on the way
 		auto const copy = cluster.data[second]->open_store(sid);
 		for(std::uint64_t chunk = 0; chunk != made.descriptor.chunk_count(); ++chunk) {
-			CHECK(copy->read_chunk(id, chunk) == store.read_chunk(id, chunk));
+			CHECK(copy->chunks().read_chunk(id, chunk) == store.read_chunk(id, chunk));
 		}
 		// it reserved its size like an upload
 		CHECK(cluster.data[second]->stored_bytes() == made.descriptor.enc_size);
@@ -276,7 +276,7 @@ TEST_CASE("data copies among all in one replicas", "[unit]") {
 	WAIT_CHECK(complete_holders(b.records, sid, id) == 2, 10s);
 	auto const copy = second.data.open_store(sid);
 	for(std::uint64_t chunk = 0; chunk != made.descriptor.chunk_count(); ++chunk) {
-		CHECK(copy->read_chunk(id, chunk) == store.read_chunk(id, chunk));
+		CHECK(copy->chunks().read_chunk(id, chunk) == store.read_chunk(id, chunk));
 	}
 
 	storage_a.reset();

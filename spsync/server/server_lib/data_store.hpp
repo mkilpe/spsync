@@ -6,6 +6,7 @@
 #include <spsync/core/sync_mode.hpp>
 #include <spsync/util/result.hpp>
 
+#include <atomic>
 #include <filesystem>
 #include <mutex>
 
@@ -58,17 +59,11 @@ public:
 	util::result<have_bitmap> open_upload(data_descriptor const&, data_manifest const&, time_point now);
 
 	/**
-	 * Keep a chunk of an opened upload; true when it completed the data. Errors:
-	 * no_such_upload (no manifest for the data), invalid_data_chunk (not the chunk the
-	 * manifest names there).
-	 */
-	util::result<bool> store_chunk(data_id const&, std::uint64_t chunk_no, octet_span encrypted, time_point now);
-
-	/**
-	 * The same for a chunk that arrives in pieces: begin, append the pieces to what
-	 * begin_chunk gave, finish. Errors of begin: no_such_upload, invalid_data_chunk (the
-	 * manifest names no such chunk); of finish: invalid_data_chunk (incomplete, or not
-	 * the manifest's chunk - nothing of it is kept).
+	 * A chunk of an opened upload arrives in pieces: begin, append the pieces to what
+	 * begin_chunk gave, finish - true when it completed the data. Errors of begin:
+	 * no_such_upload (no manifest for the data), invalid_data_chunk (the manifest names
+	 * no such chunk, or the chunk is held already); of finish: invalid_data_chunk
+	 * (incomplete, or not the manifest's chunk - nothing of it is kept).
 	 */
 	util::result<incoming_chunk> begin_chunk(data_id const&, std::uint64_t chunk_no, time_point now);
 	util::result<bool> finish_chunk(data_id const&, incoming_chunk&, time_point now);
@@ -118,10 +113,10 @@ public:
 	/// what is known of the data; in_sync = complete
 	std::optional<data_state_row> find(data_id const&) const;
 
-	/// a held encrypted chunk
-	std::optional<octet_vector> read_chunk(data_id const&, std::uint64_t chunk_no) const;
-
-	/// what the storage's data takes against the quota: the enc_size of every known data
+	/// what the storage's data takes against the quota: the enc_size of every known data.
+	/// A counter, like uploads_in_progress: read from the tables when the store opens,
+	/// kept up by what changes them - not added up per question (a data server announces
+	/// both with every completed data)
 	std::uint64_t used_bytes() const;
 
 	/// every data held completely
@@ -149,6 +144,9 @@ private:
 	bool chunk_kept(data_id const&, time_point now);
 	void touch(data_id const&, time_point now);
 	void forget_activity(data_id const&);
+	bool has_activity(data_id const&) const;
+	/// drop the data (rows and chunks), their sizes off the counter; returns how many were known
+	std::size_t drop(std::vector<data_id> const&);
 
 private:
 	mutable std::mutex mutex_;
@@ -157,6 +155,9 @@ private:
 	data_state_table table_;
 	data_quota const quota_;
 	transfer_budget budget_;
+	/// see used_bytes(); atomic so that the load signals need no lock
+	std::atomic<std::uint64_t> used_bytes_{0};
+	std::atomic<std::uint64_t> uploads_in_progress_{0};
 };
 
 }

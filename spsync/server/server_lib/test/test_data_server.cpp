@@ -150,7 +150,7 @@ TEST_CASE("data server upload end to end", "[unit]") {
 		CHECK(row->state == record_data_state::in_sync);
 		bool same = true;
 		for(std::uint64_t no = 0; no != d.chunk_count(); ++no) {
-			same = same && server_store->read_chunk(d.manifest_digest, no) == f.store.read_chunk(d.manifest_digest, no);
+			same = same && server_store->chunks().read_chunk(d.manifest_digest, no) == f.store.read_chunk(d.manifest_digest, no);
 		}
 		CHECK(same);
 	}
@@ -318,8 +318,8 @@ TEST_CASE("data server takes full size chunks", "[unit]") {
 	CHECK(!log.finished[0].second);
 	auto const server_store = f.server->open_store(f.sid);
 	CHECK(server_store->find(data.manifest_digest)->state == record_data_state::in_sync);
-	CHECK(server_store->read_chunk(data.manifest_digest, 0) == f.store.read_chunk(data.manifest_digest, 0));
-	CHECK(server_store->read_chunk(data.manifest_digest, 1) == f.store.read_chunk(data.manifest_digest, 1));
+	CHECK(server_store->chunks().read_chunk(data.manifest_digest, 0) == f.store.read_chunk(data.manifest_digest, 0));
+	CHECK(server_store->chunks().read_chunk(data.manifest_digest, 1) == f.store.read_chunk(data.manifest_digest, 1));
 }
 
 // RD4: an interrupted upload resumes from what the server holds

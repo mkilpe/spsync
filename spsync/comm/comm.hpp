@@ -47,7 +47,6 @@ public:
 	void handle(protocol::response_sequence_number const& p);
 	void handle(protocol::response_records const& p);
 	void handle(protocol::response_commit const& p);
-	void handle(protocol::response_data const& p);
 	void handle(protocol::response_data_ticket const& p);
 	void handle(protocol::notify_record const& p);
 	void handle(protocol::notify_data const& p);

@@ -1,6 +1,7 @@
 #include <securepath/test_frame/test_suite.hpp>
 #include <securepath/test_frame/test_utils.hpp>
 #include <spsync/test/test_record_data.hpp>
+#include "data_server_fixtures.hpp"
 
 #include <spsync/server/server_lib/data_store.hpp>
 #include <spsync/protocol/error.hpp>
@@ -42,7 +43,7 @@ TEST_CASE("server data store upload and resume", "[unit]") {
 	CHECK(store.used_bytes() == 0);
 
 	// no chunk without a manifest
-	CHECK(is_error(store.store_chunk(id, 0, data.chunks.at(0), now), protocol::errc::no_such_upload));
+	CHECK(is_error(test::store_whole_chunk(store, id, 0, data.chunks.at(0), now), protocol::errc::no_such_upload));
 
 	// not the manifest the descriptor commits to
 	auto foreign = data.manifest;
@@ -62,15 +63,15 @@ TEST_CASE("server data store upload and resume", "[unit]") {
 	// junk dies at the edge: a changed chunk, a chunk of another position, a chunk past the end
 	auto junk = data.chunks.at(1);
 	junk[7] ^= 0x01;
-	CHECK(is_error(store.store_chunk(id, 1, junk, now), protocol::errc::invalid_data_chunk));
-	CHECK(is_error(store.store_chunk(id, 1, data.chunks.at(2), now), protocol::errc::invalid_data_chunk));
-	CHECK(is_error(store.store_chunk(id, 5, data.chunks.at(0), now), protocol::errc::invalid_data_chunk));
+	CHECK(is_error(test::store_whole_chunk(store, id, 1, junk, now), protocol::errc::invalid_data_chunk));
+	CHECK(is_error(test::store_whole_chunk(store, id, 1, data.chunks.at(2), now), protocol::errc::invalid_data_chunk));
+	CHECK(is_error(test::store_whole_chunk(store, id, 5, data.chunks.at(0), now), protocol::errc::invalid_data_chunk));
 	CHECK(store.find(id)->have.count() == 0);
 
-	auto stored = store.store_chunk(id, 3, data.chunks.at(3), now);
+	auto stored = test::store_whole_chunk(store, id, 3, data.chunks.at(3), now);
 	REQUIRE(stored);
 	CHECK(!stored.value());
-	CHECK(store.store_chunk(id, 0, data.chunks.at(0), now));
+	CHECK(test::store_whole_chunk(store, id, 0, data.chunks.at(0), now));
 
 	// the connection went: the next manifest is answered with what is held
 	auto resumed = store.open_upload(data.descriptor, data.manifest, now);
@@ -86,22 +87,59 @@ TEST_CASE("server data store upload and resume", "[unit]") {
 	CHECK(is_error(store.open_upload(contradicting, data.manifest, now), protocol::errc::invalid_data_manifest));
 
 	for(std::uint64_t no : {1u, 2u, 4u}) {
-		auto res = store.store_chunk(id, no, data.chunks.at(no), now);
+		auto res = test::store_whole_chunk(store, id, no, data.chunks.at(no), now);
 		REQUIRE(res);
 		CHECK(res.value() == (no == 4));
 	}
 	CHECK(store.find(id)->state == record_data_state::in_sync);
 	for(auto const& [no, chunk] : data.chunks) {
-		CHECK(store.read_chunk(id, no) == chunk);
+		CHECK(store.chunks().read_chunk(id, no) == chunk);
 	}
 
-	// complete: a further manifest says so, a repeated chunk does no harm
+	// complete: a further manifest says so, and a chunk that is held is not taken again
+	// (review O4: nothing is staged for it)
 	auto again = store.open_upload(data.descriptor, data.manifest, now);
 	REQUIRE(again);
 	CHECK(again->complete());
-	auto repeated = store.store_chunk(id, 2, data.chunks.at(2), now);
-	REQUIRE(repeated);
-	CHECK(repeated.value());
+	CHECK(is_error(store.begin_chunk(id, 2, now), protocol::errc::invalid_data_chunk));
+	CHECK(store.find(id)->state == record_data_state::in_sync);
+}
+
+// (review C5) what the storage's data takes and the uploads on their way are counters:
+// read from the tables when the store opens, kept up from then on
+TEST_CASE("server data store counters", "[unit]") {
+	auto db = fresh_database();
+	auto const now = clock_type::now();
+	auto const done = make_data(3000);
+	auto const half = make_data(5000);
+	{
+		server_data_store store{db, data_root};
+		CHECK(store.used_bytes() == 0);
+		CHECK(store.uploads_in_progress() == 0);
+		REQUIRE(store.open_upload(done.descriptor, done.manifest, now));
+		REQUIRE(store.open_upload(half.descriptor, half.manifest, now));
+		CHECK(store.uploads_in_progress() == 2);
+		for(auto const& [no, chunk] : done.chunks) {
+			REQUIRE(test::store_whole_chunk(store, done.descriptor.manifest_digest, no, chunk, now));
+		}
+		REQUIRE(test::store_whole_chunk(store, half.descriptor.manifest_digest, 0, half.chunks.at(0), now));
+		CHECK(store.used_bytes() == done.descriptor.enc_size + half.descriptor.enc_size);
+		CHECK(store.uploads_in_progress() == 1);
+		// opened again: nothing is counted twice
+		REQUIRE(store.open_upload(half.descriptor, half.manifest, now));
+		REQUIRE(store.open_replica(done.descriptor, now));
+		CHECK(store.used_bytes() == done.descriptor.enc_size + half.descriptor.enc_size);
+		CHECK(store.uploads_in_progress() == 1);
+	}
+	// a store opened over the same tables counts the same
+	server_data_store store{db, data_root};
+	CHECK(store.used_bytes() == done.descriptor.enc_size + half.descriptor.enc_size);
+	CHECK(store.uploads_in_progress() == 1);
+	CHECK(store.release({done.descriptor.manifest_digest, securepath::test::random_octet_vector(64)}) == 1);
+	CHECK(store.used_bytes() == half.descriptor.enc_size);
+	CHECK(store.expire_incomplete(now + std::chrono::seconds{1}) == 1);
+	CHECK(store.used_bytes() == 0);
+	CHECK(store.uploads_in_progress() == 0);
 }
 
 // the same in pieces, as the wire brings a chunk
@@ -147,7 +185,7 @@ TEST_CASE("server data store chunks in pieces", "[unit]") {
 	CHECK(store.find(id)->state == record_data_state::in_sync);
 	CHECK(store.uploads_in_progress() == 0);
 	for(auto const& [no, chunk] : data.chunks) {
-		CHECK(store.read_chunk(id, no) == chunk);
+		CHECK(store.chunks().read_chunk(id, no) == chunk);
 	}
 }
 
@@ -183,7 +221,7 @@ TEST_CASE("server data store quota", "[unit]") {
 		// a resume of what is reserved is never refused, and works at the limit
 		CHECK(store.open_upload(medium.descriptor, medium.manifest, now));
 		for(auto const& [no, chunk] : medium.chunks) {
-			CHECK(store.store_chunk(medium.descriptor.manifest_digest, no, chunk, now));
+			CHECK(test::store_whole_chunk(store, medium.descriptor.manifest_digest, no, chunk, now));
 		}
 		CHECK(store.find(medium.descriptor.manifest_digest)->state == record_data_state::in_sync);
 
@@ -205,13 +243,13 @@ TEST_CASE("server data store expiry", "[unit]") {
 		server_data_store store{db, data_root};
 		for(auto const* d : {&done, &stale, &active}) {
 			REQUIRE(store.open_upload(d->descriptor, d->manifest, t0));
-			REQUIRE(store.store_chunk(d->descriptor.manifest_digest, 0, d->chunks.at(0), t0));
+			REQUIRE(test::store_whole_chunk(store, d->descriptor.manifest_digest, 0, d->chunks.at(0), t0));
 		}
 		for(auto const& [no, chunk] : done.chunks) {
-			REQUIRE(store.store_chunk(done.descriptor.manifest_digest, no, chunk, t0));
+			REQUIRE(test::store_whole_chunk(store, done.descriptor.manifest_digest, no, chunk, t0));
 		}
 		// one upload goes on an hour later
-		REQUIRE(store.store_chunk(active.descriptor.manifest_digest, 1, active.chunks.at(1), t0 + 1h));
+		REQUIRE(test::store_whole_chunk(store, active.descriptor.manifest_digest, 1, active.chunks.at(1), t0 + 1h));
 
 		CHECK(store.expire_incomplete(t0) == 0);
 	}
@@ -250,12 +288,12 @@ TEST_CASE("server data store release", "[unit]") {
 	for(auto const* d : {&kept, &dead}) {
 		REQUIRE(store.open_upload(d->descriptor, d->manifest, now));
 		for(auto const& [no, chunk] : d->chunks) {
-			REQUIRE(store.store_chunk(d->descriptor.manifest_digest, no, chunk, now));
+			REQUIRE(test::store_whole_chunk(store, d->descriptor.manifest_digest, no, chunk, now));
 		}
 	}
 	// an upload in progress
 	REQUIRE(store.open_upload(half.descriptor, half.manifest, now));
-	REQUIRE(store.store_chunk(half.descriptor.manifest_digest, 0, half.chunks.at(0), now));
+	REQUIRE(test::store_whole_chunk(store, half.descriptor.manifest_digest, 0, half.chunks.at(0), now));
 	CHECK(store.used_bytes() == limit);
 	CHECK(store.uploads_in_progress() == 1);
 
@@ -272,10 +310,10 @@ TEST_CASE("server data store release", "[unit]") {
 	CHECK(store.used_bytes() == kept.descriptor.enc_size);
 	// what was not released is untouched
 	CHECK(store.find(kept.descriptor.manifest_digest)->state == record_data_state::in_sync);
-	CHECK(store.read_chunk(kept.descriptor.manifest_digest, 0) == kept.chunks.at(0));
+	CHECK(store.chunks().read_chunk(kept.descriptor.manifest_digest, 0) == kept.chunks.at(0));
 
 	// a chunk of the released upload that was still on its way
-	CHECK(is_error(store.store_chunk(half.descriptor.manifest_digest, 1, half.chunks.at(1), now), protocol::errc::no_such_upload));
+	CHECK(is_error(test::store_whole_chunk(store, half.descriptor.manifest_digest, 1, half.chunks.at(1), now), protocol::errc::no_such_upload));
 	// the room is there again, and released again is nothing
 	CHECK(store.open_upload(dead.descriptor, dead.manifest, now));
 	CHECK(store.release({half.descriptor.manifest_digest}) == 0);
