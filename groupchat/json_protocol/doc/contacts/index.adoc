@@ -1,8 +1,64 @@
+A contact is a person whose key was fetched from their key server and verified.
+Adding one sends a contact request the other side has to accept; their acceptance,
+and invitations to chats, arrive as *requests* a person acts on.
 
-==== Add Contact
+=== get_contacts
 
-include::add.adoc[]
+Empty argument. `{"data": [ ... ]}` with one object per contact:
 
-==== List Contacts
+[cols="1,3"]
+|===
+| id       | key id
+| name     | the name given to the contact
+| complete | true once the contact's key is verified and the contact can be a chat member
+|===
 
-include::list.adoc[]
+=== add_contact
+
+[cols="1,3"]
+|===
+| id      | key id of the person
+| name    | the name to give the contact
+| message | (optional) a text that goes with the contact request
+| server  | (optional) server object of the person's key server; the own key server by default
+|===
+
+Answers `{"name": ..., "id": ...}`. An existing complete contact is renamed instead.
+
+=== get_requests
+
+Empty argument. `{"data": [ ... ]}` with the pending requests, each a contacting or an
+invitation object:
+
+[cols="1,3"]
+|===
+| action    | `contacting` or `invitation`
+| requestid | the number the request is acted on with
+| state     | `waiting_for_verification`, `verification_succeeded`, `querying_key_failed`, `verification_failed`, `no_key_found` or `cancelled`: how far verifying the sender's key got
+| sender    | `{id, name}` of who sent it (an invitation carries the full sender object)
+| message   | the text that came with it
+| storage   | (invitation) `{server, sid, name}`: the chat's storage server, storage id and name
+|===
+
+=== request_action
+
+[cols="1,3"]
+|===
+| requestid | which request
+| action    | `add_contact` (accept a contacting: the sender becomes a contact, answered with `{name, id}`), `join` (accept an invitation: joins the chat, answered with `{id, name}` of the chat), `remove` (drop the request), `ban` (drop it and ignore that sender from now on), `retry` (verify the sender's key again)
+|===
+
+Answers `{}` unless said otherwise.
+
+=== Request notifications
+
+`request` with `type` `contact` and a contacting object as `data`, or `type` `invite`
+and an invitation object. Both fire when the request arrives and again when the
+sender's key was verified, so a front end keys them by `requestid`.
+
+=== handle_qr_code
+
+The argument is the text of a scanned code, `sp-gc:` followed by JSON:
+`{"type": "user", "data": {...}}` adds a contact with the `add_contact` arguments, and
+`{"type": "join", "data": {...}}` joins a chat with the `join_chat` arguments. The
+answer is `{"type": ..., "data": <that command's answer>}`.

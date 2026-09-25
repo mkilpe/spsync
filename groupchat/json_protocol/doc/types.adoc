@@ -1,18 +1,61 @@
+=== Ids
 
-
-
-=== Key ID
-
-[source]
-.Type
---
-string
---
-
-Public key identifier that uniquely identifies a user. 32 bytes encoded as hexadecimal string.
+A *key id* identifies a person: the id of their public key, 32 bytes as 64 hexadecimal
+characters. A *chat id* identifies a chat: 16 bytes as hexadecimal. A *message id* and
+a *file id* identify one message or one shared file inside a chat, hexadecimal too.
+A *server id* is a small integer the core gives every server connection.
 
 [source]
-.Example
+.A key id
 --
 66383F21D96FEBFF398408A9A9B36B82B14E7574EAD7FA7F7DEF87F039D76552
 --
+
+=== Dates
+
+Dates are UTC as `YYYYMMDDhhmmssZ`, e.g. `20260925143000Z`.
+
+=== The sender object
+
+Whoever wrote a message or shared a file, as commands and notifications show them:
+
+[cols="1,3"]
+|===
+| id      | key id
+| name    | the contact's name, or the key id when the person is no contact
+| contact | true when the person is one of the contacts
+| me      | true when it is the own account
+|===
+
+=== The message object
+
+[cols="1,3"]
+|===
+| id      | message id
+| message | the text, UTF-8
+| date    | when the sender wrote it
+| index   | the position in the chat; messages the server confirmed keep theirs, own messages still pending sit after them and move once confirmed
+| sender  | sender object
+| state   | (notifications only) `pending`, `acked` or `in_sync`
+| oldindex | (notifications only) the index a pending message had before it was confirmed, 0 otherwise
+|===
+
+=== The file object
+
+[cols="1,3"]
+|===
+| file   | file id
+| name   | the name the sharer gave
+| mime   | the media type the sharer gave
+| size   | size in octets
+| date   | when it was shared
+| index  | the position in the chat's file list
+| state  | `pending` (own, the server has not confirmed the share), `sharing` (own, the data goes up), `shared` (own, done), `on_server` (another member's, not fetched), `fetching`, `fetched`, `removed` (the local copy was let go), `gone` (the data is invalid or the server let it go)
+| sharer | sender object
+|===
+
+=== The server object
+
+`{"host": "<host>", "port": <port>}`. Where a command takes a `server` argument it is
+optional and every member of it is optional: the home server and the default ports
+stand in.

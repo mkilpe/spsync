@@ -1,62 +1,33 @@
-
-This API is not REST API, but rather application internal protocol to handle communication between backend and frontend (so there are no GET, POST but only plain json).
-
-Every command and response have similar structure which is described here.
+This is not a REST API but the application's own boundary between the core and a front
+end: plain JSON in, plain JSON out, no transport of its own.
 
 === Commands
 
+A command is a function of `json_manager` called by name. Its argument is one JSON
+object (an empty string where the command takes nothing) and its answer is one JSON
+value. Commands run on the core's own thread and return when done; two of them,
+`create_chat` and `join_chat`, wait for the network first. From the notification
+callback a command may not wait for the network: it answers with an error then.
+
 [caption=""]
-.command
+.The answer of a failed command
 [frame=none]
 |===
 a|
 ----
-  {
-    "command": string,
-    "args": {
-        "<args-name-1>": <value>
-        ...
-        "<args-name-n>": <value>
-    },
-    "callback-data": <value>
-  }
+{"error": {"code": <integer>, "message": "<the error category's text>", "aux": "<what happened>"}}
 ----
 |===
 
-[cols="1,1"]
-|===
-| command       | Command as string, the commands are prefixed by the module, e.g. "chat.send" calls send in module chat.
-| args          | Arguments for the command, these are all command specific.
-| callback-data | (Optional) Arbitrary data that is passed back in the result, can be used to track calls and pass data as the calls are asynchronous.
-|===
-
-[caption=""]
-.result
-[frame=none]
-|===
-a|
-----
-  {
-    "error" : integer,
-    "error-string": string,
-    "result": <value>,
-    "callback-data": <value>
-  }
-----
-|===
-
-
-[cols="1,1"]
-|===
-| error         | Integer value indicating error or 0 if the call was successful.
-| error-string  | Human readable error string or empty in case of success.
-| result        | (Optional) Command specific result of the call in case the call was successful.
-| callback-data | (Optional) Data passed to the command.
-|===
+Every error answer has this shape, whatever the command; a command that succeeded
+never has an `error` member. Commands that have nothing to say answer `{}`.
 
 === Notifications
 
-Notifications are triggered by some state change in the backend, e.g. receiving a message
+The core reports through the callback given at construction with a type and a JSON
+object. The types are `state_change` (a connection or a chat changed), `request`
+(something arrived that a person has to act on) and `notification` (reserved). The
+object always has a `type` naming the kind of thing and `data` with the details:
 
 [caption=""]
 .notification
@@ -64,13 +35,9 @@ Notifications are triggered by some state change in the backend, e.g. receiving 
 |===
 a|
 ----
-  {
-    "notification": string,
-    "args": {
-        "<args-name-1>": <value>
-        ...
-        "<args-name-n>": <value>
-    }
-  }
+{"type": "chat", "data": {"action": "message", "server": 1, "chat": "<chat id>", "message": {...}}}
 ----
 |===
+
+Notifications come from the core's thread; a front end hands them to its own thread
+before touching its views.

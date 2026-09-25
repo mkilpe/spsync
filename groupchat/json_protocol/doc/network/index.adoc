@@ -1,16 +1,15 @@
+=== connect / disconnect
 
-==== Connect
+No argument, answer `{}`. `connect` needs an account; it opens the packet server
+connection (contact requests and invitations travel through it) and connects every
+known chat. `disconnect` closes them. Both may be called again.
 
-include::connect.adoc[]
+=== Connection notifications
 
-==== Disconnect
+`state_change` with `type` `connection`:
 
-include::disconnect.adoc[]
-
-==== Query Connection Status
-
-include::status.adoc[]
-
-==== Connection Status Changed
-
-include::on-status.adoc[]
+[cols="1,3"]
+|===
+| connection | `online` or `offline`
+| error      | (offline only, optional) the error object of a connection lost with an error
+|===

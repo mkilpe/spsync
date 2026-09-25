@@ -1,0 +1,35 @@
+=== get_account
+
+No argument. The account of this installation, or `{}` when none exists yet.
+
+[cols="1,3"]
+|===
+| user.name | the name given at creation
+| id        | the own key id
+| server    | server object of the home storage server
+| fallbacks | array of `{host, syncport, keyport}`: the replicas of the home server, tried in order when it is unreachable
+|===
+
+=== create_account
+
+Creates the account: a key pair, its registration at the home server's key server, the
+local databases. Fails when an account exists.
+
+[cols="1,3"]
+|===
+| name   | the name shown to others
+| server | (optional) `host`, `keyport`, `syncport`, `packetport` of the home server, each optional, and `fallbacks` as above
+|===
+
+Answers as `get_account` does.
+
+=== get_config / set_config
+
+The application's own key-value settings, kept in the core's database. `get_config`
+takes a JSON array of key names and answers an object with the ones that exist;
+`set_config` takes an object and stores every member, answering `{}`.
+
+=== get_version
+
+No argument. `version` with `groupchat`, `spsync` and `splib` version strings, `built`
+with the build date, `license` and credits (`devs`).

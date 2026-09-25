@@ -1,9 +1,3 @@
-[source]
-.Notifications
---
-file, file_state
---
-
 `file` comes with a new share: an own one when it is sent and again when the server
 confirmed it, another member's when its record arrives. `file_state` comes when the
 transfer state of a file changed, and with an `error` when a transfer ended with one

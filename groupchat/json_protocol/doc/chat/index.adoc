@@ -1,32 +1,96 @@
+A chat is a storage on a storage server: its members, messages and shared files are
+records of it, encrypted for the members and ordered by the server. The creator's home
+server hosts it; members join it from their invitation.
 
-==== Create Chat
+=== create_chat
 
-include::create.adoc[]
+[cols="1,3"]
+|===
+| name    | the chat's name
+| members | (optional) array of `{"user": "<key id>"}`: the contacts to add besides the creator
+| server  | (optional) server object of the storage server to host it; the home server by default
+|===
 
-==== List Chats
+Waits until the server connection is up. Answers `{"name": ..., "id": "<chat id>"}`;
+the `create` notification follows once the chat's first record is on the server.
 
-include::list.adoc[]
+=== join_chat
 
-==== List Members
+[cols="1,3"]
+|===
+| id     | chat id
+| name   | (optional) the name to show
+| server | (optional) server object of its storage server
+|===
 
-include::members.adoc[]
+Joins a chat one was invited to (normally through `request_action` with `join`, which
+knows the invitation's details; this form is what a QR code carries). Answers
+`{"id": ...}`; the `join` notification follows once the membership arrived.
 
-==== Send Message
+=== get_chats
 
-include::send.adoc[]
+Argument `{}` or `{"message": {"count": <n>, "order": "descending" | "ascending"}}`.
+`{"data": [ ... ]}` with `{name, id, messages}` per chat. With the `message` argument
+each chat carries its newest `count` messages (one by default) by sender time, and the
+chats are ordered by their newest message, chats without messages last.
 
-==== Chat Created (notification)
+=== get_chat_members
 
-include::on-create.adoc[]
+`{"id": "<chat id>"}`. `{"data": [ ... ]}` with per member:
 
-==== Message Received (notification)
+[cols="1,3"]
+|===
+| id      | key id
+| name    | the contact's name, or the key id
+| contact | true when the member is a contact
+| status  | `member`, `pending_add` or `pending_remove`
+|===
 
-include::on-send.adoc[]
+=== change_chat_member
 
-==== Shared Files
+[cols="1,3"]
+|===
+| id     | chat id
+| add    | (optional) array of `{"user": "<key id>"}` to add
+| remove | (optional) array of `{"user": "<key id>"}` to remove
+|===
+
+Answers `{}`; the members show as pending until the server confirmed the change.
+
+=== get_messages
+
+[cols="1,3"]
+|===
+| id    | chat id
+| start | (optional) index to start from
+| count | (optional) at most this many
+| order | (optional) `descending` (default) or `ascending` by index
+|===
+
+`{"data": [message objects]}`.
+
+=== send_message
+
+`{"id": "<chat id>", "message": "<text>"}`. Answers the message object, state
+`pending`; the `message` notification follows when the server confirmed it.
+
+=== Chat notifications
+
+`state_change` with `type` `chat`; `data` has `action`, `server` and `chat` (the chat
+id), then by action:
+
+[cols="1,3"]
+|===
+| create  | the chat was created on the server, or `error` says why not
+| join    | the chat was joined, or `error` says why not: an invitation whose first block does not match what the server serves is refused this way
+| message | a message arrived, own ones included once confirmed: `message` object with `state` and `oldindex`
+| file, file_state | a file was shared, or the state of one changed: see the shared files below
+|===
+
+==== Shared files
 
 include::files.adoc[]
 
-==== Shared File (notification)
+==== Shared file notifications
 
 include::on-file.adoc[]

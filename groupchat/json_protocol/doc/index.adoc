@@ -1,35 +1,36 @@
-// asciidoctor-pdf -r asciidoctor-diagram doc.adoc
+// asciidoctor index.adoc   (asciidoctor-pdf works the same way)
 
-= Secure Path GroupChat JSON protocol
-Version 0.1, 27.08.2021
+= Secure Path GroupChat JSON API
+Version 0.2, 2026-09-25
 :toc: right
+:toclevels: 3
 
-== Command Structure
+The API a front end drives the groupchat core with: the functions of
+`json_manager` (`json_protocol/json_manager.hpp`), each taking one JSON argument and
+answering with JSON, and the notifications the core sends back through its callback.
+The Android adapter (`groupchat/android`) exposes exactly this: `call(name, json)` and
+the listener's `onEvent(type, json)`.
+
+== Calling convention
 
 include::struct.adoc[]
 
-== Common Types
+== Common objects
 
 include::types.adoc[]
 
-== API
+== Account and configuration
 
-=== Initialising the System
+include::account/index.adoc[]
 
-include::init.adoc[]
-
-=== General Commands
-
-include::general.adoc[]
-
-=== Network
+== Connection
 
 include::network/index.adoc[]
 
-=== Contact Management
+== Contacts and requests
 
 include::contacts/index.adoc[]
 
-=== Chat
+== Chats
 
 include::chat/index.adoc[]

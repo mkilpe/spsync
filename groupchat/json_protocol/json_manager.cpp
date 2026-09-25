@@ -829,7 +829,7 @@ std::string json_manager::get_version() const {
 					{"Graphic design and GUI", "Tomi Ueda"},
 					{"Client core and server", "Mikael Kilpelainen"}
 				}},
-			{"license", "<todo>"}};
+			{"license", "MIT, Copyright (c) 2026 Secure Path Oy"}};
 
 		return json::serialize(info);
 	});

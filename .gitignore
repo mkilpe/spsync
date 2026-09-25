@@ -26,8 +26,7 @@ cmake.config
 *.sublime-workspace
 .cache/
 
-# test binaries run from the repo root leave these behind (all regenerated;
-# test_keys/*.db stay tracked - only root level databases are ignored)
+# test binaries run from the repo root leave these behind (all regenerated)
 /*.db
 :memory
 /record-storages/
