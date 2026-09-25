@@ -173,6 +173,11 @@ void comm::handle(protocol::notify_data const& p) {
 	output_->emit<comm_events::on_data_available>(p.data_id, p.complete);
 }
 
+void comm::handle(protocol::notify_equivocation const& p) {
+	assert(output_);
+	output_->emit<comm_events::on_equivocation>(p.sid, p.proof);
+}
+
 void comm::handle(protocol::notify_record const& p) {
 	assert(output_);
 	output_->emit<comm_events::on_record_received>(p.record, p.envelope);

@@ -342,9 +342,14 @@ bool peer_connection::pull_origin(std::shared_ptr<storage> const& handle, protoc
 	auto const div = samples ? handle->find_divergence(*samples) : divergence{};
 	note_divergence(p.sid, head.origin, div.diverged());
 	bool wanted = false;
-	if(div.diverged()) {
+	if(handle->condemned(head.origin)) {
+		LOG_TRACE("nothing of condemned origin {} is pulled (rsid={})", head.origin, to_hex(p.sid));
+	} else if(div.diverged()) {
 		LOG_WARN("the history of origin {} at peer {} parts from ours between sequences {} and {}: not pulled (rsid={})"
 			, head.origin, peer_id().value_or(crypto::public_key_id{}), div.last_common, div.first_divergent, to_hex(p.sid));
+		// the record it holds there is the proof the origin assigned the sequence twice
+		// (plan 5.4): asked for on its own, refused on arrival and kept as evidence
+		request_pull(p.sid, head.origin, div.first_divergent, div.first_divergent);
 	} else if(head.origin != sctx_.identity().server_id) {
 		auto const plan = plan_pull(handle->known_origin_seq(head.origin), head.block.sequence, div);
 		wanted = plan.wanted();
@@ -499,7 +504,9 @@ void peer_connection::operator()(protocol::response_envelopes const& p) {
 			auto const known = handle->known_origin_seq(p.origin);
 			bool const progressed = !p.envelopes.empty()
 				&& known >= p.envelopes.back().block().sequence();
-			if(progressed && p.origin_max.is_valid() && known < p.origin_max) {
+			// a condemned origin (the batch may have been the proof) is not followed further
+			bool const more = progressed && !handle->condemned(p.origin) && p.origin_max.is_valid() && known < p.origin_max;
+			if(more) {
 				request_pull(p.sid, p.origin, known + 1, p.origin_max);
 			} else if(progressed) {
 				sctx_.note_caught_up(p.sid);

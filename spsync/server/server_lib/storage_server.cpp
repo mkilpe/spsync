@@ -242,6 +242,9 @@ public:
 						push_to_peers(sid, modes, env);
 					});
 			}
+			p->set_evidence_handler([this](protocol::storage_id const& sid, equivocation_proof const& proof) {
+					on_evidence(sid, proof);
+				});
 			it = storages_.emplace(id, std::move(p)).first;
 		} else if(create_modes && !modes_match(*create_modes, it->second->modes())) {
 			throw make_error(protocol::errc::storage_mode_mismatch, "storage exists with different modes");
@@ -374,13 +377,33 @@ public:
 		return context_.public_keys().find(id);
 	}
 
+	/// the operator event for a proof of equivocation found on a storage (plan 5.4)
+	void on_evidence(protocol::storage_id const& sid, equivocation_proof const& proof) {
+		LOG_WARN("operator event: origin {} equivocated on storage {} at sequence {} - its records are refused from now on"
+			, proof.origin(), to_hex(sid), proof.sequence());
+		storage_server::evidence_hook handler;
+		{
+			std::unique_lock lock{mutex_};
+			handler = evidence_handler_;
+		}
+		if(handler) {
+			handler(sid, proof);
+		}
+	}
+
+	void set_evidence_handler(storage_server::evidence_hook hook) {
+		std::unique_lock lock{mutex_};
+		evidence_handler_ = std::move(hook);
+	}
+
 	/// a connected peer announced a head of the storage we have not reached; an origin
 	/// whose history parts from ours there is not one we could reach (plan 5.3)
 	bool behind_a_peer(std::shared_ptr<storage> const& handle) {
 		auto const& own = identity_.server_id;
 		for(auto const& conn : peer_connections()) {
 			for(auto const& head : conn->heads_of_peer(handle->id())) {
-				bool const reachable = head.origin != own && !conn->origin_diverged(handle->id(), head.origin);
+				bool const reachable = head.origin != own && !conn->origin_diverged(handle->id(), head.origin)
+					&& !handle->condemned(head.origin);
 				if(reachable && handle->known_origin_seq(head.origin) < head.block.sequence) {
 					return true;
 				}
@@ -605,6 +628,8 @@ public:
 	std::optional<asio::steady_timer> ae_timer_;
 	/// the replication sweep (RD13 copy count)
 	std::optional<asio::steady_timer> copy_timer_;
+	/// the operator's hook for equivocation evidence (plan 5.4)
+	storage_server::evidence_hook evidence_handler_;
 	bool closing_{};
 };
 
@@ -663,6 +688,10 @@ server_identity storage_server::identity() const {
 std::shared_ptr<storage> storage_server::open_storage(protocol::storage_id const& sid,
 	std::optional<storage_modes> create_modes) {
 	return impl_->acquire_sync(sid, create_modes);
+}
+
+void storage_server::set_evidence_handler(evidence_hook hook) {
+	impl_->set_evidence_handler(std::move(hook));
 }
 
 std::optional<asio::ip::tcp::endpoint> storage_server::s2s_local_endpoint() const {

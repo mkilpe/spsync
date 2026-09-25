@@ -83,6 +83,7 @@ void connection::handle(protocol::request_sequence_number const& p) {
 	securepath::error error;
 	sequence_number seq;
 	storage_modes smodes{};
+	std::vector<equivocation_proof> evidence;
 	try {
 		auto handle = find_storage(p.sid);
 		if(handle && context_.is_syncing(p.sid)) {
@@ -97,6 +98,7 @@ void connection::handle(protocol::request_sequence_number const& p) {
 				error = make_error(protocol::errc::storage_mode_mismatch);
 			} else {
 				seq = handle->current_sequence_number();
+				evidence = handle->evidence();
 			}
 		} else {
 			LOG_WARN("no such storage: {}", to_hex(p.sid));
@@ -113,6 +115,10 @@ void connection::handle(protocol::request_sequence_number const& p) {
 		send_packet(protocol::response_sequence_number{p, error});
 	} else {
 		send_packet(protocol::response_sequence_number{p, seq, protocol::to_wire(std::optional<storage_modes>{smodes}), data_.data_endpoints()});
+		// what is known of equivocating origins goes with the session (plan 5.4)
+		for(auto const& proof : evidence) {
+			send_packet(protocol::notify_equivocation{p.sid, proof});
+		}
 	}
 }
 
@@ -204,6 +210,10 @@ void connection::notify(protocol::storage_id const& sid, chain_block const& c, s
 
 void connection::notify_data(protocol::storage_id const& sid, data_id const& id, bool complete) {
 	send_packet(protocol::notify_data{sid, id, complete});
+}
+
+void connection::notify_equivocation(protocol::storage_id const& sid, equivocation_proof const& proof) {
+	send_packet(protocol::notify_equivocation{sid, proof});
 }
 
 }

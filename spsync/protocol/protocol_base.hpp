@@ -15,7 +15,7 @@
 namespace securepath::sync::protocol {
 inline namespace v1 {
 
-std::uint16_t const current_version{1};
+std::uint16_t const current_version{2};
 
 using storage_id = octet_vector;
 using call_id = std::uint32_t;

@@ -59,6 +59,9 @@ enum class errc {
 	/// a record of an origin server at a sequence the receiver holds under another hash:
 	/// the origin's history parts from the one held (plan 5.3), nothing of it applies
 	origin_diverged,
+	/// the origin was found to assign one sequence to two records (plan 5.4): nothing of
+	/// its history is taken any more
+	origin_condemned,
 	end_of_list
 };
 

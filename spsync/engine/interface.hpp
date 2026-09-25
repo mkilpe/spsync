@@ -4,6 +4,7 @@
 #include <spsync/core/data/data_descriptor.hpp>
 #include <spsync/core/record_storage.hpp>
 #include <spsync/core/users.hpp>
+#include <spsync/core/records/equivocation_proof.hpp>
 #include <spsync/core/records/user_change_record.hpp>
 #include <spsync/util/object_id.hpp>
 #include <spsync/util/metadata.hpp>
@@ -92,6 +93,15 @@ struct engine_output : event_system::event_handler {
 	virtual void on_fork_suspected(record_handle local, chain_block remote) {}
 
 	/**
+	 * Called when the server showed proof that an origin server assigned one sequence
+	 * of the storage to two records (plan 5.4), verified with the origin's key. The
+	 * server refuses that origin's records from then on. In strict mode the engine
+	 * stops committing to the storage, as with a fork suspicion; in weak modes it goes
+	 * on and the application decides what to make of it.
+	 */
+	virtual void on_equivocation(equivocation_proof const&) {}
+
+	/**
 	 * Called when an object changed underneath a pending record (per conflicting object).
 	 * local is the own pending record, remote the newest record for the object. With
 	 * conflict_policy::rebase_on_top the local record has been rebuilt on top of remote;
@@ -146,6 +156,9 @@ struct on_object_conflict {
 };
 struct on_fork_suspected {
 	typedef void type(record_handle, chain_block);
+};
+struct on_equivocation {
+	typedef void type(equivocation_proof);
 };
 struct on_record_rejected {
 	typedef void type(record_handle, error);

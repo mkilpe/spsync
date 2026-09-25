@@ -1,4 +1,5 @@
 #include <spsync/test/engine_context.hpp>
+#include <spsync/test/test_block_creator.hpp>
 #include <spsync/engine/record_creator.hpp>
 
 #include <atomic>
@@ -448,6 +449,96 @@ TEST_CASE("engine does not repeat a fetch that made no progress", "[unit]") {
 	context.io.process_events();
 	CHECK(answers == 2);
 	CHECK(context.storage.last_block().sequence == sequence_number{1});
+}
+
+
+namespace {
+
+struct equivocation_observer : sync::engine_output {
+	using engine_output::engine_output;
+	~equivocation_observer() { stop_handler(); }
+
+	void on_equivocation(equivocation_proof const&) override {
+		++proofs;
+	}
+
+	std::atomic<int> proofs{0};
+};
+
+/// a proof an origin key made for the storage: one sequence, two records
+equivocation_proof make_proof(crypto::private_key const& origin, octet_vector const& sid) {
+	test::test_block_creator one;
+	test::test_block_creator two;
+	block_envelope first{one.test_user_change(), origin.id()};
+	first.sign(sid, origin);
+	block_envelope second{two.test_user_change(), origin.id()};
+	second.sign(sid, origin);
+	return equivocation_proof{first, second};
+}
+
+/// an engine with a chain of its own (the harness answers its commits), the observer as its output
+void own_chain(test::engine_context& target, equivocation_observer& observer) {
+	target.engine.set_output(&observer);
+	target.add_default_commit_response();
+	target.create_initial_record();
+	target.io.process_events();
+	REQUIRE(target.storage.last_block().sequence == sequence_number{1});
+}
+
+}
+
+// (plan 5.4) proof that an origin assigned one sequence twice: strict mode stops
+// committing, weak modes go on and surface it; a proof that does not verify is ignored
+TEST_CASE("engine equivocation evidence", "[unit]") {
+	auto const origin = crypto::generate_private_key();
+	octet_vector const sid = securepath::test::random_octet_vector(8);
+	auto const proof = make_proof(origin, sid);
+
+	SECTION("strict mode halts commits") {
+		test::engine_context target;
+		target.pkeys.insert(origin.public_key());
+		equivocation_observer observer{target.single_thread_event_loop};
+		own_chain(target, observer);
+		target.engine.on_equivocation(sid, proof);
+		WAIT_CHECK(observer.proofs == 1, 2s);
+
+		target.add_default_commit_response();
+		auto h = target.engine.sync_object_change(create_object_id(), metadata{});
+		target.io.process_events();
+		CHECK(h->state() == record_state::pending_commit);
+		CHECK(target.storage.last_block().sequence == sequence_number{1});
+		target.engine.set_output(nullptr);
+	}
+
+	SECTION("weak modes go on") {
+		test::engine_context target{sync_engine_config{.mode=sync_mode::allow_all}};
+		target.pkeys.insert(origin.public_key());
+		equivocation_observer observer{target.single_thread_event_loop};
+		own_chain(target, observer);
+		target.engine.on_equivocation(sid, proof);
+		WAIT_CHECK(observer.proofs == 1, 2s);
+
+		target.add_default_commit_response();
+		auto h = target.engine.sync_object_change(create_object_id(), metadata{});
+		target.io.process_events();
+		CHECK(h->state() == record_state::in_sync);
+		target.engine.set_output(nullptr);
+	}
+
+	SECTION("a proof that does not verify here is ignored") {
+		test::engine_context target;
+		equivocation_observer observer{target.single_thread_event_loop};
+		own_chain(target, observer);
+		// the origin's key is unknown to this client
+		target.engine.on_equivocation(sid, proof);
+
+		target.add_default_commit_response();
+		auto h = target.engine.sync_object_change(create_object_id(), metadata{});
+		target.io.process_events();
+		CHECK(h->state() == record_state::in_sync);
+		CHECK(observer.proofs == 0);
+		target.engine.set_output(nullptr);
+	}
 }
 
 }

@@ -38,6 +38,7 @@ public:
 	virtual void on_record_response(request_handle, record_response const&);
 	virtual void on_data_downloaded(request_handle, std::optional<error>);
 	virtual void on_data_available(data_id, bool complete);
+	virtual void on_equivocation(storage_id const&, equivocation_proof const&);
 	virtual void on_commit_response(request_handle, commit_response const&);
 	virtual void on_data_uploaded(request_handle, std::optional<error>);
 	virtual void on_record_received(chain_block const&, std::optional<block_envelope> const& = {});

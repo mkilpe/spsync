@@ -4,6 +4,7 @@
 #include "wire_modes.hpp"
 #include <spsync/core/data/data_ticket.hpp>
 #include <spsync/core/records/block_envelope.hpp>
+#include <spsync/core/records/equivocation_proof.hpp>
 
 namespace securepath::sync::protocol {
 inline namespace v1 {
@@ -182,6 +183,28 @@ struct notify_data {
 	}
 };
 
+/**
+ * To the listeners of a storage when its server found an origin server assigning one
+ * sequence to two records (plan 5.4), and to a client starting a session on the storage
+ * for every proof held: the application decides what to make of it (the engine stops
+ * committing in strict mode)
+ */
+struct notify_equivocation {
+	notify_equivocation(storage_id sid = {}, equivocation_proof p = {})
+	: sid(std::move(sid))
+	, proof(std::move(p))
+	{}
+
+	storage_id sid;
+	equivocation_proof proof;
+
+	template<typename S>
+	void serialise(S& s) {
+		serialisation::sequence<S> seq(s);
+		seq & sid & proof;
+	}
+};
+
 using serialisation::type_tag;
 using s2c_types =
 	typelist<type_tag<server_hello, 1>,
@@ -193,7 +216,8 @@ using s2c_types =
 			type_tag<response_commit, 8>,
 			type_tag<notify_record, 9>,
 			type_tag<response_data_ticket, 10>,
-			type_tag<notify_data, 11> >;
+			type_tag<notify_data, 11>,
+			type_tag<notify_equivocation, 12> >;
 
 }
 }

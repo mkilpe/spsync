@@ -1,6 +1,8 @@
 #pragma once
 
 #include "types.hpp"
+
+#include <spsync/core/records/equivocation_proof.hpp>
 #include <securepath/event_system/event_handler.hpp>
 #include <securepath/event_system/event_loop.hpp>
 
@@ -77,6 +79,10 @@ struct comm_output : event_system::event_handler {
 	/// (notify_data): a data that was remote_not_complete may be fetched now
 	virtual void on_data_available(data_id, bool complete) {}
 
+	/// called when the server shows proof that an origin server assigned one sequence of
+	/// the storage to two records (plan 5.4); the storage id is what verifying it takes
+	virtual void on_equivocation(storage_id const&, equivocation_proof const&) {}
+
 	/// called when getting response to a commit attempt from the server
 	virtual void on_commit_response(request_handle, commit_response const&) = 0;
 
@@ -107,6 +113,9 @@ struct on_record_response {
 };
 struct on_data_downloaded {
 	typedef void type(request_handle, std::optional<error>);
+};
+struct on_equivocation {
+	typedef void type(storage_id, equivocation_proof);
 };
 struct on_data_available {
 	typedef void type(data_id, bool);

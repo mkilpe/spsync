@@ -178,6 +178,7 @@ storage::storage(protocol::storage_id id, storage_config config, std::optional<s
 
 	sync_ = std::make_unique<chain_sync>(db_conn, sync_config, keys);
 	heads_ = std::make_unique<storage_heads>(db_conn);
+	evidence_ = std::make_unique<evidence_store>(db_conn);
 	db_ = db_conn;
 	if(!db_->has_table("replica_state")) {
 		db_->prepare("CREATE TABLE replica_state("
@@ -292,7 +293,28 @@ storage::commit_outcome storage::commit_block(chain_block const& cb) {
 }
 
 error storage::apply_foreign(block_envelope const& env) {
-	std::unique_lock l{mutex_};
+	std::optional<equivocation_proof> found;
+	error err;
+	{
+		std::unique_lock l{mutex_};
+		err = admit_foreign(env, found);
+		if(!err) {
+			err = apply_admitted(env);
+		}
+	}
+	// the operator event, outside the lock like the other hooks
+	if(found && evidence_hook_) {
+		evidence_hook_(id_, *found);
+	}
+	return err;
+}
+
+/**
+ * A bad signature, a condemned origin, or an assignment that parts from the held
+ * history (plan 5.3) keep a record out. The last one is the origin assigning a
+ * sequence twice: the two envelopes make the proof (plan 5.4), kept and handed out.
+ */
+error storage::admit_foreign(block_envelope const& env, std::optional<equivocation_proof>& found) {
 	if(modes_.replication != replication_mode::weak) {
 		return make_error(protocol::errc::invalid_state, "storage does not replicate in weak mode");
 	}
@@ -303,15 +325,40 @@ error storage::apply_foreign(block_envelope const& env) {
 		LOG_WARN("foreign envelope does not verify [origin={}] (rsid={})", env.origin(), to_hex(id_));
 		return err;
 	}
+	if(evidence_->condemned(env.origin())) {
+		LOG_TRACE("record of condemned origin {} refused (rsid={})", env.origin(), to_hex(id_));
+		return make_error(protocol::errc::origin_condemned);
+	}
 	auto const& block = env.block();
-	// the origin assigned this sequence to another record than the one held: its history
-	// parts from ours here (plan 5.3) and nothing of it applies; the proof is plan 5.4's
 	auto const held = sync_->records().origin_block_hash(env.origin().data(), block.sequence());
 	if(!held.empty() && held != block.hash()) {
 		LOG_WARN("origin {} assigned sequence {} to another record than the one held (rsid={})"
 			, env.origin(), block.sequence(), to_hex(id_));
+		auto ours = sync_->log().get_by_origin(env.origin(), block.sequence(), block.sequence(), 1);
+		if(!ours.empty() && note_evidence(equivocation_proof{ours.front(), env})) {
+			found = equivocation_proof{ours.front(), env};
+		}
 		return make_error(protocol::errc::origin_diverged);
 	}
+	return {};
+}
+
+bool storage::note_evidence(equivocation_proof const& proof) {
+	if(auto err = proof.verify(id_, *keys_)) {
+		LOG_WARN("not a proof of equivocation [origin={}, err={}] (rsid={})", proof.origin(), err, to_hex(id_));
+		return false;
+	}
+	bool const fresh = evidence_->record(proof);
+	if(fresh) {
+		LOG_WARN("origin {} equivocated: sequence {} assigned to two records, nothing of its history is taken any more (rsid={})"
+			, proof.origin(), proof.sequence(), to_hex(id_));
+		for_each_listener([&](connection& conn) { conn.notify_equivocation(id_, proof); });
+	}
+	return fresh;
+}
+
+error storage::apply_admitted(block_envelope const& env) {
+	auto const& block = env.block();
 	if(env.origin() == own_id_) {
 		// our own record came back around
 		return {};
@@ -338,6 +385,33 @@ error storage::apply_foreign(block_envelope const& env) {
 	sync_->log().store_assignment(block.tag(), env);
 	notify_listeners(res.value(), make_envelope(res.value()));
 	return {};
+}
+
+bool storage::condemned(crypto::public_key_id const& origin) const {
+	std::unique_lock l{mutex_};
+	return evidence_->condemned(origin);
+}
+
+std::vector<equivocation_proof> storage::evidence() const {
+	std::unique_lock l{mutex_};
+	return evidence_->all();
+}
+
+bool storage::record_evidence(equivocation_proof const& proof) {
+	bool fresh = false;
+	{
+		std::unique_lock l{mutex_};
+		fresh = keys_ && note_evidence(proof);
+	}
+	if(fresh && evidence_hook_) {
+		evidence_hook_(id_, proof);
+	}
+	return fresh;
+}
+
+void storage::set_evidence_handler(evidence_hook hook) {
+	std::unique_lock l{mutex_};
+	evidence_hook_ = std::move(hook);
 }
 
 bool storage::bootstrapping() const {

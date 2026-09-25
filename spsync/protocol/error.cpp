@@ -36,6 +36,7 @@ namespace {
 		, "data transfer quota exceeded"
 		, "data pruned by the retention policy"
 		, "origin history diverged"
+		, "origin condemned for equivocation"
 		};
 
 	using category_type = def_error_category<errc>;

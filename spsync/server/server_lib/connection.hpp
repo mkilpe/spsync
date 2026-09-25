@@ -6,6 +6,7 @@
 #include <flat_map>
 
 #include <spsync/core/records/block_envelope.hpp>
+#include <spsync/core/records/equivocation_proof.hpp>
 
 #include <optional>
 
@@ -34,6 +35,7 @@ public:
 
 	void notify(protocol::storage_id const& sid, chain_block const&, std::optional<block_envelope> const&);
 	void notify_data(protocol::storage_id const& sid, data_id const&, bool complete);
+	void notify_equivocation(protocol::storage_id const& sid, equivocation_proof const&);
 
 private:
 	virtual void send(octet_span s) = 0;

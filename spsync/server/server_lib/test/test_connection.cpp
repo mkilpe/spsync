@@ -9,6 +9,7 @@
 #include <spsync/engine/sync_engine.hpp>
 #include <spsync/test/util.hpp>
 #include <spsync/test/test_progress.hpp>
+#include <spsync/test/test_block_creator.hpp>
 #include <spsync/test/test_context.hpp>
 
 #include <securepath/test_frame/test_suite.hpp>
@@ -62,6 +63,8 @@ public:
 
 		storage_connection sconn{net.create_storage_connection(sid, storage, progress, storage_modes{engine_config.mode, engine_config.auth_mode})};
 		engine = std::make_unique<sync_engine>(event_loop(), sconn.input(), cc, engine_config);
+		// an output set before the session starts sees everything the server sends first
+		engine->set_output(output);
 
 		//after this the events will be received
 		sconn.attach(*engine);
@@ -138,6 +141,8 @@ public:
 	encryption_key_storage enc_keys{database};
 	crypto_context cc{context.public_keys(), context.private_data(), enc_keys, storage};
 	sync_engine_config engine_config;
+	/// the engine's output from the start, when set before connect_to_storage
+	engine_output* output{};
 
 	std::unique_ptr<sync_engine> engine;
 	/// the server answered storage_syncing and the session was dropped (plan 5.2)
@@ -507,6 +512,88 @@ TEST_CASE("records above a mebibyte", "[system]") {
 	test_client client3(net_context.client_context(2), single_thread_event_loop, 2);
 	join_storage(client3, sid);
 	WAIT_CHECK(test::check_commit_records_equal(sequence_number{9}, client1.storage, client3.storage), 30s);
+}
+
+
+namespace {
+
+struct equivocation_observer : engine_output {
+	using engine_output::engine_output;
+	~equivocation_observer() { stop_handler(); }
+
+	void on_equivocation(equivocation_proof const&) override {
+		++proofs;
+	}
+
+	std::atomic<int> proofs{0};
+};
+
+/// a proof an origin key made for the storage: one sequence, two records
+equivocation_proof make_proof(crypto::private_key const& origin, storage_id const& sid) {
+	test::test_block_creator one;
+	test::test_block_creator two;
+	block_envelope first{one.test_user_change(), origin.id()};
+	first.sign(sid, origin);
+	block_envelope second{two.test_user_change(), origin.id()};
+	second.sign(sid, origin);
+	return equivocation_proof{first, second};
+}
+
+}
+
+// (plan 5.4) a proof the server holds reaches its clients: the ones on the storage when
+// it is found at once, the ones starting a session later with the session; the operator
+// hook fires once; the strict clients stop committing
+TEST_CASE("equivocation evidence reaches the clients", "[system]") {
+	event_system::single_thread_event_loop single_thread_event_loop;
+	test::test_context net_context;
+	net_context.add_client(2);
+	net_context.add_client_keys_for_server();
+	net_context.share_client_keys();
+	// the origin whose key made the proof is known to the server and the clients
+	auto const origin = crypto::generate_private_key();
+	net_context.server_context().public_keys().insert(origin.public_key());
+	net_context.client_context(0).public_keys().insert(origin.public_key());
+	net_context.client_context(1).public_keys().insert(origin.public_key());
+
+	test::test_server server(net_context.server_context());
+	std::atomic<int> operator_events{0};
+	server.storages().set_evidence_handler([&](storage_id const&, equivocation_proof const&) { ++operator_events; });
+	server.run();
+
+	equivocation_observer observer1{single_thread_event_loop};
+	test_client client1(net_context.client_context(0), single_thread_event_loop, 0);
+	client1.output = &observer1;
+	client1.connect();
+	client1.wait_for_connection();
+	auto const sid = client1.create_remote_storage();
+	client1.wait_for_storage_created();
+	client1.create_initial_record({net_context.key_id(1)});
+	WAIT_REQUIRE(client1.storage.last_block().sequence == sequence_number{1}, 2s);
+
+	// found while client 1 is on the storage
+	auto const proof = make_proof(origin, sid);
+	auto storage = server.storages().open_storage(sid);
+	REQUIRE(storage->record_evidence(proof));
+	CHECK(!storage->record_evidence(proof));
+	CHECK(storage->condemned(origin.id()));
+	WAIT_CHECK(observer1.proofs == 1, 2s);
+	CHECK(operator_events == 1);
+	auto pending = client1.engine->sync_object_change(util::create_object_id(), metadata{});
+
+	// a client starting its session afterwards is told with the session
+	equivocation_observer observer2{single_thread_event_loop};
+	test_client client2(net_context.client_context(1), single_thread_event_loop, 1);
+	client2.output = &observer2;
+	join_storage(client2, sid);
+	WAIT_CHECK(observer2.proofs == 1, 2s);
+	WAIT_CHECK(client2.storage.last_block().sequence == sequence_number{1}, 2s);
+
+	// the strict clients stopped committing
+	CHECK(pending->state() == record_state::pending_commit);
+	CHECK(storage->current_sequence_number() == sequence_number{1});
+	client1.engine->set_output(nullptr);
+	client2.engine->set_output(nullptr);
 }
 
 }

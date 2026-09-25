@@ -13,6 +13,7 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <chrono>
 #include <filesystem>
 #include <memory>
@@ -557,14 +558,19 @@ TEST_CASE("s2s own origin pull across many foreign records", "[unit]") {
 	b->close();
 }
 
-// (plan 5.3) a replica holding a record the origin assigned a sequence to differently -
-// the origin's history parts from the replica's there - refuses the origin's record at
-// that sequence, pulls nothing of that history and is not "syncing" for it
-TEST_CASE("s2s divergent origin history is not pulled", "[unit]") {
+// (plan 5.3/5.4) a replica holding a record the origin's key assigned a sequence to,
+// other than the origin's own: the origin's record at that sequence is refused and the
+// two assignments are the proof it equivocated - kept, told to the operator, and nothing
+// of that origin is taken or pulled any more; neither side stays "syncing" for it
+TEST_CASE("s2s equivocating origin is condemned", "[unit]") {
 	peer_pair pair{"test-s2s-da", "test-s2s-db", 21, 22};
 	auto const key_a = pair.key(0);
 	storage_server a(pair.context(0), pair.params(0, std::chrono::seconds{1}));
 	storage_server b(pair.context(1), pair.params(1, std::chrono::seconds{1}));
+	std::atomic<int> operator_events{0};
+	b.set_evidence_handler([&](protocol::storage_id const&, equivocation_proof const& proof) {
+		operator_events += proof.origin() == key_a && proof.sequence() == sequence_number{4} ? 1 : 100;
+	});
 	protocol::storage_id const sid = securepath::test::random_octet_vector(8);
 	auto [sa, sb] = open_on_both(a, b, sid, weak_modes());
 	a.start();
@@ -586,31 +592,39 @@ TEST_CASE("s2s divergent origin history is not pulled", "[unit]") {
 	REQUIRE(!sb->apply_foreign(env));
 	CHECK(sb->known_origin_seq(key_a) == sequence_number{4});
 
-	// A's real fourth record is pushed and refused: the sequence is held under another hash
+	// A's real fourth record is pushed and refused: the proof, the condemnation
 	auto const fourth = creator.test_data_change();
 	REQUIRE(sa->commit_block(fourth).block);
+	WAIT_REQUIRE(sb->condemned(key_a), 5s);
+	auto const evidence = sb->evidence();
+	REQUIRE(evidence.size() == 1);
+	CHECK(evidence[0].origin() == key_a);
+	CHECK(evidence[0].sequence() == sequence_number{4});
+	CHECK(!evidence[0].verify(sid, pair.context(1).public_keys()));
+	CHECK(operator_events == 1);
+
+	// the next announcement carries head 5 with samples: B pulls nothing of A any more
+	// and does not count itself behind; A's fifth record is refused like the fourth
+	auto const fifth = creator.test_data_change();
+	REQUIRE(sa->commit_block(fifth).block);
 	auto const announced_head = [&] {
 		auto const heads = b.heads_of_peer(key_a, sid);
 		auto it = std::ranges::find(heads, key_a, &origin_head::origin);
 		return it == heads.end() ? sequence_number{} : it->block.sequence;
 	};
-	// the next announcement carries head 4 with samples: B sees the fork, pulls nothing
-	// of it and does not count itself behind on that origin
-	WAIT_REQUIRE(announced_head() == sequence_number{4}, 5s);
+	WAIT_REQUIRE(announced_head() == sequence_number{5}, 5s);
 	CHECK(!b.is_syncing(sid));
 	CHECK(!a.is_syncing(sid));
-	auto tags = tag_set(*sb, sequence_number{4});
+	CHECK(sb->current_sequence_number() == sequence_number{4});
+	auto const tags = tag_set(*sb, sequence_number{4});
 	CHECK(std::ranges::find(tags, forged.tag()) != tags.end());
 	CHECK(std::ranges::find(tags, fourth.tag()) == tags.end());
+	CHECK(std::ranges::find(tags, fifth.tag()) == tags.end());
+	CHECK(sb->known_origin_seq(key_a) == sequence_number{4});
 
-	// what A assigns after that has no counterpart on B and applies as usual
-	auto const fifth = creator.test_data_change();
-	REQUIRE(sa->commit_block(fifth).block);
-	WAIT_CHECK(sb->current_sequence_number() == sequence_number{5}, 5s);
-	tags = tag_set(*sb, sequence_number{5});
-	CHECK(std::ranges::find(tags, fifth.tag()) != tags.end());
-	CHECK(std::ranges::find(tags, fourth.tag()) == tags.end());
-	CHECK(sb->known_origin_seq(key_a) == sequence_number{5});
+	// A hears of B's view of its own history, asks for the record and holds the proof
+	// against its own key too: someone signs with it
+	WAIT_CHECK(sa->condemned(key_a), 5s);
 
 	a.close();
 	b.close();

@@ -4,6 +4,7 @@
 #include "peer_config.hpp"
 
 #include <spsync/core/origin_head.hpp>
+#include <spsync/core/records/equivocation_proof.hpp>
 #include <spsync/core/sync_mode.hpp>
 #include <spsync/protocol/ports.hpp>
 #include <spsync/protocol/protocol_base.hpp>
@@ -11,6 +12,7 @@
 #include <securepath/network/encryption/context.hpp>
 
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <string>
@@ -112,6 +114,15 @@ public:
 
 	/// the s2s listener endpoint when it is running (plan 4.1)
 	std::optional<asio::ip::tcp::endpoint> s2s_local_endpoint() const;
+
+	/**
+	 * The operator event for equivocation evidence (plan 5.4): called, off the lock,
+	 * when a storage of this server found or was given a proof that an origin server
+	 * assigned one sequence to two records. The proof is kept with the storage and its
+	 * origin's records are refused from then on; this is where an operator is told.
+	 */
+	using evidence_hook = std::function<void(protocol::storage_id const&, equivocation_proof const&)>;
+	void set_evidence_handler(evidence_hook);
 
 	/// the last heads the given peer announced for the storage (plan 4.1/4.4)
 	std::vector<origin_head> heads_of_peer(crypto::public_key_id const& peer, protocol::storage_id const&) const;

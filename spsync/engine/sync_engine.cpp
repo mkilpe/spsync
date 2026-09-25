@@ -502,6 +502,26 @@ public:
 	 * showed two histories. Emitted once; commits to this storage stop (D10).
 	 * Weak modes get a tag based variant with phase 4.3.
 	 */
+	/**
+	 * The server showed proof that an origin server assigned one sequence twice (plan
+	 * 5.4). A proof that does not verify here is not passed on (the origin's key may be
+	 * unknown to this client, or the server made it up). In strict mode commits stop as
+	 * with a fork suspicion (D10: detection halts, never heals).
+	 */
+	void on_equivocation(storage_id const& sid, equivocation_proof const& proof) {
+		if(auto err = proof.verify(sid, crypto.public_keys())) {
+			LWARN("equivocation proof from the server does not verify, ignored [origin={}, err={}]", proof.origin(), err);
+		} else {
+			LWARN("origin {} equivocated at sequence {}: the server refuses its records from now on", proof.origin(), proof.sequence());
+			if(config.mode == sync_mode::require_all_seen) {
+				fork_suspected = true;
+			}
+			if(output) {
+				output->emit<engine_events::on_equivocation>(proof);
+			}
+		}
+	}
+
 	template<typename Record>
 	void check_fork(chain_block const& record, Record const& rec) {
 		if(config.mode != sync_mode::require_all_seen) {
@@ -1229,6 +1249,11 @@ void sync_engine::on_data_downloaded(request_handle req_handle, std::optional<er
 	if(impl_->data) {
 		impl_->data->on_download_answer(req_handle, err);
 	}
+}
+
+void sync_engine::on_equivocation(storage_id const& sid, equivocation_proof const& proof) {
+	std::unique_lock lock{impl_->mutex};
+	impl_->on_equivocation(sid, proof);
 }
 
 void sync_engine::on_data_available(data_id id, bool complete) {

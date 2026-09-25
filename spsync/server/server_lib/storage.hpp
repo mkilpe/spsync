@@ -1,6 +1,7 @@
 #pragma once
 
 #include "chain_sync.hpp"
+#include "evidence_store.hpp"
 #include "storage_heads.hpp"
 
 #include <spsync/core/divergence.hpp>
@@ -134,6 +135,24 @@ public:
 	/// where this replica's view of an origin parts from a peer's samples of it (plan 5.3)
 	divergence find_divergence(origin_samples const&) const;
 
+	/// a proof is held that the origin assigned one sequence to two records (plan 5.4):
+	/// nothing it assigns is taken any more
+	bool condemned(crypto::public_key_id const& origin) const;
+
+	/// the equivocation proofs held (plan 5.4)
+	std::vector<equivocation_proof> evidence() const;
+
+	/**
+	 * Keep a proof found elsewhere (tooling, tests, plan 5.4): verified with the key
+	 * access, then the listeners and the evidence hook hear of it. True when it is new.
+	 */
+	bool record_evidence(equivocation_proof const&);
+
+	using evidence_hook = std::function<void(protocol::storage_id const&, equivocation_proof const&)>;
+
+	/// set by the storage server: the operator event for a proof found (plan 5.4)
+	void set_evidence_handler(evidence_hook);
+
 	/// the stored per-origin heads; phase 4 records foreign heads here when applying
 	storage_heads& origin_heads() { return *heads_; }
 
@@ -148,6 +167,12 @@ public:
 
 private:
 	std::optional<block_envelope> make_envelope(chain_block const&) const;
+	/// requires the mutex: what keeps a foreign record out before the rules see it
+	error admit_foreign(block_envelope const&, std::optional<equivocation_proof>& found);
+	/// requires the mutex: the admitted record applies under the weak rules
+	error apply_admitted(block_envelope const&);
+	/// requires the mutex: a verified proof is kept and the listeners told; true when new
+	bool note_evidence(equivocation_proof const&);
 	/// requires the mutex released: drop the dead index rows and tell the release hook
 	void release_dead_data(std::vector<data_id> pruned = {});
 	void notify_listeners(chain_block const& c, std::optional<block_envelope> const&);
@@ -163,9 +188,11 @@ private:
 	crypto::private_data_access* private_data_{};
 	peer_push_hook peer_push_;
 	data_release_hook data_release_;
+	evidence_hook evidence_hook_;
 
 	std::unique_ptr<chain_sync> sync_;
 	std::unique_ptr<storage_heads> heads_;
+	std::unique_ptr<evidence_store> evidence_;
 	database::connection_ptr db_;
 	/// id of the server signing key; invalid when the server has no key
 	crypto::public_key_id own_id_;

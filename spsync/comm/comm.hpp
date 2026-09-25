@@ -48,6 +48,7 @@ public:
 	void handle(protocol::response_data_ticket const& p);
 	void handle(protocol::notify_record const& p);
 	void handle(protocol::notify_data const& p);
+	void handle(protocol::notify_equivocation const& p);
 
 	/// asks the record server of this storage for data tickets; answers come through handle()
 	ticket_source tickets();
