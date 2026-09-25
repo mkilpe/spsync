@@ -132,8 +132,10 @@ record_handle chain_log::find_by_op_id(octet_vector const& op_id) const {
 }
 
 origin_samples chain_log::samples_of(crypto::public_key_id const& origin) const {
+	// by the origin's sequences and hashes: a foreign record sits at another local
+	// position on every replica, its origin assignment is the same on all of them
 	origin_samples ret{origin, {}};
-	for(auto const seq : sample_sequences(origin_head(origin).sequence)) {
+	for(auto const seq : sample_sequences(records_.last_origin_seq(origin.data()))) {
 		auto hash = records_.origin_block_hash(origin.data(), seq);
 		if(!hash.empty()) {
 			ret.blocks.push_back(chain_block_id{seq, std::move(hash)});

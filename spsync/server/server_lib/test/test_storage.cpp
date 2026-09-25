@@ -16,6 +16,7 @@
 #include <securepath/util/conversions.hpp>
 
 #include <filesystem>
+#include <memory>
 
 namespace securepath::sync {
 namespace {
@@ -288,60 +289,81 @@ TEST_CASE("storage signs the sequence assignment", "[unit]") {
 }
 
 
+namespace {
+
+/// two weak replicas of one storage, each with its own root, both server keys and the
+/// client key known to both; the records a commits are signed by the client key
+struct two_replicas {
+	two_replicas(std::string const& tag, storage_limits limits_a, storage_limits limits_b)
+	: root_a("test-storage-root-" + tag + "-a")
+	, root_b("test-storage-root-" + tag + "-b")
+	{
+		std::filesystem::remove_all(root_a);
+		std::filesystem::remove_all(root_b);
+		pdata_a.set_my_private_key(key_a);
+		pdata_b.set_my_private_key(key_b);
+		keys.insert(key_a.public_key());
+		keys.insert(key_b.public_key());
+		keys.insert(client_key.public_key());
+		a = std::make_unique<storage>(sid, storage_config{root_a}, storage_modes{sync_mode::allow_all,
+			auth_mode::sign_records, replication_mode::weak, limits_a}, &keys, &pdata_a);
+		b = std::make_unique<storage>(sid, storage_config{root_b}, storage_modes{sync_mode::allow_all,
+			auth_mode::sign_records, replication_mode::weak, limits_b}, &keys, &pdata_b);
+		creator.signer = client_key;
+	}
+
+	~two_replicas() {
+		a.reset();
+		b.reset();
+		std::filesystem::remove_all(root_a);
+		std::filesystem::remove_all(root_b);
+	}
+
+	/// a commits the block and hands out the signed envelope
+	block_envelope committed(chain_block const& block) {
+		auto outcome = a->commit_block(block);
+		REQUIRE(outcome.envelope);
+		return *outcome.envelope;
+	}
+
+public:
+	std::string root_a;
+	std::string root_b;
+	crypto::public_key_cache keys;
+	crypto::private_data_cache pdata_a;
+	crypto::private_data_cache pdata_b;
+	crypto::private_key key_a = crypto::generate_private_key();
+	crypto::private_key key_b = crypto::generate_private_key();
+	crypto::private_key client_key = crypto::generate_private_key();
+	protocol::storage_id sid = securepath::test::random_octet_vector(8);
+	std::unique_ptr<storage> a;
+	std::unique_ptr<storage> b;
+	test::test_block_creator creator;
+};
+
+}
+
 // a foreign record our rules refuse for good (here: over this replica's record limit) is
 // skipped and the origin head moves past it, so anti-entropy carries on with the next
 // record instead of re-pulling it forever and keeping the storage "syncing"
 TEST_CASE("storage skips a permanently rejected foreign record", "[unit]") {
-	// two replicas of the same storage, each with its own root
-	std::string const root_a = "test-storage-root-skip-a";
-	std::string const root_b = "test-storage-root-skip-b";
-	std::filesystem::remove_all(root_a);
-	std::filesystem::remove_all(root_b);
-	storage_config cfg_a{root_a};
-	storage_config cfg_b{root_b};
+	two_replicas r{"skip", storage_limits{64 * 1024, 0}, storage_limits{4 * 1024, 0}};
+	auto& b = *r.b;
 
-	crypto::public_key_cache keys;
-	crypto::private_data_cache pdata_a;
-	crypto::private_data_cache pdata_b;
-	auto key_a = crypto::generate_private_key();
-	auto key_b = crypto::generate_private_key();
-	auto client_key = crypto::generate_private_key();
-	pdata_a.set_my_private_key(key_a);
-	pdata_b.set_my_private_key(key_b);
-	keys.insert(key_a.public_key());
-	keys.insert(key_b.public_key());
-	keys.insert(client_key.public_key());
-
-	protocol::storage_id sid = securepath::test::random_octet_vector(8);
-	storage a(sid, cfg_a, storage_modes{sync_mode::allow_all, auth_mode::sign_records, replication_mode::weak,
-		storage_limits{64 * 1024, 0}}, &keys, &pdata_a);
-	storage b(sid, cfg_b, storage_modes{sync_mode::allow_all, auth_mode::sign_records, replication_mode::weak,
-		storage_limits{4 * 1024, 0}}, &keys, &pdata_b);
-
-	test::test_block_creator creator;
-	creator.signer = client_key;
-	auto first = a.commit_block(creator.test_user_change());
-	REQUIRE(first.envelope);
-	CHECK(!b.apply_foreign(*first.envelope));
+	CHECK(!b.apply_foreign(r.committed(r.creator.test_user_change())));
 	CHECK(b.current_sequence_number() == sequence_number{1});
 
 	// too big for B: skipped, head advanced, nothing stored
-	auto big = a.commit_block(creator.test_multi_data_change(400));
-	REQUIRE(big.envelope);
-	CHECK(!b.apply_foreign(*big.envelope));
+	CHECK(!b.apply_foreign(r.committed(r.creator.test_multi_data_change(400))));
 	CHECK(b.current_sequence_number() == sequence_number{1});
-	CHECK(b.known_origin_seq(key_a.id()) == sequence_number{2});
+	CHECK(b.known_origin_seq(r.key_a.id()) == sequence_number{2});
 
 	// the next record still lands
-	auto next = a.commit_block(creator.test_data_change());
-	REQUIRE(next.envelope);
-	CHECK(!b.apply_foreign(*next.envelope));
+	CHECK(!b.apply_foreign(r.committed(r.creator.test_data_change())));
 	CHECK(b.current_sequence_number() == sequence_number{2});
-	CHECK(b.known_origin_seq(key_a.id()) == sequence_number{3});
-
-	std::filesystem::remove_all(root_a);
-	std::filesystem::remove_all(root_b);
+	CHECK(b.known_origin_seq(r.key_a.id()) == sequence_number{3});
 }
+
 
 // (RDS 5) what a data ticket is issued from: the descriptor of a data a committed record names
 TEST_CASE("storage committed data", "[unit]") {

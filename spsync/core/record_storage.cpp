@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 
 #include "record_storage.hpp"
+#include "records/block_envelope.hpp"
 
 #include <utility>
 
@@ -880,13 +881,28 @@ chain_block_id record_storage::last_of_origin(octet_vector const& origin) const 
 
 octet_vector record_storage::origin_block_hash(octet_vector const& origin, sequence_number origin_seq) const {
 	auto q = impl_->db->prepare(
-		"SELECT hash FROM record WHERE state = :state AND origin = :o AND origin_seq = :os LIMIT 1;");
+		"SELECT envelope FROM record WHERE state = :state AND origin = :o AND origin_seq = :os LIMIT 1;");
 	q.bind(":state", std::to_underlying(record_state::in_sync));
 	q.bind(":o", origin);
 	q.bind(":os", static_cast<std::uint64_t>(origin_seq.value));
 	octet_vector ret;
 	if(auto res = q.execute()) {
-		ret = res.value<octet_vector>(0).value_or(octet_vector{});
+		if(auto env = res.value<octet_vector>(0); env && !env->empty()) {
+			// the block inside the envelope carries the origin's sequence and parent
+			ret = serialisation::asn_der_deserialise<block_envelope>(*env).block().hash();
+		}
+	}
+	return ret;
+}
+
+sequence_number record_storage::last_origin_seq(octet_vector const& origin) const {
+	auto q = impl_->db->prepare(
+		"SELECT origin_seq FROM record WHERE state = :state AND origin = :o ORDER BY origin_seq DESC LIMIT 1;");
+	q.bind(":state", std::to_underlying(record_state::in_sync));
+	q.bind(":o", origin);
+	sequence_number ret;
+	if(auto res = q.execute()) {
+		ret = sequence_number{res.value<std::uint64_t>(0).value_or(0)};
 	}
 	return ret;
 }

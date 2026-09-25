@@ -140,4 +140,16 @@ TEST_CASE("divergence pull plan", "[unit]") {
 	CHECK(!plan_pull(sequence_number{3}, sequence_number{5}, divergence{sequence_number{3}, sequence_number{4}}).wanted());
 }
 
+// (plan 4.2 with 5.2) a pushed record is taken when it follows the held head, pulled
+// from the head when it is further ahead: the records in between may have been missed
+TEST_CASE("divergence push plan", "[unit]") {
+	CHECK(!plan_push(sequence_number{3}, sequence_number{4}).wanted());
+	CHECK(!plan_push(sequence_number{3}, sequence_number{3}).wanted());
+	CHECK(!plan_push(sequence_number{3}, sequence_number{1}).wanted());
+	CHECK(plan_push(sequence_number{3}, sequence_number{5}) == pull_range{sequence_number{4}, sequence_number{5}});
+	// nothing held of the origin: only its first record is taken as it is
+	CHECK(!plan_push({}, sequence_number{1}).wanted());
+	CHECK(plan_push({}, sequence_number{5}) == pull_range{sequence_number{1}, sequence_number{5}});
+}
+
 }

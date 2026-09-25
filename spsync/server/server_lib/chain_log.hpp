@@ -92,7 +92,9 @@ public:
 
 	/**
 	 * The samples of one origin's history in this log (plan 5.3): its head and the
-	 * exponentially spaced records behind it that this log holds, by origin sequence.
+	 * exponentially spaced records behind it that this log holds, by origin sequence
+	 * and with the hashes the origin assigned (from the stored envelopes), which every
+	 * replica shares - the local position of a foreign record differs between them.
 	 * Empty for an origin without records here.
 	 */
 	origin_samples samples_of(crypto::public_key_id const& origin) const;

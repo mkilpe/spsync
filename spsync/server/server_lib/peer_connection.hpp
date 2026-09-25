@@ -115,6 +115,7 @@ private:
 	void request_pull(protocol::storage_id const&, crypto::public_key_id const&,
 		sequence_number from, sequence_number to);
 	void apply_envelopes(std::shared_ptr<storage> const&, std::deque<block_envelope> const&, char const* what);
+	void apply_pushed(std::shared_ptr<storage> const&, protocol::push_records const&);
 	void request_signer_key(crypto::public_key_id const&);
 	void resume_pulls();
 

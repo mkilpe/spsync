@@ -386,15 +386,21 @@ void peer_connection::resume_pulls() {
 }
 
 /**
- * Apply pulled or pushed envelopes; a record whose signer we do not know is not lost:
- * the peer that holds the record holds the signer's key too, ask for it (plan 5.2) and
- * the next pull round applies the record
+ * Apply pulled or pushed envelopes in the order served, up to the first record that did
+ * not apply: one applied behind it would move the origin's held head past the failed
+ * one, and anti-entropy, pulling from the head, would never ask for it again (plan 5.2
+ * B19); the next round pulls from the last one held instead. A record whose signer we
+ * do not know is not lost: the peer that holds the record holds the signer's key too,
+ * ask for it (plan 5.2) and the next pull round applies the record.
  */
 void peer_connection::apply_envelopes(std::shared_ptr<storage> const& handle,
 	std::deque<block_envelope> const& envelopes, char const* what)
 {
-	for(auto const& env : envelopes) {
+	bool failed = false;
+	for(auto it = envelopes.begin(); it != envelopes.end() && !failed; ++it) {
+		auto const& env = *it;
 		if(auto err = handle->apply_foreign(env)) {
+			failed = true;
 			LOG_WARN("failed to apply {} record [origin={}, err={}]", what, env.origin(), err);
 			if(err.code() == make_error_code(protocol::errc::unknown_signer)) {
 				if(auto signer = env.block().auth().signature_issuer()) {
@@ -525,9 +531,33 @@ void peer_connection::operator()(protocol::push_records const& p) {
 		} else {
 			LOG_TRACE("peer pushed {} records for storage {}", p.envelopes.size(), to_hex(p.sid));
 			// pushes are fire and forget; anti-entropy reconciles later (plan 4.4)
-			apply_envelopes(handle, p.envelopes, "pushed");
+			apply_pushed(handle, p);
 		}
 	}
+}
+
+/**
+ * Pushed records are taken when they follow what is held of their origin; one further
+ * ahead is pulled from the held head instead (plan_push): records of the origin before
+ * it may never have arrived here, and taken it would move the head past them for good.
+ * The pull is on this connection: the pusher holds the record and whatever it knows
+ * before it, and applies them in the origin's order.
+ */
+void peer_connection::apply_pushed(std::shared_ptr<storage> const& handle, protocol::push_records const& p) {
+	std::deque<block_envelope> in_order;
+	bool pulled = false;
+	for(auto it = p.envelopes.begin(); it != p.envelopes.end() && !pulled; ++it) {
+		auto const plan = plan_push(handle->known_origin_seq(it->origin()), it->block().sequence());
+		if(plan.wanted()) {
+			pulled = true;
+			LOG_TRACE("pushed record {} of origin {} is ahead of what is held: pulled from {} instead (rsid={})"
+				, it->block().sequence(), it->origin(), plan.from, to_hex(p.sid));
+			request_pull(p.sid, it->origin(), plan.from, plan.to);
+		} else {
+			in_order.push_back(*it);
+		}
+	}
+	apply_envelopes(handle, in_order, "pushed");
 }
 
 void peer_connection::operator()(protocol::not_replicating const& p) {

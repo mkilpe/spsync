@@ -73,4 +73,17 @@ public:
  */
 pull_range plan_pull(sequence_number known, sequence_number peer_head, divergence const&);
 
+/**
+ * What a pushed record of an origin (plan 4.2) calls for: nothing when it is the next
+ * record after the highest one held of the origin (or one held already) - it is taken
+ * as it is. A record further ahead may have records of the origin before it that never
+ * arrived (a push while the connection was down, a push racing a bootstrap pull): taken,
+ * it would move the held head past them and anti-entropy, which pulls from the head,
+ * would never ask for them. So it is pulled instead, from the head up to it, and the
+ * pull applies the records in the origin's order. An origin's sequences may skip (the
+ * local positions of records it applied from others): the pull then brings the pushed
+ * record alone.
+ */
+pull_range plan_push(sequence_number known, sequence_number pushed);
+
 }

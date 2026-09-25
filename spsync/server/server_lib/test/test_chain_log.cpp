@@ -185,4 +185,43 @@ TEST_CASE("chain_log samples and divergence between origin histories", "[unit]")
 	CHECK(ours.find_divergence(behind.samples_of(origin.id())) == divergence{sequence_number{2}, {}});
 }
 
+
+// (plan 5.3) a foreign record sits at another local position on every replica: the
+// samples and the comparison go by the origin's sequences and hashes, so two logs that
+// hold the same record of an origin agree wherever each of them placed it
+TEST_CASE("chain_log divergence is by the origin's positions", "[unit]") {
+	std::string const theirs_db = "chain_log_test_theirs.db";
+	remove_chain_log_db();
+	std::remove(theirs_db.c_str());
+	auto const origin = crypto::generate_private_key();
+	octet_vector const sid = securepath::test::random_octet_vector(8);
+	chain_log ours(database::sqlite::create_sqlite_connection(chain_log_db));
+	chain_log theirs(database::sqlite::create_sqlite_connection(theirs_db));
+
+	// the origin's first record: ours holds it first, theirs after a record of its own
+	test_block_creator creator;
+	auto const first = creator.test_user_change();
+	auto const assignment = assigned(first, origin, sid);
+	ours.append(assignment);
+
+	test_block_creator other;
+	theirs.append(block_envelope{other.test_user_change(), {}});
+	auto placed = first;
+	placed.set_sequence_and_parent_hash(sequence_number{2}, theirs.head().hash);
+	theirs.append(block_envelope{placed, {}});
+	theirs.store_assignment(placed.tag(), assignment);
+	REQUIRE(theirs.head().hash != first.hash());
+
+	// the samples name the origin's block, not the local one
+	auto const samples = theirs.samples_of(origin.id());
+	REQUIRE(samples.blocks.size() == 1);
+	CHECK(samples.blocks[0] == first.id());
+	CHECK(theirs.records().origin_block_hash(origin.id().data(), sequence_number{1}) == first.hash());
+	CHECK(theirs.records().last_origin_seq(origin.id().data()) == sequence_number{1});
+
+	// and the two logs agree on the origin's history
+	CHECK(ours.find_divergence(theirs.samples_of(origin.id())) == divergence{sequence_number{1}, {}});
+	CHECK(theirs.find_divergence(ours.samples_of(origin.id())) == divergence{sequence_number{1}, {}});
+}
+
 }

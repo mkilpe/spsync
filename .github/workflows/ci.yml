@@ -25,6 +25,14 @@ jobs:
         run: cmake --build --preset default -j"$(nproc)"
       - name: test
         run: ctest --preset default
+      - name: keep the test logs of a failed run
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-logs
+          path: |
+            build/Testing/Temporary/LastTest.log
+            build/**/debug.log
 
   # gc_lib and the JNI adapter for Android, arm64-v8a, with the NDK the code is built
   # against here (r30: its libc++ has flat_map and format; older NDKs lack them). The

@@ -114,9 +114,16 @@ public:
 	/// block id of the newest in sync record assigned by the given origin (invalid when none)
 	chain_block_id last_of_origin(octet_vector const& origin) const;
 
-	/// hash of the in sync record the given origin assigned the origin sequence to (empty
-	/// when none is held; plan 5.3)
+	/**
+	 * Hash of the block the given origin assigned the origin sequence to, as the origin
+	 * assigned it (from its stored envelope): the same on every replica, unlike the hash
+	 * of the record here, which covers the local position. Empty when none is held
+	 * (plan 5.3).
+	 */
 	octet_vector origin_block_hash(octet_vector const& origin, sequence_number origin_seq) const;
+
+	/// the highest origin sequence held of the given origin (invalid when none; plan 5.3)
+	sequence_number last_origin_seq(octet_vector const& origin) const;
 
 	std::vector<octet_vector> find_origin_assignments(octet_vector const& origin,
 		sequence_number from, sequence_number to, std::size_t max) const;

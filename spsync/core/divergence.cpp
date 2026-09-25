@@ -46,4 +46,13 @@ pull_range plan_pull(sequence_number known, sequence_number peer_head, divergenc
 	return ret;
 }
 
+pull_range plan_push(sequence_number known, sequence_number pushed) {
+	pull_range ret;
+	auto const next = known.is_valid() ? known + 1 : sequence_number{1};
+	if(pushed > next) {
+		ret = pull_range{next, pushed};
+	}
+	return ret;
+}
+
 }

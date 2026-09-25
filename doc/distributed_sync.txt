@@ -1066,6 +1066,25 @@ Phase 5  Server recovery and evidence  (M4)
             record that failed to apply (unknown signer) was skipped by anti-entropy
             for good. The head advances only after a successful apply, a known tag
             or an op dedup.
+        B19 (CI 2026-09-25, then three in a hundred runs of the bootstrap test) a
+            pull batch went on past a record that failed: the signer key arrived
+            half way through the batch of A's two records, the first failed
+            (unknown signer), the second applied and became A's known head, and
+            the first was never pulled again - the newcomer reported caught up
+            with one record missing. A batch now stops at the first record that
+            did not apply (peer_connection::apply_envelopes); the next round pulls
+            from the held head. The same hole through a push: a pushed record
+            further ahead than the head plus one may have records of its origin
+            before it that never arrived here (a push while the connection was
+            down, a push racing a bootstrap pull) - taken, the head moved past
+            them for good. plan_push (core/divergence) pulls such a record from
+            the held head instead, on the pushing connection, in the origin's
+            order; an origin's sequences do skip the local positions of records
+            it applied from others, so that pull often brings the pushed record
+            alone (an extra round trip, never a hole). The storage itself cannot
+            tell a hole from a skip, so the rule lives at the connection. Tests:
+            core "divergence push plan"; the s2s suite exercises the push-to-pull
+            path on every interleaved commit.
       Tests: s2s "bootstrap a new replica" (three servers, two storages, records of
       both origins signed by a client key only the old replicas know, an
       unreplicated storage that must not spread; the newcomer converges, stops
@@ -1096,6 +1115,18 @@ Phase 5  Server recovery and evidence  (M4)
       an envelope whose (origin, origin seq) is held under another hash with the
       new errc::origin_diverged - the point 5.4 turns into evidence (a push of the
       conflicting record was silently applied under a second row before).
+      Fixed 2026-09-25 (CI, then reproduced once in twenty runs of the s2s
+      bootstrap test): the samples and the held-hash check first read the
+      record row's hash, which covers the LOCAL position - a foreign record sits
+      at another local sequence on every replica, so the same record hashed
+      differently between them. A newcomer that applied B's record before A's
+      first one saw A's samples "diverge", asked for the divergent record as
+      evidence, took A's own assignment for an equivocation and condemned A: one
+      record missing and not "behind". Now record_storage::origin_block_hash
+      reads the hash out of the stored envelope (the block as the origin
+      assigned it) and last_origin_seq gives the head by origin sequence; the
+      comparison is replica independent. chain_log test "divergence is by the
+      origin's positions".
       Tests: core "divergence sample sequences / between histories / pull plan"
       (synthetic histories, a fork between two samples narrowed by samples in
       between), chain_log "samples and divergence between origin histories" (two
