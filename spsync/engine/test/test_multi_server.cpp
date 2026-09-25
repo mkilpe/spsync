@@ -48,6 +48,182 @@ void setup_three(test::test_sync_context& context, int clients_per_server = 1) {
 	while(context.handle_events()) {}
 }
 
+/// the six clients of the full scenario and the stress, two on each server
+int constexpr client_count = 6;
+
+/// a random pick of [0, n) from a seeded generator
+struct dice {
+	explicit dice(int seed)
+	: rng(static_cast<std::mt19937::result_type>(seed))
+	{
+	}
+
+	int operator()(int n) {
+		return static_cast<int>(rng() % n);
+	}
+
+public:
+	std::mt19937 rng;
+};
+
+/// a random link goes down, or comes back up
+void toggle_random_link(test::test_sync_context& context, dice& pick) {
+	auto& l = context.links[pick(static_cast<int>(context.links.size()))];
+	context.set_link(l.a, l.b, !l.up);
+}
+
+/// the dust settles: all links up, everything drains
+void settle(test::test_sync_context& context) {
+	for(auto const& l : context.links) {
+		context.set_link(l.a, l.b, true);
+	}
+	while(context.handle_events()) {}
+}
+
+/// every replica converged, all at the same head
+void check_converged_heads(test::test_sync_context& context) {
+	CHECK(context.servers_converged());
+	CHECK(context.server_n(0).sync.current_sequence_number()
+		== context.server_n(1).sync.current_sequence_number());
+	CHECK(context.server_n(1).sync.current_sequence_number()
+		== context.server_n(2).sync.current_sequence_number());
+}
+
+/// the three replicas and six clients of the full scenario, with the moves its phases make
+struct full_scenario {
+	full_scenario() {
+		setup_three(context, 2);   // clients 0,3 on server 0; 1,4 on server 1; 2,5 on server 2
+	}
+
+	void drain() {
+		while(context.handle_events()) {}
+	}
+
+	/// everything drained, every replica at the same records
+	void require_converged() {
+		drain();
+		REQUIRE(context.servers_converged());
+	}
+
+	/// a data change from `client`
+	void change(int client) {
+		context.client(client).engine.sync_object_change(create_object_id(), metadata{});
+	}
+
+	/// a membership change from `client` removing `member` (add is a no-op re-affirm here)
+	void remove_member(int client, int member) {
+		auto& c = context.client(client);
+		users delta{users_change_mode::delta};
+		delta.remove(context.client(member).user);
+		c.engine.sync_user_change(encrypt_last_key_for_users(delta, c.cc));
+	}
+
+	/// rotate the encryption key from `client`, distributing the fresh key to `members`
+	void rotate_key(int client, std::vector<int> const& members) {
+		auto& c = context.client(client);
+		c.enc_keys.create_key();   // a fresh key becomes this client's current
+		users delta{users_change_mode::delta};
+		for(int m : members) {
+			delta.add(util::user_access{context.client(m).user, util::access_type::data_write_access});
+		}
+		c.engine.sync_user_change(encrypt_last_key_for_users(delta, c.cc));
+	}
+
+	/// seal a segment from `client` (needs its local commits flushed first, SEG 2)
+	void seal_segment(int client) {
+		drain();
+		try {
+			context.client(client).engine.sync_segment_end(metadata{});
+		} catch(std::exception const& e) {
+			LOG_INFO("segment not sealed: {}", e.what());
+		}
+		drain();
+	}
+
+	/// partition, commits on both sides (incl. a rotation), a client hop, heal
+	void partition_hop_heal() {
+		context.set_link(0, 1, false);
+		context.set_link(1, 2, false);   // isolate server 1
+		rotate_key(0, all_members);
+		change(0);
+		change(1);
+		drain();
+		CHECK(!context.servers_converged());
+
+		// client 1 hops off the isolated server 1 onto server 2 and keeps working
+		context.disconnect_client(1);
+		drain();
+		context.connect_client_to(1, 2);
+		drain();
+		change(1);
+		drain();
+
+		// heal the partition
+		context.set_link(0, 1, true);
+		context.set_link(1, 2, true);
+	}
+
+	/// a short mixed burst with everything in flight, then settle
+	void mixed_burst() {
+		dice pick{999};
+		for(int r = 0; r != 40; ++r) {
+			switch(pick(5)) {
+			case 0:
+			case 1: change(pick(6)); break;
+			case 2: rotate_key(pick(6), all_members); break;
+			case 3: toggle_random_link(context, pick); break;
+			case 4: context.handle_events(); break;
+			}
+		}
+		settle(context);
+	}
+
+public:
+	test::test_sync_context context{chain_sync_config{sync_mode::allow_all}};
+	std::vector<int> const all_members{0, 1, 2, 3, 4, 5};
+};
+
+/// a membership change from a random client (concurrent D9 merges)
+void random_membership_change(test::test_sync_context& context, dice& pick) {
+	auto& c = context.client(pick(client_count));
+	users delta{users_change_mode::delta};
+	auto const& target = context.client(2).user;
+	if(pick(2) == 0) {
+		delta.add(util::user_access{target, util::access_type::data_write_access});
+	} else {
+		delta.remove(target);
+	}
+	c.engine.sync_user_change(encrypt_last_key_for_users(delta, c.cc));
+}
+
+/// one move of the stress: a random client or the network does something
+void stress_move(test::test_sync_context& context, dice& pick) {
+	switch(pick(7)) {
+	case 0:
+	case 1:
+	case 2: // a data change from a random client
+		context.client(pick(client_count)).engine.sync_object_change(create_object_id(), metadata{});
+		break;
+	case 3:
+		random_membership_change(context, pick);
+		break;
+	case 4: // toggle a random link
+		toggle_random_link(context, pick);
+		break;
+	case 5: { // a client hops to a random replica (the 4.5 resync mid-flight)
+		auto const c = pick(client_count);
+		context.disconnect_client(c);
+		context.handle_events();
+		context.connect_client_to(c, pick(3));
+		break;
+	}
+	case 6: // let things move a little (never to quiet: commits land mid-flight)
+		context.handle_events();
+		context.handle_events();
+		break;
+	}
+}
+
 }
 
 // (24) three replicas with clients on each (plan 4.7): commits spread transitively, a
@@ -103,125 +279,48 @@ TEST_CASE("multi server converge and heal", "[unit]") {
 // (including concurrent colliding rotations, D9), segment seals, partitions and clients
 // hopping between replicas - each phase asserts convergence so a failure localises
 TEST_CASE("multi server full scenario", "[unit]") {
-	test::test_sync_context context(chain_sync_config{sync_mode::allow_all});
-	setup_three(context, 2);   // clients 0,3 on server 0; 1,4 on server 1; 2,5 on server 2
-
-	std::vector<int> const all_members{0, 1, 2, 3, 4, 5};
-	auto drain = [&] { while(context.handle_events()) {} };
-
-	// rotate the encryption key from `client`, distributing the fresh key to `members`
-	auto rotate_key = [&](int client, std::vector<int> const& members) {
-		auto& c = context.client(client);
-		c.enc_keys.create_key();   // a fresh key becomes this client's current
-		users delta{users_change_mode::delta};
-		for(int m : members) {
-			delta.add(util::user_access{context.client(m).user, util::access_type::data_write_access});
-		}
-		c.engine.sync_user_change(encrypt_last_key_for_users(delta, c.cc));
-	};
-	// seal a segment from `client` (needs its local commits flushed first, SEG 2)
-	auto seal_segment = [&](int client) {
-		drain();
-		try {
-			context.client(client).engine.sync_segment_end(metadata{});
-		} catch(std::exception const& e) {
-			LOG_INFO("segment not sealed: {}", e.what());
-		}
-		drain();
-	};
+	full_scenario s;
 
 	// phase 1: plain data changes from every client spread across the replicas
-	for(int i : all_members) {
-		context.client(i).engine.sync_object_change(create_object_id(), metadata{});
+	for(int i : s.all_members) {
+		s.change(i);
 	}
-	drain();
-	REQUIRE(context.servers_converged());
+	s.require_converged();
 
 	// phase 2: a membership change (add is a no-op re-affirm here; remove client 5)
-	{
-		auto& c = context.client(0);
-		users delta{users_change_mode::delta};
-		delta.remove(context.client(5).user);
-		c.engine.sync_user_change(encrypt_last_key_for_users(delta, c.cc));
-	}
-	drain();
-	REQUIRE(context.servers_converged());
+	s.remove_member(0, 5);
+	s.require_converged();
 
 	// phase 3: a key rotation, then data committed under the new key stays readable
-	rotate_key(1, all_members);
-	drain();
+	s.rotate_key(1, s.all_members);
+	s.drain();
 	for(int i : {0, 2, 4}) {
-		context.client(i).engine.sync_object_change(create_object_id(), metadata{});
+		s.change(i);
 	}
-	drain();
-	REQUIRE(context.servers_converged());
+	s.require_converged();
 
 	// phase 4: concurrent rotations on two clients -> two keys at one sequence (D9);
 	// records committed under each remain readable everywhere
-	rotate_key(0, all_members);
-	rotate_key(2, all_members);
-	context.client(0).engine.sync_object_change(create_object_id(), metadata{});
-	context.client(2).engine.sync_object_change(create_object_id(), metadata{});
-	drain();
-	REQUIRE(context.servers_converged());
+	s.rotate_key(0, s.all_members);
+	s.rotate_key(2, s.all_members);
+	s.change(0);
+	s.change(2);
+	s.require_converged();
 
 	// phase 5: a segment seal, then more data on top of the sealed history
-	seal_segment(3);
-	REQUIRE(context.servers_converged());
-	context.client(4).engine.sync_object_change(create_object_id(), metadata{});
-	drain();
-	REQUIRE(context.servers_converged());
+	s.seal_segment(3);
+	REQUIRE(s.context.servers_converged());
+	s.change(4);
+	s.require_converged();
 
 	// phase 6: partition, commits on both sides (incl. a rotation), a client hop, heal
-	context.set_link(0, 1, false);
-	context.set_link(1, 2, false);   // isolate server 1
-	rotate_key(0, all_members);
-	context.client(0).engine.sync_object_change(create_object_id(), metadata{});
-	context.client(1).engine.sync_object_change(create_object_id(), metadata{});
-	drain();
-	CHECK(!context.servers_converged());
-
-	// client 1 hops off the isolated server 1 onto server 2 and keeps working
-	context.disconnect_client(1);
-	drain();
-	context.connect_client_to(1, 2);
-	drain();
-	context.client(1).engine.sync_object_change(create_object_id(), metadata{});
-	drain();
-
-	// heal the partition
-	context.set_link(0, 1, true);
-	context.set_link(1, 2, true);
-	drain();
-	REQUIRE(context.servers_converged());
+	s.partition_hop_heal();
+	s.require_converged();
 
 	// phase 7: a short mixed burst with everything in flight, then settle
-	std::mt19937 rng(999);
-	auto pick = [&](int n) { return static_cast<int>(rng() % n); };
-	for(int r = 0; r != 40; ++r) {
-		switch(pick(5)) {
-		case 0:
-		case 1: context.client(pick(6)).engine.sync_object_change(create_object_id(), metadata{}); break;
-		case 2: rotate_key(pick(6), all_members); break;
-		case 3: {
-			auto& l = context.links[pick(static_cast<int>(context.links.size()))];
-			context.set_link(l.a, l.b, !l.up);
-			break;
-		}
-		case 4: context.handle_events(); break;
-		}
-	}
-	for(auto const& l : context.links) {
-		context.set_link(l.a, l.b, true);
-	}
-	drain();
-
-	CHECK(context.servers_converged());
-	CHECK(context.server_n(0).sync.current_sequence_number()
-		== context.server_n(1).sync.current_sequence_number());
-	CHECK(context.server_n(1).sync.current_sequence_number()
-		== context.server_n(2).sync.current_sequence_number());
-	context.print_summary();
+	s.mixed_burst();
+	check_converged_heads(s.context);
+	s.context.print_summary();
 }
 
 // (27) a hop interrupts the 4.5 resync refetch and the client comes back to the same
@@ -286,59 +385,13 @@ TEST_CASE("multi server stress", "[stress]") {
 	setup_three(context, 2);   // six clients, two on each server
 	context.add_link(0, 2, 1);
 
-	std::mt19937 rng(static_cast<std::mt19937::result_type>(seed));
-	auto pick = [&](int n) { return static_cast<int>(rng() % n); };
-	int const client_count = 6;
-
+	dice pick{seed};
 	for(int round = 0; round != rounds; ++round) {
-		switch(pick(7)) {
-		case 0:
-		case 1:
-		case 2: // a data change from a random client
-			context.client(pick(client_count)).engine.sync_object_change(create_object_id(), metadata{});
-			break;
-		case 3: { // a membership change from a random client (concurrent D9 merges)
-			auto& c = context.client(pick(client_count));
-			users delta{users_change_mode::delta};
-			auto const& target = context.client(2).user;
-			if(pick(2) == 0) {
-				delta.add(util::user_access{target, util::access_type::data_write_access});
-			} else {
-				delta.remove(target);
-			}
-			c.engine.sync_user_change(encrypt_last_key_for_users(delta, c.cc));
-			break;
-		}
-		case 4: { // toggle a random link
-			auto& l = context.links[pick(static_cast<int>(context.links.size()))];
-			context.set_link(l.a, l.b, !l.up);
-			break;
-		}
-		case 5: { // a client hops to a random replica (the 4.5 resync mid-flight)
-			auto const c = pick(client_count);
-			context.disconnect_client(c);
-			context.handle_events();
-			context.connect_client_to(c, pick(3));
-			break;
-		}
-		case 6: // let things move a little (never to quiet: commits land mid-flight)
-			context.handle_events();
-			context.handle_events();
-			break;
-		}
+		stress_move(context, pick);
 	}
 
-	// the dust settles: all links up, everything drains
-	for(auto const& l : context.links) {
-		context.set_link(l.a, l.b, true);
-	}
-	while(context.handle_events()) {}
-
-	CHECK(context.servers_converged());
-	CHECK(context.server_n(0).sync.current_sequence_number()
-		== context.server_n(1).sync.current_sequence_number());
-	CHECK(context.server_n(1).sync.current_sequence_number()
-		== context.server_n(2).sync.current_sequence_number());
+	settle(context);
+	check_converged_heads(context);
 	context.print_summary();
 }
 

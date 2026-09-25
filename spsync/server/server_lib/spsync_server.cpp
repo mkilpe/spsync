@@ -44,7 +44,7 @@ bool spsync_server::init() {
 	return ok;
 }
 
-int spsync_server::run_and_wait() {
+int spsync_server::run() {
 	LOG_INFO("Starting spsync server ({}, {})", params_.key_params.create_endpoint(), params_.storage_params.create_endpoint());
 	int ret = key_server::server::run(4, 2);
 	if(!ret) {
@@ -53,6 +53,13 @@ int spsync_server::run_and_wait() {
 			data_server_.start();
 		}
 		storage_server_.start();
+	}
+	return ret;
+}
+
+int spsync_server::run_and_wait() {
+	int ret = run();
+	if(!ret) {
 		key_server::server::wait();
 	}
 	return ret;

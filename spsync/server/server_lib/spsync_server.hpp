@@ -20,6 +20,9 @@ public:
 	spsync_server(network::context& context, spsync_server_params params);
 	~spsync_server();
 
+	/// start the key server and the roles: listening on return (0), or why not
+	int run();
+	/// run() and wait until close()
 	int run_and_wait();
 	void close() override;
 

@@ -122,6 +122,36 @@ struct data_server_fixture {
 
 using upload_log = test::transfer_log;
 
+/// the server holds what the client holds of the data, verified chunk by chunk on the way in
+void server_holds_alike(data_server_fixture& f, server_data_store& server_store, data_descriptor const& d) {
+	auto const row = server_store.find(d.manifest_digest);
+	REQUIRE(row);
+	CHECK(row->descriptor == d);
+	CHECK(row->state == record_data_state::in_sync);
+	bool same = true;
+	for(std::uint64_t no = 0; no != d.chunk_count(); ++no) {
+		same = same && server_store.chunks().read_chunk(d.manifest_digest, no) == f.store.read_chunk(d.manifest_digest, no);
+	}
+	CHECK(same);
+}
+
+/// (RDS 10) everything held as the whole view a link gets: bracketed, so the receiver
+/// replaces what it knew of this holder and knows when it has heard all of it; the news
+/// of one data is not a view
+void announced_as_a_view(data_server_fixture& f, std::size_t held, data_id const& one) {
+	auto const holder = crypto::generate_private_key().id();
+	auto const view = f.server->announcements(holder);
+	REQUIRE(view.size() == 1);
+	CHECK(view[0].view_begin);
+	CHECK(view[0].view_end);
+	CHECK(view[0].entries.size() == held);
+	// the news of one data is not a view
+	auto const news = f.server->announcement(holder, f.sid, one);
+	REQUIRE(news);
+	CHECK(!news->view_begin);
+	CHECK(!news->view_end);
+}
+
 }
 
 // RDS 4: the client's data channel and the data listener, over the wire
@@ -143,17 +173,8 @@ TEST_CASE("data server upload end to end", "[unit]") {
 
 	// the server holds what the client holds, verified chunk by chunk on the way in
 	auto server_store = f.server->open_store(f.sid);
-	for(auto const& d : {big, small}) {
-		auto const row = server_store->find(d.manifest_digest);
-		REQUIRE(row);
-		CHECK(row->descriptor == d);
-		CHECK(row->state == record_data_state::in_sync);
-		bool same = true;
-		for(std::uint64_t no = 0; no != d.chunk_count(); ++no) {
-			same = same && server_store->chunks().read_chunk(d.manifest_digest, no) == f.store.read_chunk(d.manifest_digest, no);
-		}
-		CHECK(same);
-	}
+	server_holds_alike(f, *server_store, big);
+	server_holds_alike(f, *server_store, small);
 	CHECK(std::filesystem::exists(std::filesystem::path{server_root} / to_hex(f.sid) / "data.db"));
 	CHECK(server_store->used_bytes() == big.enc_size + small.enc_size);
 	WAIT_CHECK(f.completed_count() == 2, 2s);
@@ -164,19 +185,7 @@ TEST_CASE("data server upload end to end", "[unit]") {
 	CHECK(!log.finished.back().second);
 	CHECK(f.completed_count() == 2);
 
-	// (RDS 10) everything held as the whole view a link gets: bracketed, so the receiver
-	// replaces what it knew of this holder and knows when it has heard all of it
-	auto const holder = crypto::generate_private_key().id();
-	auto const view = f.server->announcements(holder);
-	REQUIRE(view.size() == 1);
-	CHECK(view[0].view_begin);
-	CHECK(view[0].view_end);
-	CHECK(view[0].entries.size() == 2);
-	// the news of one data is not a view
-	auto const news = f.server->announcement(holder, f.sid, big.manifest_digest);
-	REQUIRE(news);
-	CHECK(!news->view_begin);
-	CHECK(!news->view_end);
+	announced_as_a_view(f, 2, big.manifest_digest);
 }
 
 // (review 2026-09-21) closing the channel ends what is out - it used to fail the pending
@@ -189,10 +198,12 @@ TEST_CASE("data channel close does not fail over", "[unit]") {
 	// a holder that takes the connection and never says a word: the open stays out
 	asio::ip::tcp::acceptor silent{f.net.client_context(0).io_context(), asio::ip::tcp::endpoint{asio::ip::address_v4::loopback(), 0}};
 	std::vector<asio::ip::tcp::socket> taken;
+	std::atomic<std::size_t> taken_count{};
 	std::function<void()> accept = [&] {
 		silent.async_accept([&](std::error_code const& ec, asio::ip::tcp::socket socket) {
 			if(!ec) {
 				taken.push_back(std::move(socket));
+				++taken_count;
 				accept();
 			}
 		});
@@ -204,7 +215,8 @@ TEST_CASE("data channel close does not fail over", "[unit]") {
 	upload_log log;
 	data_uploader uploader{f.store, channel, data_upload_config{}, log.done(), log.progress()};
 	REQUIRE(uploader.enqueue(data.manifest_digest));
-	std::this_thread::sleep_for(300ms);
+	// the open is out on the mute holder's connection
+	WAIT_REQUIRE(taken_count == 1, 5s);
 	channel.close();
 
 	WAIT_REQUIRE(log.count == 1, 10s);
@@ -641,7 +653,6 @@ TEST_CASE("spsync server data role", "[unit]") {
 	SECTION("off by default") {
 		test::test_server server{net.server_context()};
 		server.run();
-		std::this_thread::sleep_for(1s);
 		CHECK(!server.data().local_endpoint());
 	}
 

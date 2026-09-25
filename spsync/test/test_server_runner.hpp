@@ -3,7 +3,7 @@
 #include <spsync/server/server_lib/spsync_server.hpp>
 #include <infrastructure/packet_transport/server/server_lib/packet_server.hpp>
 
-#include <future>
+#include <stdexcept>
 
 namespace securepath::sync::test {
 
@@ -21,16 +21,12 @@ public:
 		stop();
 	}
 
+	/// start the servers: they listen when this returns, no wait is needed before a connect
 	void run() {
-		server_future_ = std::async(std::launch::async, [&]
-			{
-				try {
-					packet_server_.run();
-					server_.run_and_wait();
-				} catch(...) {
-					std::terminate();
-				}
-			});
+		packet_server_.run();
+		if(server_.run() != 0) {
+			throw std::runtime_error("the test server did not start");
+		}
 	}
 
 	/// the storage server side
@@ -41,19 +37,13 @@ public:
 
 	void stop() {
 		server_.close();
-		if(server_future_.valid()) {
-			try {
-				server_future_.wait();
-			} catch(...)
-			{} // ignore
-		}
+		server_.wait();
 	}
 
 private:
 	spsync_server server_;
 	packet_transport::packet_server_params packet_params_;
 	packet_transport::packet_server packet_server_;
-	std::future<void> server_future_;
 };
 
 }

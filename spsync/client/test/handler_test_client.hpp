@@ -13,6 +13,8 @@
 #include <spsync/test/test_progress.hpp>
 #include <spsync/test/test_server_runner.hpp>
 
+#include <future>
+
 namespace securepath::sync::client::test {
 
 namespace {

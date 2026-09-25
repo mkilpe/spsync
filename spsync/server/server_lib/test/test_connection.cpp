@@ -148,6 +148,34 @@ private:
 	std::promise<void> storage_created_;
 };
 
+/// a client connected and attached to the storage
+void join_storage(test_client& client, storage_id const& sid) {
+	client.connect();
+	client.wait_for_connection();
+	client.connect_to_storage(sid);
+}
+
+/// an object change carrying a blob of the size in its metadata
+void commit_blob(test_client& client, std::size_t size) {
+	client.engine->sync_object_change(util::create_object_id()
+		, metadata{{"blob", securepath::test::random_octet_vector(size)}});
+}
+
+/// a full membership of the three test users and 900 more, their keys known to the
+/// first client: the group key enveloped for each is about 1.2 MiB
+users many_members(test::test_context& net_context) {
+	users many(users_change_mode::full);
+	for(int i = 0; i != 3; ++i) {
+		many.add(util::user_access{net_context.key_id(i), util::access_type::user_management_access});
+	}
+	for(int i = 0; i != 900; ++i) {
+		auto const member = crypto::generate_private_key();
+		net_context.client_context(0).public_keys().insert(member.public_key());
+		many.add(util::user_access{member.id(), util::access_type::data_write_access});
+	}
+	return many;
+}
+
 }
 
 // (1) connect single client by registering key first
@@ -159,7 +187,6 @@ TEST_CASE("connection test", "[system]") {
 
 	test::test_server server(net_context.server_context());
 	server.run();
-	std::this_thread::sleep_for(1s);
 
 	key_client::client key_client(net_context.client_context(0));
 	key_client.connect("127.0.0.1", key_server::default_key_server_port);
@@ -193,7 +220,6 @@ TEST_CASE("two clients test", "[system]") {
 
 	test::test_server server(net_context.server_context());
 	server.run();
-	std::this_thread::sleep_for(1s);
 
 	test_client client1(net_context.client_context(0), single_thread_event_loop, 0);
 	client1.connect();
@@ -225,7 +251,6 @@ TEST_CASE("reconnect test", "[system]") {
 
 	test::test_server server(net_context.server_context());
 	server.run();
-	std::this_thread::sleep_for(1s);
 
 	test_client client1(net_context.client_context(0), single_thread_event_loop, 0);
 	client1.connect();
@@ -284,7 +309,6 @@ TEST_CASE("multi client test", "[system]") {
 
 	test::test_server server(net_context.server_context());
 	server.run();
-	std::this_thread::sleep_for(1s);
 
 	std::vector<std::unique_ptr<test_client>> clients;
 	for(int i = 0; i != client_count; ++i) {
@@ -337,7 +361,6 @@ TEST_CASE("storage mode mismatch", "[system]") {
 
 	test::test_server server(net_context.server_context());
 	server.run();
-	std::this_thread::sleep_for(1s);
 
 	test_client client1(net_context.client_context(0), single_thread_event_loop, 0);
 	client1.connect();
@@ -371,7 +394,6 @@ TEST_CASE("replicated storage modes not asserted", "[system]") {
 
 	test::test_server server(net_context.server_context());
 	server.run();
-	std::this_thread::sleep_for(1s);
 
 	test_client client1(net_context.client_context(0), single_thread_event_loop, 0);
 	client1.engine_config.auth_mode = auth_mode::sign_records;
@@ -404,7 +426,6 @@ TEST_CASE("storage syncing sends the client elsewhere", "[system]") {
 
 	test::test_server server(net_context.server_context());
 	server.run();
-	std::this_thread::sleep_for(1s);
 
 	test_client client1(net_context.client_context(0), single_thread_event_loop, 0);
 	client1.connect();
@@ -449,7 +470,6 @@ TEST_CASE("records above a mebibyte", "[system]") {
 
 	test::test_server server(net_context.server_context());
 	server.run();
-	std::this_thread::sleep_for(1s);
 
 	// a storage that allows the biggest records there are
 	storage_modes modes;
@@ -463,44 +483,29 @@ TEST_CASE("records above a mebibyte", "[system]") {
 	client1.create_initial_record({net_context.key_id(1), net_context.key_id(2)});
 
 	test_client client2(net_context.client_context(1), single_thread_event_loop, 1);
-	client2.connect();
-	client2.wait_for_connection();
-	client2.connect_to_storage(sid);
+	join_storage(client2, sid);
 	WAIT_REQUIRE(test::check_commit_records_equal(sequence_number{1}, client1.storage, client2.storage), 5s);
 
 	// one record of 1.5 MiB: the commit is a message above 1 MiB to the server, the
 	// notification one to the other client
-	client1.engine->sync_object_change(util::create_object_id()
-		, metadata{{"blob", securepath::test::random_octet_vector(1536 * 1024)}});
+	commit_blob(client1, 1536 * 1024);
 	WAIT_REQUIRE(test::check_commit_records_equal(sequence_number{2}, client1.storage, client2.storage), 20s);
 
 	// a run of 300 KiB records: a range of them is more than one batch
 	for(int i = 0; i != 6; ++i) {
-		client1.engine->sync_object_change(util::create_object_id()
-			, metadata{{"blob", securepath::test::random_octet_vector(300 * 1024)}});
+		commit_blob(client1, 300 * 1024);
 	}
 	WAIT_REQUIRE(test::check_commit_records_equal(sequence_number{8}, client1.storage, client2.storage), 30s);
 
 	// a key rotation for 900 members: the group key enveloped for each, about 1.2 MiB
-	users many(users_change_mode::full);
-	for(int i = 0; i != 3; ++i) {
-		many.add(util::user_access{net_context.key_id(i), util::access_type::user_management_access});
-	}
-	for(int i = 0; i != 900; ++i) {
-		auto const member = crypto::generate_private_key();
-		net_context.client_context(0).public_keys().insert(member.public_key());
-		many.add(util::user_access{member.id(), util::access_type::data_write_access});
-	}
-	auto rotation = client1.engine->sync_user_change(encrypt_last_key_for_users(many, client1.cc));
+	auto rotation = client1.engine->sync_user_change(encrypt_last_key_for_users(many_members(net_context), client1.cc));
 	REQUIRE(rotation);
 	CHECK(rotation->record().record_bytes().size() > 1024 * 1024);
 	WAIT_REQUIRE(test::check_commit_records_equal(sequence_number{9}, client1.storage, client2.storage), 30s);
 
 	// a member that joins now fetches all of it in ranges
 	test_client client3(net_context.client_context(2), single_thread_event_loop, 2);
-	client3.connect();
-	client3.wait_for_connection();
-	client3.connect_to_storage(sid);
+	join_storage(client3, sid);
 	WAIT_CHECK(test::check_commit_records_equal(sequence_number{9}, client1.storage, client3.storage), 30s);
 }
 

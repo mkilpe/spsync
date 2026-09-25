@@ -162,6 +162,49 @@ private:
 
 using upload_log = test::transfer_log;
 
+/// the datas went up in this order, each whole, with reports from nothing to all of it
+void check_all_uploaded(fake_channel& channel, upload_log& log, std::vector<data_descriptor> const& datas) {
+	REQUIRE(log.finished.size() == datas.size());
+	CHECK(log.finished[0].first == datas[0].manifest_digest);
+	for(auto const& f : log.finished) {
+		CHECK(!f.second);
+	}
+	std::uint64_t chunks = 0;
+	for(auto const& d : datas) {
+		CHECK(channel.held.at(d.manifest_digest).complete());
+		auto const reports = log.reports_of(d.manifest_digest);
+		REQUIRE(!reports.empty());
+		CHECK(reports.front().transferred == 0);
+		CHECK(reports.front().total == d.enc_size);
+		CHECK(reports.back().transferred == d.enc_size);
+		CHECK(reports.back().total == d.enc_size);
+		chunks += d.chunk_count();
+	}
+	CHECK(channel.sent.size() == chunks);
+}
+
+/// every chunk in order from offset 0 in pieces of 300, the last piece of a chunk is
+/// what is left of it (the last chunk of the data is a short one): the piece count
+std::size_t check_pieces_in_order(fake_channel& channel, data_descriptor const& a) {
+	std::vector<fake_channel::piece> expected;
+	for(std::uint64_t no = 0; no != a.chunk_count(); ++no) {
+		for(std::uint64_t offset = 0; offset < a.chunk_enc_size(no); offset += 300) {
+			expected.push_back({a.manifest_digest, no, offset, static_cast<std::size_t>(std::min<std::uint64_t>(300, a.chunk_enc_size(no) - offset))});
+		}
+	}
+	REQUIRE(channel.pieces.size() == expected.size());
+	std::uint64_t total = 0;
+	for(std::size_t i = 0; i != expected.size(); ++i) {
+		auto const& p = channel.pieces[i];
+		CHECK(p.chunk_no == expected[i].chunk_no);
+		CHECK(p.offset == expected[i].offset);
+		CHECK(p.size == expected[i].size);
+		total += p.size;
+	}
+	CHECK(total == a.enc_size);
+	return expected.size();
+}
+
 }
 
 // RD7: commit order, a few datas at a time, a window of chunks each
@@ -207,21 +250,7 @@ TEST_CASE("data uploader uploads in queue order", "[unit]") {
 	CHECK(uploader.in_flight() == 0);
 	CHECK(uploader.queued() == 0);
 
-	REQUIRE(log.finished.size() == 3);
-	CHECK(log.finished[0].first == a.manifest_digest);
-	for(auto const& f : log.finished) {
-		CHECK(!f.second);
-	}
-	for(auto const& d : {a, b, c}) {
-		CHECK(channel.held.at(d.manifest_digest).complete());
-		auto const reports = log.reports_of(d.manifest_digest);
-		REQUIRE(!reports.empty());
-		CHECK(reports.front().transferred == 0);
-		CHECK(reports.front().total == d.enc_size);
-		CHECK(reports.back().transferred == d.enc_size);
-		CHECK(reports.back().total == d.enc_size);
-	}
-	CHECK(channel.sent.size() == a.chunk_count() + b.chunk_count() + c.chunk_count());
+	check_all_uploaded(channel, log, {a, b, c});
 
 	// done is done: it can be queued again (and the holder has everything)
 	CHECK(uploader.enqueue(a.manifest_digest));
@@ -389,28 +418,11 @@ TEST_CASE("data uploader sends chunks in pieces", "[unit]") {
 	CHECK(channel.max_outstanding == 3);
 	CHECK(channel.held.at(id).complete());
 
-	// every chunk in order from offset 0 in pieces of 300, the last piece of a chunk is
-	// what is left of it (the last chunk of the data is a short one)
-	std::vector<fake_channel::piece> expected;
-	for(std::uint64_t no = 0; no != a.chunk_count(); ++no) {
-		for(std::uint64_t offset = 0; offset < a.chunk_enc_size(no); offset += 300) {
-			expected.push_back({id, no, offset, static_cast<std::size_t>(std::min<std::uint64_t>(300, a.chunk_enc_size(no) - offset))});
-		}
-	}
-	REQUIRE(channel.pieces.size() == expected.size());
-	std::uint64_t total = 0;
-	for(std::size_t i = 0; i != expected.size(); ++i) {
-		auto const& p = channel.pieces[i];
-		CHECK(p.chunk_no == expected[i].chunk_no);
-		CHECK(p.offset == expected[i].offset);
-		CHECK(p.size == expected[i].size);
-		total += p.size;
-	}
-	CHECK(total == a.enc_size);
+	auto const piece_count = check_pieces_in_order(channel, a);
 
 	// progress moves with every piece
 	auto const reports = log.reports_of(id);
-	REQUIRE(reports.size() == 1 + expected.size());
+	REQUIRE(reports.size() == 1 + piece_count);
 	CHECK(reports[1].transferred == 300);
 	CHECK(reports.back().transferred == a.enc_size);
 }

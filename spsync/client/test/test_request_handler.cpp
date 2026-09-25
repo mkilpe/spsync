@@ -25,8 +25,6 @@ TEST_CASE("request handler test", "[unit]") {
 	sync::test::test_server server(net_context.server_context());
 	server.run();
 
-	std::this_thread::sleep_for(1s);
-
 	test_client c1(single_thread_event_loop, net_context.client_context(0), "rh_test_c1.db");
 	test_client c2(single_thread_event_loop, net_context.client_context(1), "rh_test_c2.db");
 

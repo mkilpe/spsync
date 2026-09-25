@@ -185,8 +185,7 @@ void transfer_with_interruptions(std::uint64_t size) {
 	params.data_params.storage_root = server_root;
 	sync::test::test_server server(net_context.server_context(), params);
 	server.run();
-	WAIT_REQUIRE(server.data().local_endpoint().has_value(), 10s);
-	std::this_thread::sleep_for(1s);
+	REQUIRE(server.data().local_endpoint().has_value());
 
 	system_client author(loop, net_context.client_context(0), "record_data_system_author");
 	system_client reader(loop, net_context.client_context(1), "record_data_system_reader");
@@ -251,8 +250,7 @@ void transfer_with_interruptions(std::uint64_t size) {
 	WAIT_REQUIRE(!reader.connected.load(), 10s);
 	CHECK(got_at_kill >= 2 * chunk_octets);
 	CHECK(got_at_kill < size);
-	std::this_thread::sleep_for(500ms);
-	CHECK(fetched->state() == record_data_state::download_pending);
+	WAIT_CHECK(fetched->state() == record_data_state::download_pending, 10s);
 	auto const kept = fetched->available_size();
 	CHECK(kept >= got_at_kill);
 	CHECK(kept < size);

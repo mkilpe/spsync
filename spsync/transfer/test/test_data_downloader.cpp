@@ -157,6 +157,37 @@ private:
 using download_log = test::transfer_log;
 using test::read_all;
 
+/// the opening answered: the manifest is kept, a window of three pieces of the first
+/// chunk is asked for
+void check_first_window(fake_holder& holder, record_data_store& store, data_id const& id, data_manifest const& manifest) {
+	CHECK(holder.release(1) == 1);
+	CHECK(store.manifest(id) == manifest);
+	REQUIRE(holder.pieces.size() == 3);
+	for(std::size_t i = 0; i != 3; ++i) {
+		CHECK(holder.pieces[i].chunk_no == 0);
+		CHECK(holder.pieces[i].offset == i * 300);
+	}
+}
+
+/// the pieces asked for cover the data: every chunk in order from offset 0, the sizes
+/// add up to the data
+void check_pieces_cover(std::vector<fake_holder::piece> const& pieces, std::uint64_t enc_size) {
+	std::uint64_t total = 0;
+	std::uint64_t expected_offset = 0;
+	std::uint64_t chunk = 0;
+	for(auto const& p : pieces) {
+		if(p.chunk_no != chunk) {
+			CHECK(p.chunk_no == chunk + 1);
+			chunk = p.chunk_no;
+			expected_offset = 0;
+		}
+		CHECK(p.offset == expected_offset);
+		expected_offset += p.size;
+		total += p.size;
+	}
+	CHECK(total == enc_size);
+}
+
 }
 
 // RD4/RD7: manifest first, then the missing chunks in pieces, each verified when whole
@@ -183,13 +214,7 @@ TEST_CASE("data downloader fetches a data", "[unit]") {
 	CHECK(holder.pieces.empty());
 
 	// the opening answered: the manifest is kept, a window of pieces is asked for
-	CHECK(holder.release(1) == 1);
-	CHECK(local.store.manifest(id) == data.result.manifest);
-	REQUIRE(holder.pieces.size() == 3);
-	for(std::size_t i = 0; i != 3; ++i) {
-		CHECK(holder.pieces[i].chunk_no == 0);
-		CHECK(holder.pieces[i].offset == i * 300);
-	}
+	check_first_window(holder, local.store, id, data.result.manifest);
 
 	holder.release();
 	CHECK(holder.max_outstanding == 3);
@@ -198,20 +223,7 @@ TEST_CASE("data downloader fetches a data", "[unit]") {
 	CHECK(downloader.in_flight() == 0);
 
 	// every chunk in order from offset 0, the sizes add up to the data
-	std::uint64_t total = 0;
-	std::uint64_t expected_offset = 0;
-	std::uint64_t chunk = 0;
-	for(auto const& p : holder.pieces) {
-		if(p.chunk_no != chunk) {
-			CHECK(p.chunk_no == chunk + 1);
-			chunk = p.chunk_no;
-			expected_offset = 0;
-		}
-		CHECK(p.offset == expected_offset);
-		expected_offset += p.size;
-		total += p.size;
-	}
-	CHECK(total == d.enc_size);
+	check_pieces_cover(holder.pieces, d.enc_size);
 	CHECK(log.reports.front().transferred == 0);
 	CHECK(log.reports.back().transferred == d.enc_size);
 

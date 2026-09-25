@@ -204,38 +204,47 @@ TEST_CASE("chunk files", "[unit]") {
 	}
 }
 
-TEST_CASE("data state table", "[unit]") {
-	auto db = fresh_database();
-	data_descriptor const d{5080, 1000, securepath::test::random_octet_vector(64)};
+/// a manifest of random chunk digests for the descriptor
+data_manifest random_manifest(data_descriptor const& d) {
 	data_manifest manifest;
 	for(std::uint64_t i = 0; i != d.chunk_count(); ++i) {
 		manifest.chunk_digests.push_back(securepath::test::random_octet_vector(64));
 	}
+	return manifest;
+}
 
-	std::uint64_t local_id = 0;
-	{
-		data_state_table table{db};
-		CHECK(!table.find(d.manifest_digest));
-		CHECK(table.all_ids().empty());
+/// a row of the data made in a table of its own: one chunk held, a download pending,
+/// the manifest set; its local id
+std::uint64_t make_pending_row(database::connection_ptr const& db, data_descriptor const& d, data_manifest const& manifest) {
+	data_state_table table{db};
+	CHECK(!table.find(d.manifest_digest));
+	CHECK(table.all_ids().empty());
 
-		local_id = table.ensure(d);
-		CHECK(table.ensure(d) == local_id);
-		CHECK(table.all_ids() == std::vector<std::uint64_t>{local_id});
+	auto const local_id = table.ensure(d);
+	CHECK(table.ensure(d) == local_id);
+	CHECK(table.all_ids() == std::vector<std::uint64_t>{local_id});
 
-		auto row = table.find(d.manifest_digest);
-		REQUIRE(row);
-		CHECK(row->local_id == local_id);
-		CHECK(row->descriptor == d);
-		CHECK(row->state == record_data_state::deferred);
-		CHECK(row->have.size() == d.chunk_count());
-		CHECK(row->have.count() == 0);
-		CHECK(!table.manifest(local_id));
+	auto row = table.find(d.manifest_digest);
+	REQUIRE(row);
+	CHECK(row->local_id == local_id);
+	CHECK(row->descriptor == d);
+	CHECK(row->state == record_data_state::deferred);
+	CHECK(row->have.size() == d.chunk_count());
+	CHECK(row->have.count() == 0);
+	CHECK(!table.manifest(local_id));
 
-		row->have.set(2);
-		table.set_have(local_id, row->have);
-		table.set_state(local_id, record_data_state::download_pending);
-		table.set_manifest(local_id, manifest);
-	}
+	row->have.set(2);
+	table.set_have(local_id, row->have);
+	table.set_state(local_id, record_data_state::download_pending);
+	table.set_manifest(local_id, manifest);
+	return local_id;
+}
+
+TEST_CASE("data state table", "[unit]") {
+	auto db = fresh_database();
+	data_descriptor const d{5080, 1000, securepath::test::random_octet_vector(64)};
+	auto const manifest = random_manifest(d);
+	auto const local_id = make_pending_row(db, d, manifest);
 
 	// persisted
 	data_state_table table{db};
@@ -793,6 +802,95 @@ TEST_CASE("record data store copy from a source", "[unit]") {
 	CHECK(empty.finish().header.plain_size == 0);
 }
 
+/// a chunk received in pieces that end before the chunk does, or not in order: not kept
+void check_incomplete_pieces(record_data_store& store, data_id const& id, octet_vector const& chunk) {
+	octet_span const bytes{chunk};
+	{
+		auto incoming = store.begin_chunk(id, 0);
+		REQUIRE(incoming);
+		CHECK(incoming->chunk_no() == 0);
+		CHECK(incoming->append(0, bytes.first(400)));
+		CHECK(incoming->received() == 400);
+		CHECK(!incoming->complete());
+		// not done: finishing now keeps nothing
+		CHECK(!incoming->finish());
+		CHECK(store.find(id)->have.count() == 0);
+	}
+	{
+		auto incoming = store.begin_chunk(id, 0);
+		REQUIRE(incoming);
+		CHECK(incoming->append(0, bytes.first(400)));
+		// not the next piece: the chunk is lost
+		CHECK(!incoming->append(500, bytes.subspan(500, 100)));
+		CHECK(!incoming->append(400, bytes.subspan(400, 100)));
+		CHECK(!incoming->finish());
+	}
+}
+
+/// a staged file that is not the pieces, a chunk dropped half way, the wrong bytes: not
+/// kept, and nothing stays staged
+void check_refused_chunks(record_data_store& store, data_id const& id, octet_vector const& chunk, std::filesystem::path const& staging) {
+	octet_span const bytes{chunk};
+	{
+		// (review 2026-09-21) the digest is of the pieces as they came, the file is
+		// what is kept: a file that is not exactly the pieces - a write that ended
+		// half way, anything that got in - is not adopted whatever the digest says
+		auto incoming = store.begin_chunk(id, 0);
+		REQUIRE(incoming);
+		CHECK(incoming->append(0, bytes.first(400)));
+		for(auto const& entry : std::filesystem::recursive_directory_iterator{staging}) {
+			if(entry.is_regular_file()) {
+				std::ofstream{entry.path(), std::ios::binary | std::ios::app} << "x";
+			}
+		}
+		CHECK(incoming->append(400, bytes.subspan(400)));
+		CHECK(incoming->complete());
+		CHECK(!incoming->finish());
+		CHECK(store.find(id)->have.count() == 0);
+		CHECK(!store.read_chunk(id, 0));
+	}
+	CHECK(std::filesystem::is_empty(staging));
+	{
+		// dropped half way
+		auto incoming = store.begin_chunk(id, 0);
+		REQUIRE(incoming);
+		CHECK(incoming->append(0, bytes.first(400)));
+		CHECK(!std::filesystem::is_empty(staging));
+	}
+	CHECK(std::filesystem::is_empty(staging));
+	{
+		// the right size, the wrong bytes
+		auto junk = chunk;
+		junk[3] ^= 0x01;
+		auto incoming = store.begin_chunk(id, 0);
+		REQUIRE(incoming);
+		CHECK(incoming->append(0, junk));
+		CHECK(incoming->complete());
+		CHECK(!incoming->finish());
+		CHECK(store.find(id)->have.count() == 0);
+		CHECK(std::filesystem::is_empty(staging));
+	}
+}
+
+/// every chunk of the copy in three pieces, moved around as a caller keeps them
+void receive_in_pieces(record_data_store& store, data_id const& id, remote_copy const& remote) {
+	for(auto const& [no, c] : remote.chunks) {
+		octet_span const all{c};
+		auto begun = store.begin_chunk(id, no);
+		REQUIRE(begun);
+		incoming_chunk incoming{std::move(*begun)};
+		CHECK(incoming.append(0, all.first(100)));
+		CHECK(incoming.append(100, all.subspan(100, 500)));
+		// more octets than the chunk has
+		CHECK(!incoming.append(600, octet_vector(c.size(), 0)));
+		incoming_chunk again{std::move(*store.begin_chunk(id, no))};
+		CHECK(again.append(0, all.first(600)));
+		CHECK(again.append(600, all.subspan(600)));
+		CHECK(again.complete());
+		CHECK(again.finish());
+	}
+}
+
 // a chunk never travels whole: pieces are read from the chunk file on the way out and
 // appended to a staged file, hashed as they come, on the way in
 TEST_CASE("record data store chunk pieces", "[unit]") {
@@ -839,83 +937,9 @@ TEST_CASE("record data store chunk pieces", "[unit]") {
 		CHECK(!store.begin_chunk(id, remote.chunks.size()));
 
 		auto const& chunk = remote.chunks.at(0);
-		octet_span const bytes{chunk};
-		{
-			auto incoming = store.begin_chunk(id, 0);
-			REQUIRE(incoming);
-			CHECK(incoming->chunk_no() == 0);
-			CHECK(incoming->append(0, bytes.first(400)));
-			CHECK(incoming->received() == 400);
-			CHECK(!incoming->complete());
-			// not done: finishing now keeps nothing
-			CHECK(!incoming->finish());
-			CHECK(store.find(id)->have.count() == 0);
-		}
-		{
-			auto incoming = store.begin_chunk(id, 0);
-			REQUIRE(incoming);
-			CHECK(incoming->append(0, bytes.first(400)));
-			// not the next piece: the chunk is lost
-			CHECK(!incoming->append(500, bytes.subspan(500, 100)));
-			CHECK(!incoming->append(400, bytes.subspan(400, 100)));
-			CHECK(!incoming->finish());
-		}
-		{
-			// (review 2026-09-21) the digest is of the pieces as they came, the file is
-			// what is kept: a file that is not exactly the pieces - a write that ended
-			// half way, anything that got in - is not adopted whatever the digest says
-			auto incoming = store.begin_chunk(id, 0);
-			REQUIRE(incoming);
-			CHECK(incoming->append(0, bytes.first(400)));
-			for(auto const& entry : std::filesystem::recursive_directory_iterator{staging}) {
-				if(entry.is_regular_file()) {
-					std::ofstream{entry.path(), std::ios::binary | std::ios::app} << "x";
-				}
-			}
-			CHECK(incoming->append(400, bytes.subspan(400)));
-			CHECK(incoming->complete());
-			CHECK(!incoming->finish());
-			CHECK(store.find(id)->have.count() == 0);
-			CHECK(!store.read_chunk(id, 0));
-		}
-		CHECK(std::filesystem::is_empty(staging));
-		{
-			// dropped half way
-			auto incoming = store.begin_chunk(id, 0);
-			REQUIRE(incoming);
-			CHECK(incoming->append(0, bytes.first(400)));
-			CHECK(!std::filesystem::is_empty(staging));
-		}
-		CHECK(std::filesystem::is_empty(staging));
-		{
-			// the right size, the wrong bytes
-			auto junk = chunk;
-			junk[3] ^= 0x01;
-			auto incoming = store.begin_chunk(id, 0);
-			REQUIRE(incoming);
-			CHECK(incoming->append(0, junk));
-			CHECK(incoming->complete());
-			CHECK(!incoming->finish());
-			CHECK(store.find(id)->have.count() == 0);
-			CHECK(std::filesystem::is_empty(staging));
-		}
-
-		// every chunk in three pieces, moved around as a caller keeps them
-		for(auto const& [no, c] : remote.chunks) {
-			octet_span const all{c};
-			auto begun = store.begin_chunk(id, no);
-			REQUIRE(begun);
-			incoming_chunk incoming{std::move(*begun)};
-			CHECK(incoming.append(0, all.first(100)));
-			CHECK(incoming.append(100, all.subspan(100, 500)));
-			// more octets than the chunk has
-			CHECK(!incoming.append(600, octet_vector(c.size(), 0)));
-			incoming_chunk again{std::move(*store.begin_chunk(id, no))};
-			CHECK(again.append(0, all.first(600)));
-			CHECK(again.append(600, all.subspan(600)));
-			CHECK(again.complete());
-			CHECK(again.finish());
-		}
+		check_incomplete_pieces(store, id, chunk);
+		check_refused_chunks(store, id, chunk, staging);
+		receive_in_pieces(store, id, remote);
 		CHECK(std::filesystem::is_empty(staging));
 		CHECK(store.find(id)->state == record_data_state::in_sync);
 		auto handle = store.open({key}, data.descriptor, data.header);

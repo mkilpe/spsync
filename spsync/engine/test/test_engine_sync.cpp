@@ -11,9 +11,13 @@
 #include <spsync/core/records/user_change_record.hpp>
 #include <spsync/core/records/segment_record.hpp>
 
+#include <spsync/test/test_record_data.hpp>
+
 #include <securepath/test_frame/test_suite.hpp>
 #include <securepath/test_frame/test_serialisation.hpp>
 #include <securepath/test_frame/test_utils.hpp>
+
+#include <map>
 
 namespace securepath::sync {
 using namespace securepath::sync::util;
@@ -50,6 +54,165 @@ struct conflict_observer : engine_output {
 	record_handle last_local;
 	record_handle last_remote;
 };
+
+using test::read_all;
+
+/// object changes from client 0, each drained
+void change_each(test::test_sync_context& context, std::vector<object_id> const& oids) {
+	for(auto const& oid : oids) {
+		context.client(0).engine.sync_object_change(oid, metadata{});
+		while(context.handle_events()) {}
+	}
+}
+
+/// a change with record data from the client, drained
+record_handle change_with_data(test::test_sync_context& context, int client, octet_vector const& content) {
+	auto h = context.client(client).engine.sync_object_change(create_object_id(), metadata{}, std::make_shared<memory_record_data>(content));
+	while(context.handle_events()) {}
+	return h;
+}
+
+/// a segment sealed by client 0, drained
+record_handle seal_segment(test::test_sync_context& context) {
+	auto seg = context.client(0).engine.sync_segment_end(metadata{});
+	while(context.handle_events()) {}
+	return seg;
+}
+
+/// the data descriptor the record's first change carries
+std::optional<data_descriptor> descriptor_of(record_handle const& h) {
+	return h->record().deserialise_to<data_change_record>().begin()->data.data;
+}
+
+/// the client's view of the data a record names
+auto data_of(test::test_sync_context& context, int client, record_handle const& h) {
+	auto& io = context.client(client).io;
+	return context.client(client).engine.object_data(io.records().find_tag(h->tag()));
+}
+
+/// the loser's data: still the same, referenced once, uploaded after the rebased commit
+void check_rebased_data_kept(test::test_sync_context& context, record_handle const& h1
+	, data_descriptor const& descriptor1, octet_vector const& content1) {
+	auto& io1 = context.client(1).io;
+	auto const row1 = io1.data()->find(descriptor1.manifest_digest);
+	REQUIRE(row1);
+	CHECK(row1->state == record_data_state::in_sync);
+	CHECK(row1->have.complete());
+	CHECK(io1.records().data_reference_count(row1->local_id) == 1);
+	CHECK(io1.upload_requests() == std::vector<data_id>{descriptor1.manifest_digest});
+
+	auto own = context.client(1).engine.object_data(h1);
+	REQUIRE(own);
+	octet_vector read_back(content1.size());
+	CHECK(own->read(0, read_back.data(), read_back.size()) == content1.size());
+	CHECK(read_back == content1);
+}
+
+/// the winner's data as client 1 sees it: known, deferred, nothing of it held
+void check_winner_data_deferred(test::test_sync_context& context, record_handle const& h0, octet_vector const& content0) {
+	auto const descriptor0 = descriptor_of(h0);
+	REQUIRE(descriptor0);
+	auto remote = data_of(context, 1, h0);
+	REQUIRE(remote);
+	CHECK(remote->state() == record_data_state::deferred);
+	CHECK(remote->size() == content0.size());
+	CHECK(remote->available_size() == 0);
+	CHECK(context.client(0).io.upload_requests() == std::vector<data_id>{descriptor0->manifest_digest});
+}
+
+/// the server's index of the data its chain names: these and nothing else
+void check_server_index(test::test_sync_context& context, std::vector<data_id> const& ids) {
+	data_state_table server_index{context.server.database};
+	for(auto const& id : ids) {
+		CHECK(server_index.find(id));
+	}
+	CHECK(server_index.all_ids().size() == ids.size());
+}
+
+/// a pending record of client 1 over every object, made off-line: its handle and the
+/// tags of the objects it builds on
+struct multi_change {
+	record_handle handle;
+	std::vector<record_tag> previous;
+};
+
+multi_change pending_multi_change(test::test_sync_context& context, std::vector<object_id> const& oids) {
+	auto& client = context.client(1);
+	auto& storage1 = client.io.records();
+	multi_change ret;
+	data_change_record_creator creator(client.enc_keys.current_key(), storage1.last_block());
+	for(auto const& oid : oids) {
+		ret.previous.push_back(storage1.find_last(oid)->tag());
+		creator.add_change(oid, ret.previous.back(), metadata{});
+	}
+	ret.handle = storage1.create(creator.result());
+	return ret;
+}
+
+/// the previous tag of every object as the committed record of the tag names it
+std::map<object_id, record_tag> previous_tags(test::test_sync_context& context, record_tag const& tag) {
+	auto committed = context.server.sync.records().find_tag(tag);
+	REQUIRE(committed);
+	auto rec = committed->record().deserialise_to<data_change_record>();
+	std::map<object_id, record_tag> previous;
+	for(auto const& c : rec) {
+		previous[c.data.id] = c.data.previous_oid_record_tag;
+	}
+	return previous;
+}
+
+/// the segment at `end` covers [start, end] with the server's tags in order, linked to
+/// the previous segment by its tag
+void check_segment(test::test_sync_context& context, record_handle const& h, std::uint64_t start, std::uint64_t end
+	, record_tag const& previous) {
+	auto seg = h->record().deserialise_to<segment_record>();
+	CHECK(h->block_id().sequence == sequence_number{end});
+	CHECK(seg.data().segment_start() == sequence_number{start});
+	CHECK(seg.data().segment_end() == sequence_number{end});
+	CHECK(seg.data().previous_segment_tag() == previous);
+	REQUIRE(seg.data().tags().size() == end - start);
+	for(std::uint64_t i = 0; i != end - start; ++i) {
+		CHECK(seg.data().tags()[i] == context.server.sync.records().find(sequence_number{start + i})->tag());
+	}
+}
+
+/// a new client joins with the anchor hash and the keys from the invite (the root
+/// record that used to carry the enveloped keys is gone)
+test::test_sync_server_client_context& join_from_anchor(test::test_sync_context& context, octet_vector const& anchor) {
+	context.add_client(false, 1);
+	auto& fresh = context.client(1);
+	auto cfg = fresh.engine_config;
+	cfg.trusted_anchor = anchor;
+	fresh.engine.set_config(cfg);
+	fresh.enc_keys.insert(encryption_key{sequence_number{1}, to_octet_vector("12345678901234567890123456789012")});
+	context.connect_client(1);
+	while(context.handle_events()) {}
+	return fresh;
+}
+
+/// verification from the anchor: one segment, the records after it, nothing covered
+void check_fast_verification(test::test_sync_server_client_context& client, std::size_t verified_records) {
+	auto fast = client.engine.verify_history();
+	REQUIRE(fast);
+	CHECK(fast.value().verified_segments == 1);
+	CHECK(fast.value().verified_records == verified_records);
+	CHECK(fast.value().covered_records == 0);
+}
+
+/// replica B: the same records in a different local order, one missing, plus one of
+/// its own (as if replicated s2s while the client was away) - a real record so the
+/// hopping client can verify it (the block creator makes records without usable encryption)
+chain_block fill_replica(test::test_sync_server& b, std::deque<chain_block> const& recs) {
+	REQUIRE(b.sync.commit_foreign(recs[0]));
+	REQUIRE(b.sync.commit_foreign(recs[2]));
+	encryption_key const key{sequence_number{1}, to_octet_vector("12345678901234567890123456789012")};
+	data_change_record_creator other(key, chain_block_id{sequence_number{2}, recs[2].hash()},
+		std::nullopt, {}, recs[0].tag());
+	other.add_change(create_object_id(), {}, metadata{});
+	auto extra = chain_block{other.result()};
+	REQUIRE(b.sync.commit_block(extra));
+	return extra;
+}
 
 }
 
@@ -416,45 +579,18 @@ TEST_CASE("engine sync rebases a change with record data", "[unit]") {
 	auto h0 = context.client(0).engine.sync_object_change(oid, metadata{}, std::make_shared<memory_record_data>(content0));
 	auto h1 = context.client(1).engine.sync_object_change(oid, metadata{}, std::make_shared<memory_record_data>(content1));
 	auto const original_tag = h1->tag();
-	auto const descriptor1 = h1->record().deserialise_to<data_change_record>().begin()->data.data;
+	auto const descriptor1 = descriptor_of(h1);
 	REQUIRE(descriptor1);
 	while(context.handle_events()) {}
 
 	CHECK(context.compare_record_storages(sequence_number{4}));
 	CHECK(h1->tag() != original_tag);
 	CHECK(h1->state() == record_state::in_sync);
-	CHECK(h1->record().deserialise_to<data_change_record>().begin()->data.data == descriptor1);
+	CHECK(descriptor_of(h1) == descriptor1);
 
-	// the loser's data: still the same, referenced once, uploaded after the rebased commit
-	auto& io1 = context.client(1).io;
-	auto const row1 = io1.data()->find(descriptor1->manifest_digest);
-	REQUIRE(row1);
-	CHECK(row1->state == record_data_state::in_sync);
-	CHECK(row1->have.complete());
-	CHECK(io1.records().data_reference_count(row1->local_id) == 1);
-	CHECK(io1.upload_requests() == std::vector<data_id>{descriptor1->manifest_digest});
-
-	auto own = context.client(1).engine.object_data(h1);
-	REQUIRE(own);
-	octet_vector read_back(content1.size());
-	CHECK(own->read(0, read_back.data(), read_back.size()) == content1.size());
-	CHECK(read_back == content1);
-
-	// the winner's data as client 1 sees it
-	auto const descriptor0 = h0->record().deserialise_to<data_change_record>().begin()->data.data;
-	REQUIRE(descriptor0);
-	auto remote = context.client(1).engine.object_data(io1.records().find_tag(h0->tag()));
-	REQUIRE(remote);
-	CHECK(remote->state() == record_data_state::deferred);
-	CHECK(remote->size() == content0.size());
-	CHECK(remote->available_size() == 0);
-	CHECK(context.client(0).io.upload_requests() == std::vector<data_id>{descriptor0->manifest_digest});
-
-	// the server's index of the data its chain names
-	data_state_table server_index{context.server.database};
-	CHECK(server_index.find(descriptor0->manifest_digest));
-	CHECK(server_index.find(descriptor1->manifest_digest));
-	CHECK(server_index.all_ids().size() == 2);
+	check_rebased_data_kept(context, h1, *descriptor1, content1);
+	check_winner_data_deferred(context, h0, content0);
+	check_server_index(context, {descriptor_of(h0)->manifest_digest, descriptor1->manifest_digest});
 }
 
 // (RDS 6) record data from one member to another through the engines: the author's data
@@ -473,35 +609,23 @@ TEST_CASE("engine sync transfers record data", "[unit]") {
 
 	auto const small = securepath::test::random_octet_vector(70000);
 	auto const big = securepath::test::random_octet_vector(2 * 1024 * 1024 + 5000);
-	auto h_small = context.client(0).engine.sync_object_change(create_object_id(), metadata{}, std::make_shared<memory_record_data>(small));
-	while(context.handle_events()) {}
-	auto h_big = context.client(0).engine.sync_object_change(create_object_id(), metadata{}, std::make_shared<memory_record_data>(big));
-	while(context.handle_events()) {}
+	auto h_small = change_with_data(context, 0, small);
+	auto h_big = change_with_data(context, 0, big);
 	CHECK(context.compare_record_storages(sequence_number{3}));
-
-	auto const read_all = [](record_data& data) {
-		octet_vector ret(data.size());
-		ret.resize(data.read(0, ret.data(), ret.size()));
-		return ret;
-	};
-	auto const data_of = [&](int client, record_handle const& h) {
-		auto& io = context.client(client).io;
-		return context.client(client).engine.object_data(io.records().find_tag(h->tag()));
-	};
 
 	// lazy: client 1 knows both datas and holds neither
 	CHECK(context.client(1).io.fetch_requests().empty());
-	REQUIRE(data_of(1, h_small));
-	CHECK(data_of(1, h_small)->state() == record_data_state::deferred);
-	CHECK(data_of(1, h_big)->state() == record_data_state::deferred);
+	REQUIRE(data_of(context, 1, h_small));
+	CHECK(data_of(context, 1, h_small)->state() == record_data_state::deferred);
+	CHECK(data_of(context, 1, h_big)->state() == record_data_state::deferred);
 
 	// auto fetch: client 2 has the small one already - asked for when the record came, and
 	// again after the notification when that was before the author's upload had landed
 	CHECK(!context.client(2).io.fetch_requests().empty());
 	CHECK(context.client(2).io.fetch_requests().size() <= 2);
-	REQUIRE(data_of(2, h_small)->state() == record_data_state::in_sync);
-	CHECK(read_all(*data_of(2, h_small)) == small);
-	CHECK(data_of(2, h_big)->state() == record_data_state::deferred);
+	REQUIRE(data_of(context, 2, h_small)->state() == record_data_state::in_sync);
+	CHECK(read_all(*data_of(context, 2, h_small)) == small);
+	CHECK(data_of(context, 2, h_big)->state() == record_data_state::deferred);
 
 	// asked for
 	auto& io1 = context.client(1).io;
@@ -512,11 +636,11 @@ TEST_CASE("engine sync transfers record data", "[unit]") {
 	CHECK(fetched->state() == record_data_state::in_sync);
 	CHECK(read_all(*fetched) == big);
 	CHECK(io1.fetch_requests().size() == 1);
-	CHECK(data_of(1, h_small)->state() == record_data_state::deferred);
+	CHECK(data_of(context, 1, h_small)->state() == record_data_state::deferred);
 
 	// the author never fetches its own
 	CHECK(context.client(0).io.fetch_requests().empty());
-	CHECK(read_all(*data_of(0, h_big)) == big);
+	CHECK(read_all(*data_of(context, 0, h_big)) == big);
 }
 
 // (13b) the same client changes an object twice before the first change is confirmed:
@@ -592,34 +716,26 @@ TEST_CASE("engine sync multi change record partial conflict", "[unit]") {
 	context.create_initial_record();
 	while(context.handle_events()) {}
 
-	auto oid_a = create_object_id();
-	auto oid_b = create_object_id();
-	auto oid_c = create_object_id();
-	context.client(0).engine.sync_object_change(oid_a, metadata{});
-	context.client(0).engine.sync_object_change(oid_b, metadata{});
-	context.client(0).engine.sync_object_change(oid_c, metadata{});
+	// objects a, b and c
+	std::vector<object_id> const oids{create_object_id(), create_object_id(), create_object_id()};
+	for(auto const& oid : oids) {
+		context.client(0).engine.sync_object_change(oid, metadata{});
+	}
 	while(context.handle_events()) {}
 	CHECK(context.compare_record_storages(sequence_number{4}));
 
 	// client 1 goes off-line holding a pending multi change record over a, b and c
 	context.disconnect_client(1);
-	auto& storage1 = context.client(1).io.records();
-	auto tag_a = storage1.find_last(oid_a)->tag();
-	auto tag_b = storage1.find_last(oid_b)->tag();
-	auto tag_c = storage1.find_last(oid_c)->tag();
-	data_change_record_creator creator(context.client(1).enc_keys.current_key(), storage1.last_block());
-	creator.add_change(oid_a, tag_a, metadata{});
-	creator.add_change(oid_b, tag_b, metadata{});
-	creator.add_change(oid_c, tag_c, metadata{});
-	auto h = storage1.create(creator.result());
+	auto const pending = pending_multi_change(context, oids);
+	auto const& h = pending.handle;
 	auto original_tag = h->tag();
 
 	// meanwhile b and c move underneath it
-	context.client(0).engine.sync_object_change(oid_b, metadata{});
-	context.client(0).engine.sync_object_change(oid_c, metadata{});
+	context.client(0).engine.sync_object_change(oids[1], metadata{});
+	context.client(0).engine.sync_object_change(oids[2], metadata{});
 	while(context.handle_events()) {}
-	auto new_tag_b = context.client(0).io.records().find_last(oid_b)->tag();
-	auto new_tag_c = context.client(0).io.records().find_last(oid_c)->tag();
+	auto new_tag_b = context.client(0).io.records().find_last(oids[1])->tag();
+	auto new_tag_c = context.client(0).io.records().find_last(oids[2])->tag();
 
 	conflict_observer observer{context.client(1).single_thread_event_loop};
 	context.client(1).engine.set_output(&observer);
@@ -629,19 +745,13 @@ TEST_CASE("engine sync multi change record partial conflict", "[unit]") {
 
 	CHECK(context.compare_record_storages(sequence_number{7}));
 	CHECK(h->tag() != original_tag);
-	auto committed = context.server.sync.records().find_tag(h->tag());
-	REQUIRE(committed);
 
 	// the rebuilt record keeps the non-conflicting change and rebases the conflicting ones
-	auto rec = committed->record().deserialise_to<data_change_record>();
-	std::map<object_id, record_tag> previous;
-	for(auto const& c : rec) {
-		previous[c.data.id] = c.data.previous_oid_record_tag;
-	}
+	auto const previous = previous_tags(context, h->tag());
 	REQUIRE(previous.size() == 3);
-	CHECK(previous[oid_a] == tag_a);
-	CHECK(previous[oid_b] == new_tag_b);
-	CHECK(previous[oid_c] == new_tag_c);
+	CHECK(previous.at(oids[0]) == pending.previous[0]);
+	CHECK(previous.at(oids[1]) == new_tag_b);
+	CHECK(previous.at(oids[2]) == new_tag_c);
 
 	// one conflict event per conflicting object
 	WAIT_CHECK(observer.conflicts == 2, 2s);
@@ -709,34 +819,20 @@ TEST_CASE("engine sync segment end", "[unit]") {
 	while(context.handle_events()) {}
 	CHECK(context.compare_record_storages(sequence_number{4}));
 
-	auto seg = h->record().deserialise_to<segment_record>();
-	CHECK(h->block_id().sequence == sequence_number{4});
-	CHECK(seg.data().segment_start() == sequence_number{1});
-	CHECK(seg.data().segment_end() == sequence_number{4});
-	CHECK(seg.data().previous_segment_tag().empty());
-	REQUIRE(seg.data().tags().size() == 3);
-	for(std::size_t i = 0; i != seg.data().tags().size(); ++i) {
-		CHECK(seg.data().tags()[i] == context.server.sync.records().find(sequence_number{i + 1})->tag());
-	}
+	check_segment(context, h, 1, 4, record_tag{});
 
 	// the encrypted header carries the metadata and the record verifies
+	auto seg = h->record().deserialise_to<segment_record>();
 	segment_record_verifier ver(context.client(0).enc_keys.current_key(), seg, h->record().auth());
 	CHECK(ver.is_authentic());
 	CHECK(ver.header().metadata().find<std::string>("checkpoint") == std::string{"test"});
 
 	// the next segment starts where the first ended and links it by tag (the backbone)
-	context.client(0).engine.sync_object_change(create_object_id(), metadata{});
-	while(context.handle_events()) {}
-	auto h2 = context.client(0).engine.sync_segment_end(metadata{});
-	while(context.handle_events()) {}
+	change_each(context, {create_object_id()});
+	auto h2 = seal_segment(context);
 	CHECK(context.compare_record_storages(sequence_number{6}));
-
-	auto seg2 = h2->record().deserialise_to<segment_record>();
-	CHECK(seg2.data().segment_start() == sequence_number{4});
-	CHECK(seg2.data().segment_end() == sequence_number{6});
-	CHECK(seg2.data().previous_segment_tag() == h->tag());
-	REQUIRE(seg2.data().tags().size() == 2);
-	CHECK(seg2.data().tags()[0] == h->tag());
+	check_segment(context, h2, 4, 6, h->tag());
+	CHECK(h2->record().deserialise_to<segment_record>().data().tags()[0] == h->tag());
 }
 
 // (19) a segment that has not seen the newest record is rejected and rebuilt with a
@@ -779,16 +875,9 @@ TEST_CASE("engine sync rejoin from anchor after cut", "[unit]") {
 	while(context.handle_events()) {}
 
 	auto oid = create_object_id();
-	context.client(0).engine.sync_object_change(oid, metadata{});                 // 2: add A
-	while(context.handle_events()) {}
-	context.client(0).engine.sync_object_change(create_object_id(), metadata{});  // 3: add B
-	while(context.handle_events()) {}
-	context.client(0).engine.sync_object_change(oid, metadata{});                 // 4: change A
-	while(context.handle_events()) {}
-	auto seg = context.client(0).engine.sync_segment_end(metadata{});             // 5: covers [1,5)
-	while(context.handle_events()) {}
-	context.client(0).engine.sync_object_change(create_object_id(), metadata{});  // 6
-	while(context.handle_events()) {}
+	change_each(context, {oid, create_object_id(), oid});                        // 2: add A, 3: add B, 4: change A
+	auto seg = seal_segment(context);                                            // 5: covers [1,5)
+	change_each(context, {create_object_id()});                                  // 6
 	REQUIRE(context.compare_record_storages(sequence_number{6}));
 
 	// the server cuts before the segment: the root user change goes, the object chains stay
@@ -796,16 +885,7 @@ TEST_CASE("engine sync rejoin from anchor after cut", "[unit]") {
 	REQUIRE(removed.size() == 1);
 	CHECK(removed[0].sequence() == sequence_number{1});
 
-	// a new client joins with the anchor hash and the keys from the invite (the root
-	// record that used to carry the enveloped keys is gone)
-	context.add_client(false, 1);
-	auto& fresh = context.client(1);
-	auto cfg = fresh.engine_config;
-	cfg.trusted_anchor = seg->block_id().hash;
-	fresh.engine.set_config(cfg);
-	fresh.enc_keys.insert(encryption_key{sequence_number{1}, to_octet_vector("12345678901234567890123456789012")});
-	context.connect_client(1);
-	while(context.handle_events()) {}
+	auto& fresh = join_from_anchor(context, seg->block_id().hash);
 
 	// the sparse history synced: retained records promoted, anchor as the chain start
 	auto& recs = fresh.io.records();
@@ -820,11 +900,9 @@ TEST_CASE("engine sync rejoin from anchor after cut", "[unit]") {
 	CHECK(recs.find_last(oid)->tag() == recs.find(sequence_number{4})->tag());
 
 	// verification anchors at the segment: retained records detached, tail chained
-	auto fast = fresh.engine.verify_history();
-	REQUIRE(fast);
-	CHECK(fast.value().verified_segments == 1);
-	CHECK(fast.value().verified_records == 4);
-	CHECK(fast.value().covered_records == 0);
+	check_fast_verification(fresh, 4);
+	auto cfg = fresh.engine_config;
+	cfg.trusted_anchor = seg->block_id().hash;
 	cfg.verification = history_verification::full;
 	fresh.engine.set_config(cfg);
 	auto full = fresh.engine.verify_history();
@@ -852,14 +930,9 @@ TEST_CASE("engine sync local prune at segment", "[unit]") {
 	CHECK_THROWS(context.client(0).engine.prune_history());
 
 	auto oid = create_object_id();
-	context.client(0).engine.sync_object_change(oid, metadata{});                 // 2: add A
-	while(context.handle_events()) {}
-	context.client(0).engine.sync_object_change(oid, metadata{});                 // 3: change A
-	while(context.handle_events()) {}
-	auto seg = context.client(0).engine.sync_segment_end(metadata{});             // 4: covers [1,4)
-	while(context.handle_events()) {}
-	context.client(0).engine.sync_object_change(create_object_id(), metadata{});  // 5
-	while(context.handle_events()) {}
+	change_each(context, {oid, oid});                                            // 2: add A, 3: change A
+	auto seg = seal_segment(context);                                            // 4: covers [1,4)
+	change_each(context, {create_object_id()});                                  // 5
 	REQUIRE(context.compare_record_storages(sequence_number{5}));
 
 	CHECK_THROWS(context.client(0).engine.prune_history(securepath::test::random_octet_vector(16)));
@@ -877,11 +950,7 @@ TEST_CASE("engine sync local prune at segment", "[unit]") {
 	CHECK(context.server.sync.records().find(sequence_number{1}));
 
 	// verification works from the anchor right away...
-	auto fast = context.client(0).engine.verify_history();
-	REQUIRE(fast);
-	CHECK(fast.value().verified_segments == 1);
-	CHECK(fast.value().verified_records == 3);
-	CHECK(fast.value().covered_records == 0);
+	check_fast_verification(context.client(0), 3);
 	// ...and on a reload where the app supplies the persisted anchor
 	auto cfg = context.client(0).engine_config;
 	cfg.trusted_anchor = anchor;
@@ -909,28 +978,14 @@ TEST_CASE("engine sync replica switch", "[unit]") {
 	while(context.handle_events()) {}
 
 	auto oid = create_object_id();
-	context.client(0).engine.sync_object_change(oid, metadata{});                  // A: 2
-	while(context.handle_events()) {}
-	context.client(0).engine.sync_object_change(create_object_id(), metadata{});   // A: 3
-	while(context.handle_events()) {}
+	change_each(context, {oid, create_object_id()});                             // A: 2, A: 3
 	REQUIRE(context.compare_record_storages(sequence_number{3}));
 
-	// replica B: the same records in a different local order, one missing, plus one of
-	// its own (as if replicated s2s while the client was away)
+	// replica B with another client's record committed directly on it
 	test::test_sync_server b(chain_sync_config{sync_mode::require_special_seen}, "test_sync_server_b.db");
 	auto recs = context.server.sync.get_records(sequence_number{1}, sequence_number{3});
 	REQUIRE(recs.size() == 3);
-	REQUIRE(b.sync.commit_foreign(recs[0]));
-	REQUIRE(b.sync.commit_foreign(recs[2]));
-
-	// another client committing directly on B; a real record so the hopping client can
-	// verify it (the block creator makes records without usable encryption)
-	encryption_key const key{sequence_number{1}, to_octet_vector("12345678901234567890123456789012")};
-	data_change_record_creator other(key, chain_block_id{sequence_number{2}, recs[2].hash()},
-		std::nullopt, {}, recs[0].tag());
-	other.add_change(create_object_id(), {}, metadata{});
-	auto extra = chain_block{other.result()};
-	REQUIRE(b.sync.commit_block(extra));
+	auto const extra = fill_replica(b, recs);
 
 	// the client hops from A to B
 	context.disconnect_client(0);

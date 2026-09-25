@@ -16,6 +16,70 @@
 #include <filesystem>
 
 namespace securepath::sync {
+namespace {
+
+/// signed modes stating the limits
+storage_modes modes_with(storage_limits limits) {
+	return storage_modes{sync_mode::allow_all, auth_mode::sign_records, replication_mode::none, limits};
+}
+
+/// the signed assignment is persisted in the server log (plan 3.2)
+void check_logged_envelope(std::string const& root, protocol::storage_id const& sid, crypto::public_key_cache& keys
+	, chain_block const& block) {
+	chain_log log(database::sqlite::create_sqlite_connection(root + "/" + to_hex(sid) + "/storage.db"));
+	auto envs = log.get({}, {}, 10);
+	REQUIRE(envs.size() == 1);
+	CHECK(envs[0].is_signed());
+	CHECK(!envs[0].verify(sid, keys));
+	CHECK(envs[0].block().id() == block.id());
+}
+
+/// the anti-entropy heads: the own live head plus stored foreign origins (plan 3.4)
+void check_heads(storage& s, crypto::public_key_id const& server_id, chain_block const& first, test::test_block_creator& creator) {
+	auto own = origin_head{server_id, 0, first.id()};
+	CHECK(s.heads() == std::vector{own});
+
+	auto const foreign = origin_head{crypto::public_key_id{octet_vector(32, 7)}, 0
+		, chain_block_id{5, securepath::test::random_octet_vector(16)}};
+	CHECK(s.origin_heads().advance(foreign));
+	CHECK(s.heads() == std::vector{own, foreign});
+
+	// the own head follows the log live
+	auto outcome_next = s.commit_block(creator.test_user_change());
+	REQUIRE(outcome_next.block);
+	own.block = outcome_next.block.value().id();
+	CHECK(s.heads() == std::vector{own, foreign});
+}
+
+/// a data descriptor of three chunks with a random manifest
+data_descriptor three_chunk_descriptor() {
+	return data_descriptor{3 * 1024 * 1024 + 48, 1024 * 1024, securepath::test::random_octet_vector(64)};
+}
+
+/// the data of the release test
+struct release_test_data {
+	data_descriptor first;
+	data_descriptor second;
+	data_descriptor shared;
+	data_descriptor late;
+};
+
+/// the chain of the release test: the root user change, records naming first, second and
+/// shared, a segment over them, then shared again and late (sequences 1-7); the segment
+chain_block commit_release_chain(storage& s, release_test_data const& d) {
+	test::test_block_creator creator;
+	REQUIRE(s.commit_block(creator.test_user_change()).block);
+	REQUIRE(s.commit_block(creator.test_data_change_with_data(d.first)).block);
+	REQUIRE(s.commit_block(creator.test_data_change_with_data(d.second)).block);
+	REQUIRE(s.commit_block(creator.test_data_change_with_data(d.shared)).block);
+	auto const segment = creator.test_segment(plain_segment_data{sequence_number{1}, sequence_number{5}, creator.created_tags});
+	REQUIRE(s.commit_block(segment).block);
+	REQUIRE(s.commit_block(creator.test_data_change_with_data(d.shared)).block);
+	REQUIRE(s.commit_block(creator.test_data_change_with_data(d.late)).block);
+	return segment;
+}
+
+}
 
 TEST_CASE("storage modes are persisted and immutable", "[unit]") {
 	std::string const root = "test-storage-root";
@@ -65,23 +129,18 @@ TEST_CASE("storage limits are persisted and immutable", "[unit]") {
 		CHECK(s.modes().limits == storage_limits{16 * 1024, 512 * 1024, default_kept_data_versions});
 	}
 	// stating the persisted limits (or none) is fine, different ones are a mismatch
-	CHECK_NOTHROW(storage(sid, cfg, storage_modes{sync_mode::allow_all, auth_mode::sign_records,
-		replication_mode::none, storage_limits{16 * 1024, 512 * 1024}}));
-	CHECK_THROWS(storage(sid, cfg, storage_modes{sync_mode::allow_all, auth_mode::sign_records,
-		replication_mode::none, storage_limits{32 * 1024, 0}}));
+	CHECK_NOTHROW(storage(sid, cfg, modes_with(storage_limits{16 * 1024, 512 * 1024})));
+	CHECK_THROWS(storage(sid, cfg, modes_with(storage_limits{32 * 1024, 0})));
 
 	// stated limits are kept; out of range ones are refused
 	protocol::storage_id sid2 = securepath::test::random_octet_vector(8);
 	{
-		storage s(sid2, cfg, storage_modes{sync_mode::allow_all, auth_mode::sign_records,
-			replication_mode::none, storage_limits{64 * 1024, 1024 * 1024}});
+		storage s(sid2, cfg, modes_with(storage_limits{64 * 1024, 1024 * 1024}));
 		CHECK(s.modes().limits == storage_limits{64 * 1024, 1024 * 1024, default_kept_data_versions});
 	}
 	protocol::storage_id sid3 = securepath::test::random_octet_vector(8);
-	CHECK_THROWS(storage(sid3, cfg, storage_modes{sync_mode::allow_all, auth_mode::sign_records,
-		replication_mode::none, storage_limits{1024, 0}}));
-	CHECK_THROWS(storage(sid3, cfg, storage_modes{sync_mode::allow_all, auth_mode::sign_records,
-		replication_mode::none, storage_limits{0, 1024}}));
+	CHECK_THROWS(storage(sid3, cfg, modes_with(storage_limits{1024, 0})));
+	CHECK_THROWS(storage(sid3, cfg, modes_with(storage_limits{0, 1024})));
 
 	// the biggest record a storage may allow is the biggest one the codec carries (a
 	// record is one octet string of its block); the defaults are inside the ranges
@@ -91,11 +150,9 @@ TEST_CASE("storage limits are persisted and immutable", "[unit]") {
 	static_assert(valid_storage_limits(storage_limits{default_max_record_size, default_chunk_size}));
 	static_assert(default_max_record_size == 1024 * 1024);
 	static_assert(max_record_size_range.highest == 2 * 1024 * 1024);
-	CHECK_THROWS(storage(sid3, cfg, storage_modes{sync_mode::allow_all, auth_mode::sign_records,
-		replication_mode::none, storage_limits{max_record_size_range.highest + 1, 0}}));
+	CHECK_THROWS(storage(sid3, cfg, modes_with(storage_limits{max_record_size_range.highest + 1, 0})));
 	{
-		storage s(sid3, cfg, storage_modes{sync_mode::allow_all, auth_mode::sign_records,
-			replication_mode::none, storage_limits{max_record_size_range.highest, 0}});
+		storage s(sid3, cfg, modes_with(storage_limits{max_record_size_range.highest, 0}));
 		CHECK(s.modes().limits.max_record_size == max_record_size_range.highest);
 	}
 
@@ -211,31 +268,8 @@ TEST_CASE("storage signs the sequence assignment", "[unit]") {
 	CHECK(outcome.envelope->is_signed());
 	CHECK(outcome.envelope->origin() == server_key.id());
 	CHECK(!outcome.envelope->verify(sid, keys));
-
-	{ // the signed assignment is persisted in the server log (plan 3.2)
-		chain_log log(database::sqlite::create_sqlite_connection(root + "/" + to_hex(sid) + "/storage.db"));
-		auto envs = log.get({}, {}, 10);
-		REQUIRE(envs.size() == 1);
-		CHECK(envs[0].is_signed());
-		CHECK(!envs[0].verify(sid, keys));
-		CHECK(envs[0].block().id() == outcome.block.value().id());
-	}
-
-	{ // the anti-entropy heads: the own live head plus stored foreign origins (plan 3.4)
-		auto own = origin_head{server_key.id(), 0, outcome.block.value().id()};
-		CHECK(s.heads() == std::vector{own});
-
-		auto const foreign = origin_head{crypto::public_key_id{octet_vector(32, 7)}, 0
-			, chain_block_id{5, securepath::test::random_octet_vector(16)}};
-		CHECK(s.origin_heads().advance(foreign));
-		CHECK(s.heads() == std::vector{own, foreign});
-
-		// the own head follows the log live
-		auto outcome_next = s.commit_block(creator.test_user_change());
-		REQUIRE(outcome_next.block);
-		own.block = outcome_next.block.value().id();
-		CHECK(s.heads() == std::vector{own, foreign});
-	}
+	check_logged_envelope(root, sid, keys, outcome.block.value());
+	check_heads(s, server_key.id(), outcome.block.value(), creator);
 
 	// without a signing key there is no envelope (fresh chain, fresh creator)
 	std::filesystem::remove_all(root);
@@ -348,33 +382,15 @@ TEST_CASE("storage releases the data of removed records", "[unit]") {
 		}
 		released.emplace_back(id, ids);
 	});
-
-	auto const descriptor = [] {
-		return data_descriptor{3 * 1024 * 1024 + 48, 1024 * 1024, securepath::test::random_octet_vector(64)};
-	};
-	auto const first = descriptor();
-	auto const second = descriptor();
-	auto const shared = descriptor();
-	auto const late = descriptor();
-
-	test::test_block_creator creator;
-	REQUIRE(s.commit_block(creator.test_user_change()).block);
-	auto const object = creator.test_data_change_with_data(first);
-	REQUIRE(s.commit_block(object).block);
-	REQUIRE(s.commit_block(creator.test_data_change_with_data(second)).block);
-	REQUIRE(s.commit_block(creator.test_data_change_with_data(shared)).block);
-	auto const segment = creator.test_segment(plain_segment_data{sequence_number{1}, sequence_number{5}, creator.created_tags});
-	REQUIRE(s.commit_block(segment).block);
-	auto const after_cut = creator.test_data_change_with_data(shared);
-	REQUIRE(s.commit_block(after_cut).block);
-	REQUIRE(s.commit_block(creator.test_data_change_with_data(late)).block);
+	release_test_data const d{three_chunk_descriptor(), three_chunk_descriptor(), three_chunk_descriptor(), three_chunk_descriptor()};
+	auto const segment = commit_release_chain(s, d);
 
 	// the cut takes the root user change; every object is live, so is every data
 	auto const cut = s.cut_history(segment.tag());
 	CHECK(cut.size() == 1);
 	CHECK(released.empty());
-	for(auto const& d : {first, second, shared, late}) {
-		CHECK(s.committed_data(d.manifest_digest).value() == d);
+	for(auto const& descriptor : {d.first, d.second, d.shared, d.late}) {
+		CHECK(s.committed_data(descriptor.manifest_digest).value() == descriptor);
 	}
 
 	// the rollback takes the last record: its data is named by nobody any more
@@ -382,14 +398,14 @@ TEST_CASE("storage releases the data of removed records", "[unit]") {
 	CHECK(rolled_back.size() == 1);
 	REQUIRE(released.size() == 1);
 	CHECK(released[0].first == sid);
-	CHECK(released[0].second == std::vector<data_id>{late.manifest_digest});
-	CHECK(!s.committed_data(late.manifest_digest));
+	CHECK(released[0].second == std::vector<data_id>{d.late.manifest_digest});
+	CHECK(!s.committed_data(d.late.manifest_digest));
 
 	// the next one names a data that a record below the cut names too: it stays
 	rolled_back = s.truncate_from(sequence_number{6});
 	CHECK(rolled_back.size() == 1);
 	CHECK(released.size() == 1);
-	CHECK(s.committed_data(shared.manifest_digest).value() == shared);
+	CHECK(s.committed_data(d.shared.manifest_digest).value() == d.shared);
 
 	// nothing to release, nothing told
 	CHECK(s.truncate_from(sequence_number{100}).empty());

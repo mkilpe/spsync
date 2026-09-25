@@ -1,11 +1,13 @@
 #pragma once
 
+#include <spsync/transfer/data_downloader.hpp>
 #include <spsync/transfer/data_uploader.hpp>
 #include <spsync/transfer/net_data_channel.hpp>
 #include <spsync/server/server_lib/data_server.hpp>
 #include <spsync/server/server_lib/storage.hpp>
 #include <spsync/server/server_lib/storage_server.hpp>
 #include <spsync/server/server_lib/ticket_issuer.hpp>
+#include <spsync/test/test_ports.hpp>
 #include <spsync/test/test_record_data.hpp>
 
 #include <securepath/crypto/private_data_access.hpp>
@@ -22,10 +24,8 @@ namespace securepath::sync::test {
 /// how an all-in-one server is set up
 struct all_in_one_params {
 	std::string root;
-	std::uint16_t port{};
-	std::uint16_t s2s_port{};
-	/// the data role's port; 0 = whatever is free
-	std::uint16_t data_port{};
+	/// the slot of its listener ports (test_ports.hpp): record, s2s and data
+	int slot{};
 	std::vector<peer_config> peers;
 	/// the data servers of the storages (RD12); none = the record role issues no tickets
 	std::vector<data_endpoint> data_servers;
@@ -47,8 +47,8 @@ struct all_in_one {
 	static storage_server_params record_params(all_in_one_params const& p) {
 		storage_server_params ret;
 		ret.storage_root = p.root;
-		ret.storage_server_endpoint = asio::ip::tcp::endpoint(asio::ip::address_v4::loopback(), p.port);
-		ret.s2s_endpoint = asio::ip::tcp::endpoint(asio::ip::address_v4::loopback(), p.s2s_port);
+		ret.storage_server_endpoint = loopback(server_ports(p.slot).client);
+		ret.s2s_endpoint = loopback(server_ports(p.slot).s2s);
 		ret.peers = p.peers;
 		ret.data_servers = p.data_servers;
 		return ret;
@@ -58,7 +58,7 @@ struct all_in_one {
 		data_server_params ret;
 		ret.enabled = true;
 		ret.storage_root = p.root;
-		ret.data_endpoint = asio::ip::tcp::endpoint(asio::ip::address_v4::loopback(), p.data_port);
+		ret.data_endpoint = loopback(server_ports(p.slot).data);
 		ret.record_servers = p.trusted_record_servers;
 		return ret;
 	}
@@ -124,6 +124,17 @@ inline std::optional<error> upload(record_data_store& store, network::context& c
 	transfer_log log;
 	data_uploader uploader{store, channel, data_upload_config{}, log.done()};
 	REQUIRE(uploader.enqueue(id));
+	WAIT_REQUIRE(log.count == 1, std::chrono::seconds{30});
+	std::unique_lock lock{log.mutex};
+	return log.finished.front().second;
+}
+
+/// download one opened data of the store with the given tickets: how it ended
+inline std::optional<error> download(record_data_store& store, network::context& client_context, ticket_source source, data_id const& id) {
+	net_data_channel channel{client_context, std::move(source)};
+	transfer_log log;
+	data_downloader downloader{store, channel, data_download_config{}, log.done()};
+	REQUIRE(downloader.enqueue(id));
 	WAIT_REQUIRE(log.count == 1, std::chrono::seconds{30});
 	std::unique_lock lock{log.mutex};
 	return log.finished.front().second;

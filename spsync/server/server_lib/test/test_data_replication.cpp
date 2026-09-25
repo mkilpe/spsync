@@ -43,6 +43,16 @@ encrypted_data_result make_data(record_data_store& store) {
 	return test::store_data(store, 700000, chunk_size_range.lowest).result;
 }
 
+/// the slots of this file's servers (test_ports.hpp): the separate cluster's record server
+/// and its two data servers, then the two all-in-one replicas
+int constexpr records_slot = test::replication_test_slots;
+int data_slot(std::size_t i) {
+	return test::replication_test_slots + 1 + static_cast<int>(i);
+}
+int replica_slot(std::size_t index) {
+	return test::replication_test_slots + 3 + static_cast<int>(index);
+}
+
 using test::tickets_of;
 using test::upload;
 using test::holds;
@@ -57,12 +67,12 @@ struct separate_cluster {
 			network::enable_pk_handshake(tctx.client_context(i));
 		}
 		for(std::size_t i = 0; i != 2; ++i) {
-			endpoints.push_back(data_endpoint{"127.0.0.1", static_cast<std::uint16_t>(42802 + i), tctx.key_id(1 + i), {}, {}});
+			endpoints.push_back(data_endpoint{"127.0.0.1", test::server_ports(data_slot(i)).data, tctx.key_id(1 + i), {}, {}});
 		}
 		storage_server_params rparams;
 		rparams.storage_root = "test-replication-records";
-		rparams.storage_server_endpoint = asio::ip::tcp::endpoint(asio::ip::address_v4::loopback(), 42800);
-		rparams.s2s_endpoint = asio::ip::tcp::endpoint(asio::ip::address_v4::loopback(), 42801);
+		rparams.storage_server_endpoint = test::loopback(test::server_ports(records_slot).client);
+		rparams.s2s_endpoint = test::loopback(test::server_ports(records_slot).s2s);
 		rparams.data_servers = endpoints;
 		rparams.data_copies = 2;
 		rparams.replication_interval = 2s;
@@ -80,8 +90,8 @@ struct separate_cluster {
 		data_server_params p;
 		p.enabled = true;
 		p.storage_root = "test-replication-data-" + std::to_string(i);
-		p.data_endpoint = asio::ip::tcp::endpoint(asio::ip::address_v4::loopback(), endpoints[i].port);
-		p.record_servers = {peer_config{"127.0.0.1", 42801, tctx.key_id(0)}};
+		p.data_endpoint = test::loopback(endpoints[i].port);
+		p.record_servers = {test::peer_of(records_slot, tctx.key_id(0))};
 		// what members may move in an hour is next to nothing: copies do not count
 		p.transfer = transfer_quota{1000, 3600s};
 		return std::make_unique<data_server>(tctx.client_context(1 + i), p);
@@ -205,24 +215,33 @@ TEST_CASE("data copies among separate data servers", "[unit]") {
 
 namespace {
 
-/// the ports of an all-in-one replica: its record, s2s and data listeners
-std::uint16_t port(std::size_t index, std::uint16_t what) {
-	return static_cast<std::uint16_t>(42810 + 5 * index + what);
-}
-
 /// an all-in-one replica (RD12): both roles over one context and root, peered with the
 /// other one. The other replica's tickets are good at the data role: it hears of what is
 /// held through the record roles' link, so no link of the data role's own
 test::all_in_one_params replica_params(test::test_context& tctx, std::size_t index, std::vector<data_endpoint> const& data_servers) {
 	test::all_in_one_params p;
 	p.root = "test-replication-replica-" + std::to_string(index);
-	p.port = port(index, 0);
-	p.s2s_port = port(index, 1);
-	p.data_port = port(index, 2);
-	p.peers = {peer_config{"127.0.0.1", port(1 - index, 1), tctx.key_id(1 - index)}};
+	p.slot = replica_slot(index);
+	p.peers = {test::peer_of(replica_slot(1 - index), tctx.key_id(1 - index))};
 	p.data_servers = data_servers;
 	p.trusted_record_servers = {peer_config{"", 0, tctx.key_id(1 - index)}};
 	return p;
+}
+
+/// the same committed chain naming the data on both replicas, as record replication
+/// leaves it: the storage of each
+std::vector<std::shared_ptr<storage>> same_chain_on(std::vector<test::all_in_one*> const& replicas, protocol::storage_id const& sid
+	, data_descriptor const& d) {
+	test::test_block_creator creator;
+	auto const root_block = creator.test_user_change();
+	auto const data_block = creator.test_data_change_with_data(d);
+	std::vector<std::shared_ptr<storage>> ret;
+	for(auto* replica : replicas) {
+		ret.push_back(replica->records.open_storage(sid, storage_modes{sync_mode::allow_all, auth_mode::only_tag}));
+		REQUIRE(ret.back()->commit_block(root_block).block);
+		REQUIRE(ret.back()->commit_block(data_block).block);
+	}
+	return ret;
 }
 
 }
@@ -237,8 +256,8 @@ TEST_CASE("data copies among all in one replicas", "[unit]") {
 	network::enable_pk_handshake(tctx.client_context(0));
 	network::enable_pk_handshake(tctx.client_context(1));
 	std::vector<data_endpoint> const endpoints{
-		data_endpoint{"127.0.0.1", port(0, 2), tctx.key_id(0), {}, {}},
-		data_endpoint{"127.0.0.1", port(1, 2), tctx.key_id(1), {}, {}}};
+		data_endpoint{"127.0.0.1", test::server_ports(replica_slot(0)).data, tctx.key_id(0), {}, {}},
+		data_endpoint{"127.0.0.1", test::server_ports(replica_slot(1)).data, tctx.key_id(1), {}, {}}};
 
 	test::all_in_one a{tctx.client_context(0), replica_params(tctx, 0, endpoints)};
 	test::all_in_one b{tctx.client_context(1), replica_params(tctx, 1, endpoints)};
@@ -252,15 +271,8 @@ TEST_CASE("data copies among all in one replicas", "[unit]") {
 	record_data_store store{database::sqlite::create_sqlite_connection(client_db), client_root};
 	auto const made = make_data(store);
 	auto const& id = made.descriptor.manifest_digest;
-	test::test_block_creator creator;
-	auto const root_block = creator.test_user_change();
-	auto const data_block = creator.test_data_change_with_data(made.descriptor);
-	auto storage_a = a.records.open_storage(sid, storage_modes{sync_mode::allow_all, auth_mode::only_tag});
-	auto storage_b = b.records.open_storage(sid, storage_modes{sync_mode::allow_all, auth_mode::only_tag});
-	for(auto const& storage : {storage_a, storage_b}) {
-		REQUIRE(storage->commit_block(root_block).block);
-		REQUIRE(storage->commit_block(data_block).block);
-	}
+	auto storages = same_chain_on({&a, &b}, sid, made.descriptor);
+	auto& storage_a = storages[0];
 
 	// a client of A uploads: to whichever data role the placement says
 	auto const first_is_a = upload_order(endpoints, id).front().key == tctx.key_id(0);
@@ -279,8 +291,7 @@ TEST_CASE("data copies among all in one replicas", "[unit]") {
 		CHECK(copy->chunks().read_chunk(id, chunk) == store.read_chunk(id, chunk));
 	}
 
-	storage_a.reset();
-	storage_b.reset();
+	storages.clear();
 	b.close();
 	a.close();
 }

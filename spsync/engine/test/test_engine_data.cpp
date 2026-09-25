@@ -81,6 +81,96 @@ struct reader_context : test::engine_context {
 
 using test::read_all;
 
+/// what an author left behind for a reader: the chain with the same content sent twice
+/// (two objects, two data ids), and the first data's manifest and ciphertext chunks
+struct authored_chain {
+	std::deque<chain_block> blocks;
+	data_manifest manifest;
+	std::vector<octet_vector> chunks;
+	data_id id;
+	record_tag sent_tag;
+	record_tag again_tag;
+};
+
+/// the author's side: the test contexts share a database file name, so the reader is
+/// made when the author is done, from what the author left in memory
+authored_chain author_twice(octet_vector const& content) {
+	authored_chain ret;
+	data_context author;
+	author.add_default_commit_response();
+	auto sent = author.engine.sync_object_change(create_object_id(), metadata{}, std::make_shared<memory_record_data>(content));
+	author.io.process_events();
+	REQUIRE(sent->state() == record_state::in_sync);
+	ret.id = author.data_of(sent);
+	ret.sent_tag = sent->tag();
+	ret.manifest = author.data_store.manifest(ret.id).value();
+	for(std::uint64_t no = 0; no != ret.manifest.chunk_digests.size(); ++no) {
+		ret.chunks.push_back(author.data_store.read_chunk(ret.id, no).value());
+	}
+	// the same content once more, as another object
+	author.add_default_commit_response();
+	auto again = author.engine.sync_object_change(create_object_id(), metadata{}, std::make_shared<memory_record_data>(content));
+	author.io.process_events();
+	REQUIRE(again->state() == record_state::in_sync);
+	REQUIRE(author.data_of(again) != ret.id);
+	ret.again_tag = again->tag();
+	for(sequence_number seq{1}; seq <= author.storage.last_block().sequence; ++seq) {
+		auto const h = author.storage.find(seq);
+		auto block = h->record();
+		block.set_sequence_and_parent_hash(h->block_id().sequence, h->parent_block_hash());
+		ret.blocks.push_back(block);
+	}
+	return ret;
+}
+
+/// three versions of the object; the upload of the second one does not get through
+std::vector<record_handle> three_versions(data_context& context, object_id const& oid, std::vector<octet_vector> const& contents) {
+	std::vector<record_handle> versions;
+	for(auto const& content : contents) {
+		context.add_default_commit_response();
+		if(versions.size() != 1) {
+			context.io.add_upload_data_response([](data_id const&) { return std::nullopt; });
+		}
+		versions.push_back(context.engine.sync_object_change(oid, metadata{}, std::make_shared<memory_record_data>(content)));
+		context.io.process_events();
+	}
+	return versions;
+}
+
+/// every version's data is readable, or pruned away with its chunks
+void check_versions_held(data_context& context, std::vector<record_handle> const& versions
+	, std::vector<octet_vector> const& contents, std::vector<bool> const& held) {
+	for(std::size_t i = 0; i != versions.size(); ++i) {
+		auto data = context.engine.object_data(versions[i]);
+		REQUIRE(data);
+		if(held[i]) {
+			CHECK(read_all(*data) == contents[i]);
+		} else {
+			CHECK(data->state() == record_data_state::pruned);
+			CHECK(data->available_size() == 0);
+			CHECK(!std::filesystem::exists(context.data_root / to_hex(context.data_of(versions[i]))));
+		}
+	}
+}
+
+/// the server cut as well: with one kept version it does not want the second any more
+void check_server_pruned(data_context& context, data_id const& second) {
+	context.io.add_upload_data_response([](data_id const&) { return make_error(protocol::errc::data_pruned); });
+	context.engine.on_disconnected({});
+	context.engine.on_connected();
+	context.io.process_events();
+	CHECK(context.data_store.find(second)->state == record_data_state::pruned);
+	CHECK(!std::filesystem::exists(context.data_root / to_hex(second)));
+	WAIT_CHECK(context.observer.failures == 1, 2s);
+	CHECK(context.observer.failed.back() == second);
+	// it is not owed any more
+	auto const requests = context.io.upload_requests().size();
+	context.engine.on_disconnected({});
+	context.engine.on_connected();
+	context.io.process_events();
+	CHECK(context.io.upload_requests().size() == requests);
+}
+
 }
 
 // RD7: the source is streamed into the store, the record commits without waiting for
@@ -306,41 +396,9 @@ TEST_CASE("engine without a data store", "[unit]") {
 // the state tells how it went
 TEST_CASE("engine fetches record data", "[unit]") {
 	auto const content = securepath::test::random_octet_vector(300000);
-
-	// the author's side first: the test contexts share a database file name, so the
-	// reader is made when the author is done, from what the author left in memory
-	std::deque<chain_block> blocks;
-	data_manifest manifest;
-	std::vector<octet_vector> chunks;
-	data_id id;
-	record_tag sent_tag;
-	record_tag again_tag;
-	{
-		data_context author;
-		author.add_default_commit_response();
-		auto sent = author.engine.sync_object_change(create_object_id(), metadata{}, std::make_shared<memory_record_data>(content));
-		author.io.process_events();
-		REQUIRE(sent->state() == record_state::in_sync);
-		id = author.data_of(sent);
-		sent_tag = sent->tag();
-		manifest = author.data_store.manifest(id).value();
-		for(std::uint64_t no = 0; no != manifest.chunk_digests.size(); ++no) {
-			chunks.push_back(author.data_store.read_chunk(id, no).value());
-		}
-		// the same content once more, as another object
-		author.add_default_commit_response();
-		auto again = author.engine.sync_object_change(create_object_id(), metadata{}, std::make_shared<memory_record_data>(content));
-		author.io.process_events();
-		REQUIRE(again->state() == record_state::in_sync);
-		REQUIRE(author.data_of(again) != id);
-		again_tag = again->tag();
-		for(sequence_number seq{1}; seq <= author.storage.last_block().sequence; ++seq) {
-			auto const h = author.storage.find(seq);
-			auto block = h->record();
-			block.set_sequence_and_parent_hash(h->block_id().sequence, h->parent_block_hash());
-			blocks.push_back(block);
-		}
-	}
+	// the author's side first, then the reader from what it left
+	auto const authored = author_twice(content);
+	auto const& [blocks, manifest, chunks, id, sent_tag, again_tag] = authored;
 
 	reader_context reader;
 	for(auto const& block : blocks) {
@@ -584,16 +642,7 @@ TEST_CASE("engine prune and the retention policy", "[unit]") {
 			, storage_limits{default_max_record_size, default_chunk_size, kept}});
 	}
 
-	// three versions; the upload of the second one does not get through
-	std::vector<record_handle> versions;
-	for(auto const& content : contents) {
-		context.add_default_commit_response();
-		if(versions.size() != 1) {
-			context.io.add_upload_data_response([](data_id const&) { return std::nullopt; });
-		}
-		versions.push_back(context.engine.sync_object_change(oid, metadata{}, std::make_shared<memory_record_data>(content)));
-		context.io.process_events();
-	}
+	auto const versions = three_versions(context, oid, contents);
 	auto const id = [&](std::size_t version) { return context.data_of(versions.at(version)); };
 	REQUIRE(context.data_store.find(id(0))->state == record_data_state::in_sync);
 	REQUIRE(context.data_store.find(id(1))->state == record_data_state::upload_pending);
@@ -614,39 +663,13 @@ TEST_CASE("engine prune and the retention policy", "[unit]") {
 	}
 
 	// what is still to be uploaded may be the only copy: the second version is left alone
-	std::vector<bool> const held{kept == 0, true, true};
-	for(std::size_t i = 0; i != versions.size(); ++i) {
-		auto data = context.engine.object_data(versions[i]);
-		REQUIRE(data);
-		if(held[i]) {
-			CHECK(read_all(*data) == contents[i]);
-		} else {
-			CHECK(data->state() == record_data_state::pruned);
-			CHECK(data->available_size() == 0);
-			CHECK(!std::filesystem::exists(context.data_root / to_hex(id(i))));
-		}
-	}
+	check_versions_held(context, versions, contents, {kept == 0, true, true});
 
 	if(kept != 0) {
 		WAIT_CHECK(context.observer.state_changes == changes_before + 1, 2s);
 		CHECK(context.observer.states.back() == std::pair{id(0), record_data_state::pruned});
-
-		// the server cut as well: with one kept version it does not want the second any more
 		if(kept == 1) {
-			context.io.add_upload_data_response([](data_id const&) { return make_error(protocol::errc::data_pruned); });
-			context.engine.on_disconnected({});
-			context.engine.on_connected();
-			context.io.process_events();
-			CHECK(context.data_store.find(id(1))->state == record_data_state::pruned);
-			CHECK(!std::filesystem::exists(context.data_root / to_hex(id(1))));
-			WAIT_CHECK(context.observer.failures == 1, 2s);
-			CHECK(context.observer.failed.back() == id(1));
-			// it is not owed any more
-			auto const requests = context.io.upload_requests().size();
-			context.engine.on_disconnected({});
-			context.engine.on_connected();
-			context.io.process_events();
-			CHECK(context.io.upload_requests().size() == requests);
+			check_server_pruned(context, id(1));
 		}
 	}
 }

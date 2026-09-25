@@ -29,6 +29,50 @@ using test::client_data;
 using test::is_error;
 auto const make_data = [](std::size_t size, std::uint32_t chunk_size = 1000) { return test::make_client_data(size, chunk_size); };
 
+/// no chunk without a manifest, and no upload with a manifest the descriptor does not
+/// commit to: nothing of the data is known afterwards
+void refused_before_upload(server_data_store& store, client_data const& data, time_point now) {
+	auto const& id = data.descriptor.manifest_digest;
+	// no chunk without a manifest
+	CHECK(is_error(test::store_whole_chunk(store, id, 0, data.chunks.at(0), now), protocol::errc::no_such_upload));
+
+	// not the manifest the descriptor commits to
+	auto foreign = data.manifest;
+	foreign.chunk_digests[2] = securepath::test::random_octet_vector(64);
+	CHECK(is_error(store.open_upload(data.descriptor, foreign, now), protocol::errc::invalid_data_manifest));
+	auto short_manifest = data.manifest;
+	short_manifest.chunk_digests.pop_back();
+	CHECK(is_error(store.open_upload(data.descriptor, short_manifest, now), protocol::errc::invalid_data_manifest));
+	CHECK(!store.find(id));
+}
+
+/// junk dies at the edge: a changed chunk, a chunk of another position, a chunk past the end
+void junk_refused(server_data_store& store, client_data const& data, time_point now) {
+	auto const& id = data.descriptor.manifest_digest;
+	auto junk = data.chunks.at(1);
+	junk[7] ^= 0x01;
+	CHECK(is_error(test::store_whole_chunk(store, id, 1, junk, now), protocol::errc::invalid_data_chunk));
+	CHECK(is_error(test::store_whole_chunk(store, id, 1, data.chunks.at(2), now), protocol::errc::invalid_data_chunk));
+	CHECK(is_error(test::store_whole_chunk(store, id, 5, data.chunks.at(0), now), protocol::errc::invalid_data_chunk));
+	CHECK(store.find(id)->have.count() == 0);
+}
+
+/// the connection went: the next manifest is answered with what is held (two of the five
+/// chunks); the same descriptor id with other sizes is not this data
+void resumed_with_what_is_held(server_data_store& store, client_data const& data, time_point now) {
+	auto resumed = store.open_upload(data.descriptor, data.manifest, now);
+	REQUIRE(resumed);
+	CHECK(resumed->count() == 2);
+	CHECK(resumed->test(0));
+	CHECK(resumed->test(3));
+	CHECK(store.used_bytes() == data.descriptor.enc_size);
+
+	// the same descriptor id with other sizes is not this data
+	auto contradicting = data.descriptor;
+	contradicting.chunk_size = 900;
+	CHECK(is_error(store.open_upload(contradicting, data.manifest, now), protocol::errc::invalid_data_manifest));
+}
+
 }
 
 // RD5: manifest first, then chunks checked against it; the reply to the manifest is the resume point
@@ -41,32 +85,14 @@ TEST_CASE("server data store upload and resume", "[unit]") {
 
 	CHECK(!store.find(id));
 	CHECK(store.used_bytes() == 0);
-
-	// no chunk without a manifest
-	CHECK(is_error(test::store_whole_chunk(store, id, 0, data.chunks.at(0), now), protocol::errc::no_such_upload));
-
-	// not the manifest the descriptor commits to
-	auto foreign = data.manifest;
-	foreign.chunk_digests[2] = securepath::test::random_octet_vector(64);
-	CHECK(is_error(store.open_upload(data.descriptor, foreign, now), protocol::errc::invalid_data_manifest));
-	auto short_manifest = data.manifest;
-	short_manifest.chunk_digests.pop_back();
-	CHECK(is_error(store.open_upload(data.descriptor, short_manifest, now), protocol::errc::invalid_data_manifest));
-	CHECK(!store.find(id));
+	refused_before_upload(store, data, now);
 
 	auto have = store.open_upload(data.descriptor, data.manifest, now);
 	REQUIRE(have);
 	CHECK(have->size() == 5);
 	CHECK(have->count() == 0);
 	CHECK(store.used_bytes() == data.descriptor.enc_size);
-
-	// junk dies at the edge: a changed chunk, a chunk of another position, a chunk past the end
-	auto junk = data.chunks.at(1);
-	junk[7] ^= 0x01;
-	CHECK(is_error(test::store_whole_chunk(store, id, 1, junk, now), protocol::errc::invalid_data_chunk));
-	CHECK(is_error(test::store_whole_chunk(store, id, 1, data.chunks.at(2), now), protocol::errc::invalid_data_chunk));
-	CHECK(is_error(test::store_whole_chunk(store, id, 5, data.chunks.at(0), now), protocol::errc::invalid_data_chunk));
-	CHECK(store.find(id)->have.count() == 0);
+	junk_refused(store, data, now);
 
 	auto stored = test::store_whole_chunk(store, id, 3, data.chunks.at(3), now);
 	REQUIRE(stored);
@@ -74,17 +100,7 @@ TEST_CASE("server data store upload and resume", "[unit]") {
 	CHECK(test::store_whole_chunk(store, id, 0, data.chunks.at(0), now));
 
 	// the connection went: the next manifest is answered with what is held
-	auto resumed = store.open_upload(data.descriptor, data.manifest, now);
-	REQUIRE(resumed);
-	CHECK(resumed->count() == 2);
-	CHECK(resumed->test(0));
-	CHECK(resumed->test(3));
-	CHECK(store.used_bytes() == data.descriptor.enc_size);
-
-	// the same descriptor id with other sizes is not this data
-	auto contradicting = data.descriptor;
-	contradicting.chunk_size = 900;
-	CHECK(is_error(store.open_upload(contradicting, data.manifest, now), protocol::errc::invalid_data_manifest));
+	resumed_with_what_is_held(store, data, now);
 
 	for(std::uint64_t no : {1u, 2u, 4u}) {
 		auto res = test::store_whole_chunk(store, id, no, data.chunks.at(no), now);

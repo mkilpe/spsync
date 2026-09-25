@@ -10,6 +10,10 @@
 
 #include <spsync/test/test_block_creator.hpp>
 
+#include <algorithm>
+#include <optional>
+#include <vector>
+
 namespace securepath::sync::test {
 
 std::string const db_name = "record_storage_test.db";
@@ -20,12 +24,29 @@ static void remove_database_test_db() {
 
 using util::content_auth;
 
-TEST_CASE("record_storage", "[unit]") {
+namespace {
+
+/// a new database for a test
+database::connection_ptr fresh_test_db() {
 	remove_database_test_db();
-	auto db_conn = database::sqlite::create_sqlite_connection(db_name);
+	return database::sqlite::create_sqlite_connection(db_name);
+}
 
-	record_storage storage(db_conn);
+/// a storage with its root record in sync, the creator holding the chain state
+struct storage_with_root {
+	storage_with_root() {
+		// first record needs to be user_change
+		storage.create(creator.test_user_change(), record_state::in_sync);
+	}
 
+public:
+	database::connection_ptr db_conn{fresh_test_db()};
+	record_storage storage{db_conn};
+	test_block_creator creator;
+};
+
+/// an empty storage finds nothing
+void check_empty_storage(record_storage& storage) {
 	CHECK(storage.last_block().sequence == sequence_number{});
 	CHECK(storage.last_block(true).sequence == sequence_number{});
 	CHECK(!storage.find_last());
@@ -36,11 +57,10 @@ TEST_CASE("record_storage", "[unit]") {
 	CHECK(!storage.find(sequence_number{}));
 	CHECK(!storage.find(sequence_number{1}));
 	CHECK(storage.highest_sequence_number() == sequence_number{});
+}
 
-	test_block_creator creator;
-	auto root_handle = storage.create(creator.test_user_change().to_auth_record<user_change_record>());
-	REQUIRE(root_handle);
-
+/// the root record just created: pending, found only when pending records count
+void check_pending_root(record_storage& storage, record_handle const& root_handle, test_block_creator const& creator) {
 	// state needs to be in_sync for these to be found
 	CHECK(storage.last_block().sequence == sequence_number{});
 	CHECK(storage.last_block(true).sequence == creator.last_server_seq);
@@ -50,85 +70,141 @@ TEST_CASE("record_storage", "[unit]") {
 	CHECK(!storage.find_first(object_id{}));
 	CHECK(!storage.find(record_tag{}));
 
-	{
-		CHECK(root_handle->type() == user_change_record_tag);
-		CHECK(root_handle->state() == record_state::pending_commit);
-		CHECK(root_handle->parent_block_hash().empty());
-		CHECK(root_handle->block_id().sequence == sequence_number{1});
-		CHECK(root_handle->record().sequence() == sequence_number{1});
-	}
+	CHECK(root_handle->type() == user_change_record_tag);
+	CHECK(root_handle->state() == record_state::pending_commit);
+	CHECK(root_handle->parent_block_hash().empty());
+	CHECK(root_handle->block_id().sequence == sequence_number{1});
+	CHECK(root_handle->record().sequence() == sequence_number{1});
+}
 
-	{ //set state and server sequence
-		root_handle->set_state(record_state::in_sync, chain_block_id{creator.last_server_seq, creator.last_chain_hash}, octet_vector{});
-		CHECK(storage.last_block().sequence == creator.last_server_seq);
-		CHECK(storage.last_block(true).sequence == creator.last_server_seq);
-		CHECK(root_handle->block_id().sequence == creator.last_server_seq);
-		CHECK(root_handle->state() == record_state::in_sync);
-	}
+/// a handle of the root record in sync, however it was found
+void check_root_handle(record_handle const& h, test_block_creator const& creator) {
+	REQUIRE(h);
+	CHECK(h->tag() == creator.last_tag);
+	CHECK(h->parent_block_hash().empty());
+	CHECK(h->block_id().sequence == sequence_number{1});
+	CHECK(h->state() == record_state::in_sync);
+}
 
-	{ // check find_last returns correct data
-		auto h = storage.find_last();
-		REQUIRE(h);
-		CHECK(storage.find_last(true) == h);
-		CHECK(h->tag() == creator.last_tag);
-		CHECK(h->parent_block_hash().empty());
-		CHECK(h->block_id().sequence == sequence_number{1});
-		CHECK(storage.highest_sequence_number() == sequence_number{1});
-		CHECK(h->state() == record_state::in_sync);
-	}
-	{
-		auto h = storage.find(sequence_number{1});
-		REQUIRE(h);
-		CHECK(h->tag() == creator.last_tag);
-		CHECK(h->parent_block_hash().empty());
-		CHECK(h->block_id().sequence == sequence_number{1});
-		CHECK(h->state() == record_state::in_sync);
+/// the root set in sync: found as the last record, by sequence and by tag
+void check_root_in_sync(record_storage& storage, record_handle const& root_handle, test_block_creator const& creator) {
+	//set state and server sequence
+	root_handle->set_state(record_state::in_sync, chain_block_id{creator.last_server_seq, creator.last_chain_hash}, octet_vector{});
+	CHECK(storage.last_block().sequence == creator.last_server_seq);
+	CHECK(storage.last_block(true).sequence == creator.last_server_seq);
+	CHECK(root_handle->block_id().sequence == creator.last_server_seq);
+	CHECK(root_handle->state() == record_state::in_sync);
 
-	}
-	{ // check find returns correct data
-		auto h = storage.find_tag(creator.last_tag);
-		REQUIRE(h);
-		CHECK(h->tag() == creator.last_tag);
-		CHECK(h->parent_block_hash().empty());
-		CHECK(h->block_id().sequence == sequence_number{1});
-		CHECK(h->state() == record_state::in_sync);
-	}
-	{ // check that creating new record has correct data
-		octet_vector parent_block_hash = creator.last_chain_hash;
-		CHECK(storage.create(creator.test_user_change().to_auth_record<user_change_record>()));
-		auto h = storage.find_tag(creator.last_tag);
-		REQUIRE(h);
-		CHECK(h->tag() == creator.last_tag);
-		CHECK(h->parent_block_hash().empty());
-		CHECK(h->block_id().sequence == sequence_number{2});
-		CHECK(h->type() == user_change_record_tag);
-		CHECK(h->state() == record_state::pending_commit);
-		CHECK(!h->record().tag().empty());
+	// check find_last returns correct data
+	auto h = storage.find_last();
+	check_root_handle(h, creator);
+	CHECK(storage.find_last(true) == h);
+	CHECK(storage.highest_sequence_number() == sequence_number{1});
+	check_root_handle(storage.find(sequence_number{1}), creator);
+	// check find returns correct data
+	check_root_handle(storage.find_tag(creator.last_tag), creator);
+}
 
-		h->set_state(record_state::in_sync, chain_block_id{creator.last_server_seq, creator.last_chain_hash}, parent_block_hash);
-		h = storage.find_last();
-		CHECK(h->tag() == creator.last_tag);
-		CHECK(storage.last_block().sequence == creator.last_server_seq);
-		CHECK(h->parent_block_hash() == parent_block_hash);
-	}
-	{ // check find sequence number
-		auto h = storage.find(creator.last_server_seq);
-		CHECK(h->tag() == creator.last_tag);
-	}
-	{ // change state to invalid
-		auto h = storage.find_last();
-		REQUIRE(h);
-		CHECK(h->state() == record_state::in_sync);
-		h->set_state(record_state::invalid);
-		CHECK(h->state() == record_state::invalid);
-		CHECK(!storage.find(creator.last_server_seq));
-		CHECK(storage.highest_sequence_number() == sequence_number{1});
+/// a second record created pending, then set in sync with its parent hash
+void check_second_record(record_storage& storage, test_block_creator& creator) {
+	// check that creating new record has correct data
+	octet_vector parent_block_hash = creator.last_chain_hash;
+	CHECK(storage.create(creator.test_user_change().to_auth_record<user_change_record>()));
+	auto h = storage.find_tag(creator.last_tag);
+	REQUIRE(h);
+	CHECK(h->tag() == creator.last_tag);
+	CHECK(h->parent_block_hash().empty());
+	CHECK(h->block_id().sequence == sequence_number{2});
+	CHECK(h->type() == user_change_record_tag);
+	CHECK(h->state() == record_state::pending_commit);
+	CHECK(!h->record().tag().empty());
 
-		CHECK(storage.find_last() != h);
-		auto ih = storage.find_tag(h->tag());
-		REQUIRE(ih);
-		CHECK(ih->state() == record_state::invalid);
+	h->set_state(record_state::in_sync, chain_block_id{creator.last_server_seq, creator.last_chain_hash}, parent_block_hash);
+	h = storage.find_last();
+	CHECK(h->tag() == creator.last_tag);
+	CHECK(storage.last_block().sequence == creator.last_server_seq);
+	CHECK(h->parent_block_hash() == parent_block_hash);
+
+	// check find sequence number
+	CHECK(storage.find(creator.last_server_seq)->tag() == creator.last_tag);
+}
+
+/// the last record set invalid: off the chain, still found by its tag
+void check_invalidate_last(record_storage& storage, test_block_creator const& creator) {
+	// change state to invalid
+	auto h = storage.find_last();
+	REQUIRE(h);
+	CHECK(h->state() == record_state::in_sync);
+	h->set_state(record_state::invalid);
+	CHECK(h->state() == record_state::invalid);
+	CHECK(!storage.find(creator.last_server_seq));
+	CHECK(storage.highest_sequence_number() == sequence_number{1});
+
+	CHECK(storage.find_last() != h);
+	auto ih = storage.find_tag(h->tag());
+	REQUIRE(ih);
+	CHECK(ih->state() == record_state::invalid);
+}
+
+/// the tag of the first pending commit, none when there is none
+std::optional<record_tag> first_pending_tag(record_storage& storage) {
+	auto h = storage.find_first_pending_commit();
+	return h ? std::optional<record_tag>{h->tag()} : std::nullopt;
+}
+
+/// five records in sync: a user change, an object, its follow-up, another object, a user change
+std::vector<chain_block> create_five_in_sync(record_storage& storage, test_block_creator& creator) {
+	std::vector<chain_block> blocks;
+	blocks.push_back(creator.test_user_change());
+	blocks.push_back(creator.test_data_change());
+	blocks.push_back(creator.test_followup_data_change(blocks.back()));
+	blocks.push_back(creator.test_data_change());
+	blocks.push_back(creator.test_user_change());
+	for(auto const& b : blocks) {
+		REQUIRE(storage.create(b, record_state::in_sync));
 	}
+	return blocks;
+}
+
+/// the object chains below a cut and the ranges of the five record chain
+void check_chains_below_cut(record_storage& storage, std::vector<chain_block> const& blocks) {
+	auto contains = [](auto const& tags, record_tag const& t) {
+		return std::ranges::find(tags, t) != tags.end();
+	};
+	{ // the object chains below the cut: first object {b3, b2}, second {b4}
+		auto tags = storage.object_chain_tags_below(sequence_number{5});
+		CHECK(tags.size() == 3);
+		CHECK(contains(tags, blocks[1].tag()));
+		CHECK(contains(tags, blocks[2].tag()));
+		CHECK(contains(tags, blocks[3].tag()));
+		CHECK(!contains(tags, blocks[0].tag()));
+	}
+	{ // a record at or past the cut is not part of the retained set
+		auto tags = storage.object_chain_tags_below(sequence_number{4});
+		CHECK(tags.size() == 2);
+		CHECK(!contains(tags, blocks[3].tag()));
+	}
+	{ // find_range respects the range and the cap
+		CHECK(storage.find_range(sequence_number{1}, sequence_number{5}).size() == 5);
+		CHECK(storage.find_range(sequence_number{1}, sequence_number{5}, record_state::in_sync, 2).size() == 2);
+		CHECK(storage.find_range(sequence_number{6}, sequence_number{9}).empty());
+	}
+}
+
+}
+
+TEST_CASE("record_storage", "[unit]") {
+	auto db_conn = fresh_test_db();
+	record_storage storage(db_conn);
+	check_empty_storage(storage);
+
+	test_block_creator creator;
+	auto root_handle = storage.create(creator.test_user_change().to_auth_record<user_change_record>());
+	REQUIRE(root_handle);
+	check_pending_root(storage, root_handle, creator);
+	check_root_in_sync(storage, root_handle, creator);
+	check_second_record(storage, creator);
+	check_invalidate_last(storage, creator);
 }
 
 
@@ -316,16 +392,10 @@ TEST_CASE("record_storage long_chain data change", "[unit]") {
 
 TEST_CASE("record_storage pending commits", "[unit]") {
 	//find_first_pending_commit
-	remove_database_test_db();
-	auto db_conn = database::sqlite::create_sqlite_connection(db_name);
-
-	record_storage storage(db_conn);
-	test_block_creator creator;
-
-	// first record needs to be user_change
-	storage.create(creator.test_user_change(), record_state::in_sync);
+	storage_with_root s;
+	auto& storage = s.storage;
+	auto& creator = s.creator;
 	auto const initial_hash = creator.last_chain_hash;
-
 	auto const initial_seq = creator.last_server_seq;
 
 	CHECK(!storage.find_first_pending_commit());
@@ -336,8 +406,7 @@ TEST_CASE("record_storage pending commits", "[unit]") {
 	auto const tag_of_first_pending = first_pending->tag();
 
 	//see we find the pending commit
-	CHECK(storage.find_first_pending_commit());
-	CHECK(storage.find_first_pending_commit()->tag() == tag_of_first_pending);
+	CHECK(first_pending_tag(storage) == tag_of_first_pending);
 	CHECK(storage.last_block().sequence == initial_seq);
 	CHECK(storage.last_block(true).sequence == creator.last_server_seq);
 
@@ -360,14 +429,12 @@ TEST_CASE("record_storage pending commits", "[unit]") {
 	CHECK_NOTHROW(storage.create(record, record_state::in_sync));
 
 	//still get the first pending
-	CHECK(storage.find_first_pending_commit());
-	CHECK(storage.find_first_pending_commit()->tag() == tag_of_first_pending);
+	CHECK(first_pending_tag(storage) == tag_of_first_pending);
 
 	CHECK_NOTHROW(first_pending->set_state(record_state::in_sync, chain_block_id{3, first_pending->block_id().hash}, creator.last_chain_hash));
 
 	//get the second pending
-	CHECK(storage.find_first_pending_commit());
-	CHECK(storage.find_first_pending_commit()->tag() == tag_of_second_pending);
+	CHECK(first_pending_tag(storage) == tag_of_second_pending);
 }
 
 
@@ -583,44 +650,16 @@ TEST_CASE("record_storage truncate_from demotes acked", "[unit]") {
 }
 
 TEST_CASE("record_storage truncate_prefix and object chains", "[unit]") {
-	remove_database_test_db();
-	auto db_conn = database::sqlite::create_sqlite_connection(db_name);
+	auto db_conn = fresh_test_db();
 	record_storage storage(db_conn);
 
 	test_block_creator creator;
-	auto b1 = creator.test_user_change();
-	REQUIRE(storage.create(b1, record_state::in_sync));
-	auto b2 = creator.test_data_change();
-	REQUIRE(storage.create(b2, record_state::in_sync));
-	auto b3 = creator.test_followup_data_change(b2);
-	REQUIRE(storage.create(b3, record_state::in_sync));
-	auto b4 = creator.test_data_change();
-	REQUIRE(storage.create(b4, record_state::in_sync));
-	auto b5 = creator.test_user_change();
-	REQUIRE(storage.create(b5, record_state::in_sync));
-
-	auto contains = [](auto const& tags, record_tag const& t) {
-		return std::ranges::find(tags, t) != tags.end();
-	};
-
-	{ // the object chains below the cut: first object {b3, b2}, second {b4}
-		auto tags = storage.object_chain_tags_below(sequence_number{5});
-		CHECK(tags.size() == 3);
-		CHECK(contains(tags, b2.tag()));
-		CHECK(contains(tags, b3.tag()));
-		CHECK(contains(tags, b4.tag()));
-		CHECK(!contains(tags, b1.tag()));
-	}
-	{ // a record at or past the cut is not part of the retained set
-		auto tags = storage.object_chain_tags_below(sequence_number{4});
-		CHECK(tags.size() == 2);
-		CHECK(!contains(tags, b4.tag()));
-	}
-	{ // find_range respects the range and the cap
-		CHECK(storage.find_range(sequence_number{1}, sequence_number{5}).size() == 5);
-		CHECK(storage.find_range(sequence_number{1}, sequence_number{5}, record_state::in_sync, 2).size() == 2);
-		CHECK(storage.find_range(sequence_number{6}, sequence_number{9}).empty());
-	}
+	auto const blocks = create_five_in_sync(storage, creator);
+	auto const& b1 = blocks[0];
+	auto const& b2 = blocks[1];
+	auto const& b3 = blocks[2];
+	auto const& b4 = blocks[3];
+	check_chains_below_cut(storage, blocks);
 
 	auto held = storage.find(sequence_number{1});
 	REQUIRE(held);

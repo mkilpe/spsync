@@ -14,6 +14,9 @@
 
 #include <infrastructure/key_server/server_lib/key_server.hpp>
 
+#include <chrono>
+#include <vector>
+
 namespace securepath::sync::client::test {
 
 namespace {
@@ -90,96 +93,92 @@ struct query_test_client : event_system::event_handler {
 	std::deque<result> results;
 	async_key_query query_client;
 };
+
+/// the queries in order; every one answered as expected, with the key the cache holds
+void check_queries(query_test_client& c, std::vector<user> const& queries, bool has_error
+	, crypto::public_key_access const& keys, std::chrono::seconds wait) {
+	c.clear();
+	for(auto const& u : queries) {
+		c.query(u);
+	}
+	WAIT_REQUIRE(c.results_size() == queries.size(), wait);
+	for(std::size_t i = 0; i != queries.size(); ++i) {
+		CHECK(c.check(i, has_error, queries[i].id().public_key_id(), keys));
+	}
 }
 
-TEST_CASE("async key query test", "[unit]") {
+/// the context with its clients and their keys known to the server
+sync::test::test_context& with_clients(sync::test::test_context& ctx, int count) {
+	ctx.add_client(count);
+	ctx.add_client_keys_for_server();
+	return ctx;
+}
+
+/// a test server with its key server and a second key server on another port, both
+/// running; the key cache holds both servers' public keys
+struct two_key_servers {
+	two_key_servers()
+	: server(with_clients(net_context, 4).server_context())
+	, secondary_key_server(with_clients(secondary_net_context, 2).server_context()
+		, key_server::server_params{.port=key_server::default_key_server_port+10})
+	{
+		server.run();
+		secondary_key_server.run();
+		keys.add_backend(std::shared_ptr<crypto::public_key_access>(&net_context.server_context().public_keys(), [](auto){}));
+		keys.add_backend(std::shared_ptr<crypto::public_key_access>(&secondary_net_context.server_context().public_keys(), [](auto){}));
+	}
+
+	/// the user of the primary context's key at the primary key server
+	user primary(std::size_t i) const {
+		return user{net_context.key_id(i), local};
+	}
+
+	/// the user of the secondary context's key at the secondary key server
+	user secondary(std::size_t i) const {
+		return user{secondary_net_context.key_id(i), slocal};
+	}
+
+public:
 	event_system::single_thread_event_loop single_thread_event_loop;
 	sync::test::test_context net_context;
-	sync::test::test_context secondary_net_context(net_context.root_key());
-
-	net_context.add_client(4);
-	net_context.add_client_keys_for_server();
-
-	secondary_net_context.add_client(2);
-	secondary_net_context.add_client_keys_for_server();
-
-	sync::test::test_server server(net_context.server_context());
-	server.run();
-
-	key_server::server secondary_key_server(
-		secondary_net_context.server_context(),
-		key_server::server_params{.port=key_server::default_key_server_port+10});
-
-	secondary_key_server.run();
-
-	std::this_thread::sleep_for(1s);
-
+	sync::test::test_context secondary_net_context{net_context.root_key()};
+	sync::test::test_server server;
+	key_server::server secondary_key_server;
 	host_port local{"127.0.0.1", sync::default_key_server_port};
 	host_port bad_local{"127.0.0.1", sync::default_key_server_port+1};
 	host_port slocal{"127.0.0.1", sync::default_key_server_port+10};
+	crypto::public_key_cache keys;
+};
+}
+
+TEST_CASE("async key query test", "[unit]") {
+	two_key_servers f;
 	auto temp_key = crypto::generate_private_key();
 	crypto::public_key_id non_existent_id = temp_key.id();
+	query_test_client c(f.net_context.client_context(0), f.single_thread_event_loop);
 
-	// make key cache that contains both server's public keys
-	crypto::public_key_cache keys;
-	keys.add_backend(std::shared_ptr<crypto::public_key_access>(&net_context.server_context().public_keys(), [](auto){}));
-	keys.add_backend(std::shared_ptr<crypto::public_key_access>(&secondary_net_context.server_context().public_keys(), [](auto){}));
+	check_queries(c, {f.primary(0)}, false, f.keys, 2s);
 
-	query_test_client c(net_context.client_context(0), single_thread_event_loop);
+	std::vector<user> four;
+	for(int i = 0; i != 4; ++i) {
+		four.push_back(f.primary(i));
+	}
+	check_queries(c, four, false, f.keys, 4s);
 
-	{
-		c.query(user{net_context.key_id(0), local});
-		WAIT_REQUIRE(c.results_size() == 1, 2s);
-		CHECK(c.check(0, false, net_context.key_id(0), keys));
+	check_queries(c, {user{non_existent_id, f.local}}, false, f.keys, 2s);
+	check_queries(c, {user{f.net_context.key_id(0), f.bad_local}}, true, f.keys, 2s);
+
+	std::vector<user> hundred;
+	for(int i = 0; i != 100; ++i) {
+		hundred.push_back(f.primary(i%4));
 	}
-	{
-		c.clear();
-		for(int i = 0; i != 4; ++i) {
-			c.query(user{net_context.key_id(i), local});
-		}
-		WAIT_REQUIRE(c.results_size() == 4, 4s);
-		for(int i = 0; i != 4; ++i) {
-			CHECK(c.check(i, false, net_context.key_id(i), keys));
-		}
-	}
-	{
-		c.clear();
-		c.query(user{non_existent_id, local});
-		WAIT_REQUIRE(c.results_size() == 1, 2s);
-		CHECK(c.check(0, false, non_existent_id, keys));
-	}
-	{
-		c.clear();
-		c.query(user{net_context.key_id(0), bad_local});
-		WAIT_REQUIRE(c.results_size() == 1, 2s);
-		CHECK(c.check(0, true, net_context.key_id(0), keys));
-	}
-	{
-		c.clear();
-		for(int i = 0; i != 100; ++i) {
-			c.query(user{net_context.key_id(i%4), local});
-		}
-		WAIT_REQUIRE(c.results_size() == 100, 20s);
-		for(int i = 0; i != 100; ++i) {
-			CHECK(c.check(i, false, net_context.key_id(i%4), keys));
-		}
-	}
-	{
-		c.clear();
-		c.query(user{net_context.key_id(0), local});
-		c.query(user{secondary_net_context.key_id(0), slocal});
-		c.query(user{net_context.key_id(1), local});
-		c.query(user{secondary_net_context.key_id(1), slocal});
-		WAIT_REQUIRE(c.results_size() == 4, 6s);
-		CHECK(c.check(0, false, net_context.key_id(0), keys));
-		CHECK(c.check(1, false, secondary_net_context.key_id(0), keys));
-		CHECK(c.check(2, false, net_context.key_id(1), keys));
-		CHECK(c.check(3, false, secondary_net_context.key_id(1), keys));
-	}
+	check_queries(c, hundred, false, f.keys, 20s);
+
+	check_queries(c, {f.primary(0), f.secondary(0), f.primary(1), f.secondary(1)}, false, f.keys, 6s);
 
 	// let it destruct while having queries in progress
 	for(int i = 0; i != 100; ++i) {
-		c.query(user{net_context.key_id(i%4), local});
+		c.query(f.primary(i%4));
 	}
 }
 

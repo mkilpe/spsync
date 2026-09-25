@@ -22,12 +22,16 @@
 * provide side channel for storages groups to send non-stored packets to each others (eg. "writing a message" in gc)
 
 = tests
-* every fixed test port (42750-42830) lies inside Linux's ephemeral range (32768-60999): an
++ every fixed test port (42750-42830) lay inside Linux's ephemeral range (32768-60999): an
   outgoing connection of ANY process can sit on one and the test that binds it fails with
   "bind: Address already in use" (seen 2026-09-21: another process held 42780 for many
   minutes, "s2s replica creates the storage on first contact" failed every run and took
-  "s2s bootstrap a new replica" with it). Move the test ports below 32768 or reserve them
-  (net.ipv4.ip_local_reserved_ports); a test that throws in start() should not disturb the next
+  "s2s bootstrap a new replica" with it). Fixed 2026-09-25: the test servers take slots of
+  spsync/test/test_ports.hpp (25700 and up, below the range), a lone data role binds port 0;
+  the product defaults (18188-18203) were below the range all along; a held test port now
+  fails that one test only (tried 2026-09-25 with slot 8's client port held: 9 of 10 pass)
+* test_server (spsync/test/test_server_runner.hpp) listens when run() returns since
+  2026-09-25 (spsync_server::run starts the roles synchronously): no sleep after it
 
 = server
 * commit throughput is sqlite-fsync bound (~85 signed commits/s per storage, measured
@@ -71,7 +75,8 @@
   D1-D7 and test helpers T1 fixed 2026-09-22, robustness O1-O9 fixed 2026-09-23 (liveness
   on the data links and ticket requests, retry vs reset, detach, staged pieces and sessions
   capped, one digest per chunk, idle transfers trimmed, rounds on the io context), dead code
-  C1/C2/C4/C5 fixed 2026-09-24; open: long test cases and fixed sleeps T2/T3
+  C1/C2/C4/C5 fixed 2026-09-24, tests T2-T4 (long test cases, fixed sleeps, ports)
+  2026-09-25; nothing open
 * architecture review 2026-09-24 (doc/review_2026-09-24_architecture.txt): R1 done (the
   transfer machinery is spsync/transfer, server_lib no longer links comm, comm no longer
   links transfer: they meet in core/data/data_transfers.hpp, the client wires

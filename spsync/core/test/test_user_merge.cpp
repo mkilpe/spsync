@@ -47,7 +47,7 @@ TEST_CASE("user merge fold", "[unit]") {
 		{tag_of(4), tag_of(1)},
 	};
 
-	{ // linear history: add then remove -> gone; remove then a re-add that saw it -> member
+	SECTION("linear history: add then remove -> gone; remove then a re-add that saw it -> member") {
 		std::vector<user_change_entry> entries{
 			{delta_add(x), tag_of(2), tag_of(1)},
 			{delta_remove(x), tag_of(3), tag_of(2)},
@@ -59,7 +59,7 @@ TEST_CASE("user merge fold", "[unit]") {
 		with_readd[tag_of(4)] = tag_of(3);
 		CHECK(has_member(merge_user_changes(entries, with_readd), x));
 	}
-	{ // concurrent branches: add on one, remove on the other -> removed, in EITHER local order
+	SECTION("concurrent branches: add on one, remove on the other -> removed, in EITHER local order") {
 		std::vector<user_change_entry> add_first{
 			{delta_add(x), tag_of(2), tag_of(1)},     // branch 1
 			{delta_remove(x), tag_of(4), tag_of(1)},  // concurrent branch 2
@@ -68,7 +68,7 @@ TEST_CASE("user merge fold", "[unit]") {
 		CHECK(!has_member(merge_user_changes(add_first, parents), x));
 		CHECK(!has_member(merge_user_changes(remove_first, parents), x));
 	}
-	{ // concurrent adds: the smallest tag wins deterministically, access is not unioned
+	SECTION("concurrent adds: the smallest tag wins deterministically, access is not unioned") {
 		std::vector<user_change_entry> one{
 			{delta_add(x, util::access_type::data_read_access), tag_of(2), tag_of(1)},
 			{delta_add(x, util::access_type::all_access), tag_of(4), tag_of(1)},
@@ -81,7 +81,7 @@ TEST_CASE("user merge fold", "[unit]") {
 		CHECK(m1[0].access == util::access_type::data_read_access);
 		CHECK(m2[0].access == util::access_type::data_read_access);
 	}
-	{ // a causally newer update supersedes an older one regardless of local order
+	SECTION("a causally newer update supersedes an older one regardless of local order") {
 		std::vector<user_change_entry> entries{
 			{delta_add(x, util::access_type::all_access), tag_of(3), tag_of(2)},
 			{delta_add(x, util::access_type::data_read_access), tag_of(2), tag_of(1)},
@@ -90,7 +90,7 @@ TEST_CASE("user merge fold", "[unit]") {
 		REQUIRE(m.size() == 1);
 		CHECK(m[0].access == util::access_type::all_access);
 	}
-	{ // legacy full mode resets the fold
+	SECTION("legacy full mode resets the fold") {
 		auto const y = uid(0x22);
 		users full{users_change_mode::full};
 		full.add(util::user_access{y, util::access_type::data_access});
