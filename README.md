@@ -27,7 +27,11 @@ servers, and the test frame.
 | `groupchat/json_protocol` | the JSON command and notification API app front ends use (the mobile builds link `gc_lib`), documented in [groupchat/json_protocol/doc](groupchat/json_protocol/doc) | `groupchat/core`, Boost.JSON |
 | `groupchat/cli_client` | `gc_cli`, an ncurses chat client | `groupchat/core`, securepath `console` |
 
-The design lives in [doc/](doc/) as plain text plans with progress markers:
+[doc/architecture.adoc](doc/architecture.adoc) is the overview with diagrams: the
+pieces and how they talk, the chain of records, the code layout, the client's sync
+engine, record data, the server and its replication, security, and groupchat on
+top (render it with `asciidoctor -r asciidoctor-diagram`). The design lives in
+[doc/](doc/) as plain text plans with progress markers:
 [distributed_sync.txt](doc/distributed_sync.txt) (the multi-server work: weak
 multi-master replication done, strict mode with an own minimal Raft designed),
 [record_data.txt](doc/record_data.txt) (out-of-band record data, data servers),

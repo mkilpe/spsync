@@ -1,0 +1,443 @@
+= SPSync architecture
+:toc: left
+:toclevels: 2
+:icons: font
+:source-highlighter: rouge
+
+// Render with the diagrams:  asciidoctor -r asciidoctor-diagram doc/architecture.adoc
+// (asciidoctor-pdf works the same way). The detailed plans this overview points to are
+// the plain text files next to it; this document is the map, they are the territory.
+
+== What the system is
+
+spsync keeps data in sync between the devices of a group of people through servers
+that cannot read it. Every *storage* is an append-only chain of *records*. The members
+write records, sign them and encrypt their content; the servers assign the order, store
+the chain and replicate it; other members read the chain and rebuild the objects. The
+bytes of a file travel next to the chain, in encrypted chunks, from and to the server's
+data role. groupchat is the reference application: a chat is a storage, a message or a
+shared file is a record.
+
+Three ideas carry everything:
+
+* *Content-blind servers.* A record's content is encrypted with the storage key and
+  authenticated by the member's signature. A server orders and stores records it cannot
+  read or forge. What a server could do is show a member a different history; the
+  design closes that with hash-chained records, members' back references, signed
+  server assignments, equivocation evidence and the joiner's trusted anchor.
+* *Everything is a record.* Object changes, membership and key changes, segment marks:
+  one chain, one set of rules, one replication path.
+* *The client owns its data.* A client keeps its own copy of the chain in sqlite and can
+  read, write and reconcile offline; the server is where the copies meet.
+
+== The pieces and how they talk
+
+[plantuml, system-overview, svg]
+....
+@startuml
+skinparam componentStyle rectangle
+skinparam shadowing false
+
+node "member device" as dev {
+  component "groupchat app\n(cli, Android front end)" as app
+  component "spsync client\nengine + record storage (sqlite)\nchunk store" as client
+  app --> client
+}
+
+node "home server" as home {
+  component "key server" as ks
+  component "packet server" as ps
+  component "storage server\n(record role)" as ss
+  component "data server\n(data role)" as ds
+}
+
+node "replica" as rep {
+  component "storage server" as ss2
+  component "data server" as ds2
+}
+
+client --> ks : register / look up\nmember keys
+client --> ps : contact requests,\nchat invitations
+client --> ss : storage session:\ncommit, fetch, notify
+client --> ds : chunks, with a\nticket from the record role
+ss <--> ss2 : server-to-server:\nheads, pulls, pushes
+ss <--> ds : tickets, what is held
+ds <--> ds2 : copies of data
+ss2 <--> ds2
+@enduml
+....
+
+The transport under every arrow is securepath's TLS 1.3 with a hybrid post-quantum key
+exchange and ML-DSA authentication of both ends, so a server knows which member key
+it talks to and a client knows which server. The servers are three roles that one
+process can carry (the all-in-one server) or separate processes:
+
+[cols="1,3"]
+|===
+| key server | members register their public keys here and look up each other's
+| packet server | a store-and-forward relay for the packets between members that do not go through a storage: contact requests, chat invitations
+| storage server, record role | the chains: assigns sequence numbers, checks the rules of the storage's mode, stores the records, serves fetches, notifies, replicates with its peers
+| data server, data role | the bytes of records' data: takes uploads and serves downloads in chunks, admitted by tickets the record role signs; copies data among data servers
+|===
+
+== A storage is a chain of records
+
+[ditaa, storage-chain, svg]
+....
+   storage (one sqlite database per storage, on every server and every client)
+
+   +-----------------+    +-----------------+    +-----------------+    +-----------------+
+   | seq 1           |    | seq 2           |    | seq 3           |    | seq 4           |
+   | user change     |<---| data change     |<---| data change     |<---| segment         |
+   | members + keys  |    | object A        |    | object B + data |    | covers 1..3     |
+   | tag, signature  |    | tag, signature  |    | tag, signature  |    | tag, signature  |
+   +-----------------+    +-----------------+    +-----------------+    +-----------------+
+         parent hash links the chain; the server envelope signs (origin, sequence, hash)
+                                                        |
+                                                        | descriptor - data id, size, chunks
+                                                        v
+                                             +---------------------------+
+                                             | data - encrypted chunks   |
+                                             | on the data servers and   |
+                                             | in the readers' stores    |
+                                             +---------------------------+
+....
+
+A *record* has an authenticated part, which a member signs: the changes it carries,
+an encrypted header with the application's metadata, the *tag* that names the record,
+an operation id that makes a retry the same operation, and what the author had seen
+when writing it (the last block, the last membership change). The server wraps the
+record in a *block* with the sequence number and the parent hash, and signs that
+assignment in an *envelope* naming itself as the origin. Three record kinds:
+
+[cols="1,3"]
+|===
+| data change | changes to one or more objects: the new metadata, and for a file-like object the descriptor of its out-of-band data
+| user change | who is a member with what access, and the storage key wrapped for every member (a hybrid ML-KEM envelope each); a removal rotates the key
+| segment | marks a range of the chain as sealed: the tags it covers. Verification can start from a segment, and the history before it can be cut on the server and pruned on a client
+|===
+
+*Modes* are fixed when the storage is created and every client states them when it
+connects: how strictly records must chain (`require_all_seen` for a strict linear
+history, the weaker `require_special_seen` and `allow_all` for many writers),
+whether records are signed, and whether the storage is replicated between servers.
+Limits ride with them: the record size, the chunk size, how many data versions a
+history cut keeps.
+
+== The code
+
+[plantuml, libraries, svg]
+....
+@startuml
+skinparam componentStyle rectangle
+skinparam shadowing false
+left to right direction
+
+package "securepath (submodule)" {
+  [crypto\nML-DSA, ML-KEM, AES-GCM, key stores] as crypto
+  [network\nTLS transport, encrypted connections] as network
+  [database, serialisation,\nevent system, util] as base
+}
+
+package "spsync" {
+  [util] as util
+  [core\nrecords, record storage,\nkeys, record data, merge] as core
+  [protocol\nclient, server-to-server\nand data packets] as protocol
+  [engine\nclient sync engine] as engine
+  [transfer\nuploader, downloader,\ndata channels] as transfer
+  [comm\nclient's record connection] as comm
+  [client\nclient_sync, contacts,\ninvitations] as client
+  [server\nspsync_server: record role,\nreplication, data role] as server
+}
+
+package "groupchat" {
+  [core\nchats, messages, files] as gc
+  [json_protocol\nJSON API for front ends] as json
+  [cli_client] as cli
+  [android\nJNI adapter] as android
+}
+
+util --> base
+core --> util
+core --> crypto
+protocol --> core
+protocol --> network
+engine --> core
+transfer --> protocol
+comm --> protocol
+client --> engine
+client --> transfer
+client --> comm
+server --> transfer
+server --> protocol
+gc --> client
+json --> gc
+cli --> gc
+android --> json
+@enduml
+....
+
+`core` is the language everyone speaks: records and blocks, the sqlite record storage,
+encryption keys, the membership merge, the record data descriptors and chunk store. It
+knows neither the wire nor the network. `protocol` is the wire. `engine` is the client's
+brain and sees the network only through an interface that `comm` implements over the
+real connection and the tests implement in memory. `transfer` is the file transfer
+machinery both the client and the servers' replicator use. `server` is the daemon.
+groupchat sits on `client` and adds nothing to the protocol: a chat is a storage.
+
+== The client: the sync engine
+
+[plantuml, client-session, svg]
+....
+@startuml
+skinparam shadowing false
+participant "application" as app
+participant "sync engine" as eng
+participant "record storage\n(sqlite)" as db
+participant "storage server" as srv
+
+app -> eng : sync_object_change(object, metadata)
+eng -> db : record pending_commit
+eng -> srv : request_commit(record, last seen block)
+alt the chain moved meanwhile
+  srv --> eng : response_commit: out of sync
+  eng -> srv : request_records(from my head)
+  srv --> eng : response_records
+  eng -> db : apply, rebase the pending record\non the new head (conflict policy)
+  eng -> srv : request_commit again
+end
+srv --> eng : response_commit: sequence, envelope
+eng -> db : in_sync (acked first with strict replication)
+srv -> eng : notify_record (other members' records)
+eng -> db : verify, apply
+eng -> app : on_object_data_changed / on_user_changed
+....
+
+The engine keeps every record it knows in its local chain and moves each through a few
+states:
+
+[plantuml, record-states, svg]
+....
+@startuml
+skinparam shadowing false
+[*] --> pending_commit : written locally
+pending_commit --> in_sync : the server confirmed the sequence
+pending_commit --> pending_commit : out of sync: rebased, retried
+pending_commit --> invalid : refused for good (too big, invalid)
+[*] --> pending_sync : received, a gap before it
+pending_sync --> in_sync : the gap closed, the chain verifies
+[*] --> in_sync : received in order, verified
+in_sync --> [*]
+note right of in_sync
+  acked sits between pending_commit and
+  in_sync when a replica set has to agree
+  first (strict replication, phase 6)
+end note
+@enduml
+....
+
+What the engine checks on every incoming record: the member's signature and the
+record's tag, the parent hash and sequence against its chain (in the strict mode
+exactly, in the weak modes a record is accepted on its own authenticity and the
+sequence is a cursor), and the author's back references against what it holds: a
+record that refers to a block the engine holds under another hash is a *fork
+suspicion*, which stops commits in the strict mode. A joiner is told the storage's first
+block in its invitation and takes nothing into its chain before that *trusted
+anchor* arrives; a record served at the anchor's sequence under another hash is the
+server showing another history. After a segment a client may prune the history below
+it and keep the segment as its anchor instead.
+
+Conflicts are the application's, not the engine's: when an object changed under a
+pending record the engine either rebases the record on top and tells the application,
+or cancels it and asks, by the configured policy. Membership is folded from all user
+change records deterministically, so replicas and clients agree on who is a member
+whatever order the records arrived in.
+
+== Record data: files
+
+A file does not go into the chain. The record carries a *descriptor*: the data id (a
+digest of the manifest), the size and the chunking; the encrypted header carries the
+plain size and the content digest for members. The bytes are cut into chunks, each
+encrypted under a key derived for that data, and every chunk's digest sits in the
+*manifest* the data id names, so a reader verifies each chunk on its own and the whole
+by the manifest.
+
+[plantuml, file-transfer, svg]
+....
+@startuml
+skinparam shadowing false
+participant "author" as a
+participant "record role" as rr
+participant "data role" as dr
+participant "reader" as r
+
+a -> a : chunk and encrypt the file,\nstore the chunks
+a -> rr : request_commit (record with descriptor)
+rr --> a : committed
+a -> rr : request_data_ticket (upload)
+rr --> a : ticket signed by the record role,\nthe holders to use
+a -> dr : data_hello, upload_data_manifest (ticket)
+a -> dr : upload_data_chunk ... (in pieces)
+dr -> rr : holds the data now
+rr -> r : notify_record, later notify_data
+r -> r : the data is deferred\nuntil asked for
+r -> rr : request_data_ticket (download)
+rr --> r : ticket, holders
+r -> dr : download_data_open, download_data_piece ...
+r -> r : verify chunks, in_sync
+....
+
+The client's data states say what it holds: `deferred` (known, not asked for),
+`download_pending` and `upload_pending` while a transfer is on its way, `in_sync`,
+`remote_not_complete` when the author has not finished, `removed` when the local copy
+was let go, `pruned` when the storage's retention let the data go at a history cut. A
+transfer resumes after a lost connection from what arrived; nothing is fetched unasked
+unless the application sets a size threshold. Data servers hold as many copies as the
+storage's copy count asks for and balance placement by load; a server's data quota
+bounds a share.
+
+== The server
+
+[plantuml, server-internals, svg]
+....
+@startuml
+skinparam componentStyle rectangle
+skinparam shadowing false
+
+package "spsync_server process" {
+  [key server] as ks
+  package "storage server (record role)" {
+    [client connections] as cc
+    [storage\nper storage id] as st
+    [chain_sync\nthe rules of the mode] as cs
+    [chain_log\nthe chain in sqlite] as cl
+    [peer connections\n(server-to-server)] as pc
+    [data coordinator\navailability, tickets, copies] as dc
+    [evidence store] as ev
+  }
+  package "data server (data role)" {
+    [data connections] as dcn
+    [server data store\nchunks per storage] as sds
+    [replicator\ncopies from other holders] as rep
+  }
+}
+
+cc --> st
+st --> cs
+cs --> cl
+pc --> st
+st --> dc
+st --> ev
+dc --> dcn : what is held
+dcn --> sds
+rep --> sds
+@enduml
+....
+
+A commit goes through `chain_sync`, which applies the mode's rules (the strict chain
+check or the tag-bound weak rules, the signature check, the size limits), assigns the
+next sequence, and `chain_log` persists it with the server's signed envelope. Reads
+are served from the log. The record role and the data role meet at the *data
+coordinator*: it issues tickets against the availability table (which data server
+holds what), tells the data servers when records no longer name a data, and plans the
+copies the storage's copy count asks for.
+
+=== Replication between servers
+
+Replicated storages in the weak modes are multi-master: every replica takes commits
+from its own clients and the replicas merge.
+
+[plantuml, replication, svg]
+....
+@startuml
+skinparam shadowing false
+participant "replica A" as a
+participant "replica B" as b
+
+== on every commit ==
+a -> b : push_records (the envelope A signed)
+b -> b : verify A's signature and the member's,\napply under B's own sequence,\nkeep A's assignment as (origin, origin seq)
+
+== every anti-entropy tick, and when a link comes up ==
+a -> b : peer_heads: per origin the highest\nblock A holds, with samples behind it
+b -> b : per origin: compare the samples with\nwhat B holds (the divergence finder)
+b -> a : pull_records(origin, from B's head + 1, to A's head)
+a --> b : response_envelopes
+b -> b : apply in origin order, advance the origin head
+note over a, b
+  a record is the same record on every replica (its tag);
+  the local sequences differ, the order converges
+end note
+....
+
+Every replica keeps, per origin server, the highest sequence it holds of that origin and
+serves pulls by origin, so a record spreads transitively: B pulls from A what A
+learned from C. A replica that restarts announces its heads and catches up in both
+directions; a new replica bootstraps by pulling every origin from the start and
+answers its clients "storage syncing" until it has caught up, so they try another
+replica. Two safety nets sit on top: the *divergence finder* places, from an origin's
+sampled history, where a peer's view of that origin parts from ours, so a conflicting
+history is never pulled; and an origin that assigned one sequence to two different
+records has *equivocated*: the two signed envelopes are the proof, kept as evidence,
+reported to the operator and the clients, and nothing of that origin is taken any more.
+
+The strict mode over replicas, one leader ordering commits with a Raft log, is
+designed (`distributed_sync.txt` phase 6) and not built yet.
+
+== Security in one picture
+
+[plantuml, security, svg]
+....
+@startuml
+skinparam shadowing false
+skinparam componentStyle rectangle
+
+rectangle "member identity\nML-DSA signing key + hybrid KEM key" as id
+rectangle "storage key\nAES-256-GCM, rotated on removal" as sk
+rectangle "record\nsigned by the member,\ncontent encrypted with the storage key" as rec
+rectangle "envelope\nserver's signed sequence assignment" as env
+rectangle "transport\nTLS 1.3, hybrid PQ key exchange,\nML-DSA authenticated ends" as tls
+
+id --> rec : signs
+sk --> rec : encrypts
+id --> sk : the user change record carries the\nstorage key wrapped for each member
+rec --> env : the server assigns and signs
+tls --> rec : carries, never reads
+@enduml
+....
+
+A server holds members' public keys, the chains and the encrypted chunks. It cannot
+read content, cannot forge a member's record, and cannot silently substitute history:
+the chain's hashes, the members' back references, its own signed assignments, the
+equivocation proofs and the joiners' anchors make a substitution detectable and
+provable. What a server can still do is refuse service or show stale data, and the
+client's replica rotation limits that. The crypto and transport are securepath's;
+their threat model is in that repository's `doc/threat_model.md`.
+
+== groupchat on top
+
+A chat is a storage in the `require_special_seen` mode with signed records, replicated
+weakly when the home server has replicas. A message is a data change record on a new
+object id with the text in its encrypted metadata; a shared file is a data change
+record on its own object id with a file entry in the metadata and the file as the
+record's data, listed and fetched on demand. Membership is the storage's membership.
+Invitations travel through the packet server and carry the storage id, the servers,
+the storage key and the chat's first block, the joiner's anchor.
+
+Front ends talk to the core through the JSON API (`groupchat/json_protocol`, documented
+in its `doc` directory): commands by name with JSON arguments, notifications as JSON
+events. The ncurses `gc_cli` and the Android JNI adapter (`groupchat/android`) are two
+front ends of that one API.
+
+== Where the details are
+
+[cols="1,3"]
+|===
+| `distributed_sync.txt` | the multi-server plan: modes, replication, recovery, evidence, the strict mode with Raft (phases 0-5 done, phase 6 designed, phase 7 planned)
+| `record_data.txt` | record data: descriptors and chunks, tickets, data servers, copies, retention
+| `segments.txt` | segments, chain hardening, history cuts and pruning
+| `shared_files.txt` | files in a chat
+| `users.txt`, `user_changes.txt` | membership, keys and their records
+| `use_cases.txt`, `testing.txt`, `todos.txt` | what it is for, how it is tested, what is left
+| `diagrams/` | earlier and more detailed diagrams: the client's record handling, the server internals, a replication scenario
+|===
