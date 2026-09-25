@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+
 #include "test_sync_server.hpp"
 #include <spsync/protocol/error.hpp>
 #include <spsync/client/record_util.hpp>

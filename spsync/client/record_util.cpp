@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+
 #include "record_util.hpp"
 #include <securepath/crypto/public_key_access.hpp>
 #include <securepath/crypto/error.hpp>

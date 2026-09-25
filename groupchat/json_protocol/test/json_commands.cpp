@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+
 #include "json_commands.hpp"
 #include <spsync/util/print.hpp>
 

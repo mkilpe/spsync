@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+
 #include "comm_test_interface.hpp"
 #include <spsync/util/move_only_function.hpp>
 

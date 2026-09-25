@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+
 #include "data_sync.hpp"
 
 #include <spsync/core/encryption_key_storage.hpp>

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+
 #include "data_index.hpp"
 
 #include <spsync/core/record_interface.hpp>

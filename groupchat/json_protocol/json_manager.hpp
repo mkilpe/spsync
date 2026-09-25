@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+
 #pragma once
 
 // This header stands on its own (the standard library only): it is the API a mobile

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+
 #include "data_decryptor.hpp"
 #include "chunk_crypto.hpp"
 

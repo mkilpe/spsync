@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 
 #include <securepath/version.hpp>
 #include <securepath/log/backend/backend.hpp>

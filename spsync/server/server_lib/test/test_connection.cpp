@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 
 #include <spsync/test/test_server_runner.hpp>
 

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+
 #include "cli_window.hpp"
 
 #include <securepath/console/attr.hpp>

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+
 #include "channel.hpp"
 #include "groupchat.hpp"
 #include "events.hpp"

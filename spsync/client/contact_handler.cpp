@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+
 #include "contact_handler.hpp"
 #include <securepath/serialisation/vector.hpp>
 #include "events.hpp"

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+
 #include "peer_config.hpp"
 
 #include <sstream>

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+
 #include "data_store.hpp"
 
 #include <spsync/protocol/data_protocol.hpp>

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+
 #include "chain_sync.hpp"
 
 #include <spsync/core/records/data_change_record.hpp>

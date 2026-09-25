@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+
 #include "data_connection.hpp"
 #include "guarded.hpp"
 

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+
 #include "data_uploader.hpp"
 #include "transfer_queue.hpp"
 

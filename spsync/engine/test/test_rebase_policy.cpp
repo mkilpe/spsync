@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+
 #include <spsync/engine/rebase_policy.hpp>
 
 #include <securepath/test_frame/test_suite.hpp>

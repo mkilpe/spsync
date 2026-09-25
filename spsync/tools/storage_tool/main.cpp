@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 
 #include <spsync/core/record_storage.hpp>
 

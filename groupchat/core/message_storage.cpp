@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+
 #include "message_storage.hpp"
 
 #include <securepath/serialisation/sequence.hpp>

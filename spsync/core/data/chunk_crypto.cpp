@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+
 #include "chunk_crypto.hpp"
 
 #include <spsync/util/digest_buffer.hpp>

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+
 #include "groupchat.hpp"
 
 #include <flat_map>

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+
 #include "record_verifier.hpp"
 
 #include <securepath/crypto/aes_gcm.hpp>

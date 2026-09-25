@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+
 #include "object_store.hpp"
 
 #include <securepath/log/log.hpp>

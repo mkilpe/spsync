@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+
 #include "data_replicator.hpp"
 
 #include <spsync/transfer/net_data_channel.hpp>

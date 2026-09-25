@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 
 #include "storage_server.hpp"
 

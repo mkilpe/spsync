@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+
 #include "cli_groupchat.hpp"
 #include <spsync/util/print.hpp>
 

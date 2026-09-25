@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+
 #include "data_state_table.hpp"
 
 #include <securepath/crypto/hash.hpp>

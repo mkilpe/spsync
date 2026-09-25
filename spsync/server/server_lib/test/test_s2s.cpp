@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+
 #include <spsync/test/test_context.hpp>
 
 #include <spsync/server/server_lib/storage_server.hpp>

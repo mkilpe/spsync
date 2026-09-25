@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+
 #include "storage_heads.hpp"
 
 #include <securepath/log/log.hpp>

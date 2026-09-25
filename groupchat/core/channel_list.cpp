@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+
 #include "channel_list.hpp"
 
 namespace securepath::groupchat {

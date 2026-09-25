@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+
 #include "spsync_server.hpp"
 #include <spsync/util/format.hpp>
 

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+
 #include "gc_cli.hpp"
 #include <spsync/util/print.hpp>
 

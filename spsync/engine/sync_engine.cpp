@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+
 #include "sync_engine.hpp"
 #include "data_sync.hpp"
 #include "record_creator.hpp"

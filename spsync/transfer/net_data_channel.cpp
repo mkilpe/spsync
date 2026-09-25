@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+
 #include "net_data_channel.hpp"
 
 #include <spsync/protocol/data_protocol.hpp>

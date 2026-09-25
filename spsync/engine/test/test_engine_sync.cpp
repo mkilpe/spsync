@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+
 #include <spsync/test/test_sync_server.hpp>
 #include <spsync/test/test_block_creator.hpp>
 

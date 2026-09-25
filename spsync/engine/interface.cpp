@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+
 #include "interface.hpp"
 
 namespace securepath::sync {

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+
 // The JNI side of fi.securepath.groupchat.GroupChat (GroupChat.java): one json_manager for
 // the process, its commands called by name, its notifications delivered to the listener
 // from the core's thread. Built by the CMakeLists next to this file into libgc_adapter.so

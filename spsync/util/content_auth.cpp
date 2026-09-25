@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+
 #include "content_auth.hpp"
 
 #include <securepath/crypto/hash.hpp>

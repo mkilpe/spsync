@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+
 #include "async_key_query.hpp"
 
 #include <infrastructure/key_client/events.hpp>

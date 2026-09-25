@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+
 #include <spsync/test/engine_context.hpp>
 #include <spsync/test/test_record_data.hpp>
 

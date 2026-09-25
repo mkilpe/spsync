@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+
 #pragma once
 
 #include <groupchat/json_protocol/json_helpers.hpp>

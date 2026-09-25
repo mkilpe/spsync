@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+
 #include "record_storage.hpp"
 
 #include <utility>

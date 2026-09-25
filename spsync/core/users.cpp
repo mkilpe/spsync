@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+
 #include "users.hpp"
 
 #include <format>

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+
 #include "storage.hpp"
 
 #include <spsync/core/data/data_state_table.hpp>

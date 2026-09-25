@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+
 #include "user_merge.hpp"
 
 #include <securepath/log/log.hpp>

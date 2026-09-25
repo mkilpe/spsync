@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+
 #include <securepath/test_frame/test_suite.hpp>
 
 #include <spsync/transfer/action_pump.hpp>

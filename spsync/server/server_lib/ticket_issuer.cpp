@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+
 #include "ticket_issuer.hpp"
 
 #include <spsync/protocol/error.hpp>

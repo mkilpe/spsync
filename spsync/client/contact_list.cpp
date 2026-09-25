@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+
 #include "contact_list.hpp"
 
 #include <securepath/common/key_value_database.hpp>

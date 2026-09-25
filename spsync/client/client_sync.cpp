@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+
 #include "client_sync.hpp"
 
 #include <spsync/core/data/record_data_store.hpp>

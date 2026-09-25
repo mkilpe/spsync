@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+
 #include "chat_connection.hpp"
 
 #include <flat_map>

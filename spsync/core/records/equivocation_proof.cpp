@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+
 #include "equivocation_proof.hpp"
 
 #include <spsync/core/error.hpp>

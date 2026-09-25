@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+
 #include <groupchat/core/message_storage.hpp>
 
 #include <spsync/test/test_block_creator.hpp>

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+
 #include "transfer_budget.hpp"
 
 #include <algorithm>

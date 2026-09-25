@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+
 #include "record_creator.hpp"
 #include "record_verifier.hpp"
 

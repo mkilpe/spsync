@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+
 #include "record_data_store.hpp"
 #include "chunk_files.hpp"
 #include "data_decryptor.hpp"

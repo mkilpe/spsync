@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+
 #include "transfer_retry.hpp"
 
 #include <spsync/protocol/error.hpp>

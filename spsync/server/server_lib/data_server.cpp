@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+
 #include "data_server.hpp"
 #include "data_connection.hpp"
 #include "record_server_link.hpp"

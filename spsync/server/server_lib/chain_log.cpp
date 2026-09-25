@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+
 #include "chain_log.hpp"
 
 #include <securepath/log/log.hpp>

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+
 #include "rebase_policy.hpp"
 
 namespace securepath::sync {

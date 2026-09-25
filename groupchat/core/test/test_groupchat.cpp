@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+
 #include <groupchat/core/groupchat.hpp>
 #include <groupchat/core/events.hpp>
 

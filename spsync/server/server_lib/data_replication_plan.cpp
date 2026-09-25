@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+
 #include "data_replication_plan.hpp"
 
 #include <algorithm>

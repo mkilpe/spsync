@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+
 #include "request.hpp"
 
 #include <iterator>

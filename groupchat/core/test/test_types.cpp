@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+
 #include <groupchat/core/types.hpp>
 
 #include <spsync/protocol/ports.hpp>

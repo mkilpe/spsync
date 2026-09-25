@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+
 #include "block_envelope.hpp"
 
 #include <spsync/util/digest_buffer.hpp>

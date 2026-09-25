@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+
 #include "net_data_transfers.hpp"
 
 #include <spsync/core/progress.hpp>

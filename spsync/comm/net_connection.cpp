@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+
 #include "net_connection.hpp"
 #include "net_connection_impl.hpp"
 

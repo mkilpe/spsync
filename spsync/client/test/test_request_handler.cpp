@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+
 #include "handler_test_client.hpp"
 
 namespace securepath::sync::client::test {

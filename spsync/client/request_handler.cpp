@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+
 #include "request_handler.hpp"
 #include <securepath/crypto/public_key_access.hpp>
 #include <securepath/crypto/private_data_access.hpp>

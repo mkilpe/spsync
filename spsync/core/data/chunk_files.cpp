@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+
 #include "chunk_files.hpp"
 
 #include <securepath/crypto/random.hpp>

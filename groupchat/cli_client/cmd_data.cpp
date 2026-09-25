@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+
 #include "cmd_data.hpp"
 
 #include <securepath/util/error.hpp>

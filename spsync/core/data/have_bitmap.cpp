@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+
 #include "have_bitmap.hpp"
 
 #include <algorithm>

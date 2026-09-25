@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+
 #include "data_coordinator.hpp"
 
 #include "data_release.hpp"

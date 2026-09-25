@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+
 #include "piece_cursor.hpp"
 
 #include <algorithm>

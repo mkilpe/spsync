@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+
 #include "evidence_store.hpp"
 
 #include <securepath/log/log.hpp>

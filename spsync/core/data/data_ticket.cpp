@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+
 #include "data_ticket.hpp"
 
 #include <spsync/util/digest_buffer.hpp>
