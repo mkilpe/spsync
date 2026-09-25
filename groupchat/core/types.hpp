@@ -53,6 +53,9 @@ std::string const groupchat_message_id{"gc_message_v1"};
 // key for user change metadata
 std::string const groupchat_name_id{"gc_name_v1"};
 
+/// key for the entry of a shared file (shared_files.txt SF-D1)
+std::string const groupchat_file_id{"gc_file_v1"};
+
 // tag used for contacting packets
 std::string const groupchat_contacting_tag{"gc_contacting_v1"};
 

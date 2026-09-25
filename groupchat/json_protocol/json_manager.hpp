@@ -76,6 +76,21 @@ public:
 	/// send message to given chat
 	std::string send_message(std::string_view const&);
 
+	/// share a file with a chat (shared_files.txt): {id, path, name?, mime?} -> the file object
+	std::string share_file(std::string_view const&);
+
+	/// the shared files of a chat: {id, start?, count?, order?} -> {data: [file objects]}
+	std::string get_files(std::string_view const&) const;
+
+	/// fetch the data of a shared file: {id, file}
+	std::string fetch_file(std::string_view const&);
+
+	/// write a fetched file to a path: {id, file, path}
+	std::string save_file(std::string_view const&);
+
+	/// let the local copy of a shared file go, the share stays: {id, file}
+	std::string remove_file(std::string_view const&);
+
 	/// handle scanned qr code
 	std::string handle_qr_code(std::string_view const&);
 

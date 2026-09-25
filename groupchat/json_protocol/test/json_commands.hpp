@@ -44,6 +44,23 @@ struct json_send_message_result {
 };
 std::string json_send_message(std::string, std::string);
 
+/// a shared file as get_files and the file event show it
+struct json_file {
+	std::int64_t index{};
+	std::string id;
+	std::string name;
+	std::string mime;
+	std::uint64_t size{};
+	std::string state;
+	crypto::public_key_id sharer_kid;
+	bool me{};
+};
+std::string json_share_file(std::string chat_id, std::string path, std::string name, std::string mime);
+json_file json_file_result(std::string);
+std::string json_get_files(std::string chat_id);
+std::vector<json_file> list_files(std::string);
+std::string json_file_command(std::string chat_id, std::string file_id, std::optional<std::string> path = std::nullopt);
+
 struct json_chat {
 	std::string name;
 	std::string id;

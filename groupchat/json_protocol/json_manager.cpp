@@ -25,6 +25,7 @@
 #include <securepath/log/backend/file_output.hpp>
 #include <securepath/version.hpp>
 
+#include <filesystem>
 #include <mutex>
 
 namespace securepath::groupchat::json_protocol {
@@ -45,6 +46,7 @@ bool chats_sort(chat_entry const& e1, chat_entry const& e2) {
 	if(e2.messages.empty()) { return true;  }
 	return e1.messages[0].sender_time > e2.messages[0].sender_time;
 }
+
 
 struct json_manager::impl
 	: public event_system::event_handler
@@ -108,6 +110,52 @@ public:
 			event["error"] = error_to_object(err);
 		}
 		notify(event_type::state_change, json::serialize(json::object{{"type", "chat"}, {"data", event}}));
+	}
+
+	json::object file_to_object(file_entry const& f) {
+		return json::object{
+			{"file", f.id.to_hex()},
+			{"name", f.name},
+			{"mime", f.mime},
+			{"size", f.size},
+			{"date", time_to_string(f.shared_time)},
+			{"index", f.index},
+			{"state", file_state_name(f.state)},
+			{"sharer", sender_to_object(f.sharer)}};
+	}
+
+	void on_file(server_chat_id id, file_entry f, file_change) {
+		LOG_TRACE("json_manager::on_file [sid={}, cid={}, file={}]", id.sid, to_hex(id.cid), f.id);
+		json::object event{
+			{"action", "file"},
+			{"server", id.sid},
+			{"chat", to_hex(id.cid)},
+			{"file", file_to_object(f)}};
+		notify(event_type::state_change, json::serialize(json::object{{"type", "chat"}, {"data", event}}));
+	}
+
+	void on_file_state(server_chat_id id, file_id fid, file_state state, error err) {
+		LOG_TRACE("json_manager::on_file_state [sid={}, cid={}, file={}, state={}]", id.sid, to_hex(id.cid), fid, file_state_name(state));
+		json::object event{
+			{"action", "file_state"},
+			{"server", id.sid},
+			{"chat", to_hex(id.cid)},
+			{"file", fid.to_hex()},
+			{"state", file_state_name(state)}};
+		if(err) {
+			event["error"] = error_to_object(err);
+		}
+		notify(event_type::state_change, json::serialize(json::object{{"type", "chat"}, {"data", event}}));
+	}
+
+	/// the channel of the chat a command names by "id"
+	channel& channel_of(json::object const& obj) {
+		chat_id cid = from_hex(extract<std::string>(obj, "id"));
+		auto hp = channel_ids().find_server(cid);
+		if(!hp) {
+			throw make_error(errc::no_such_data, "could not find chat");
+		}
+		return load(*hp)->get(cid);
 	}
 
 	void on_message(server_chat_id id, msg_data md, msg_change change) {
@@ -179,6 +227,8 @@ public:
 			, event_dest<events::on_change_user>(&impl::on_change_user)
 			, event_dest<events::on_join>(&impl::on_join)
 			, event_dest<events::on_message>(&impl::on_message)
+			, event_dest<events::on_file>(&impl::on_file)
+			, event_dest<events::on_file_state>(&impl::on_file_state)
 			, event_dest<sync::client::events::on_connect>(&impl::on_connect)
 			, event_dest<sync::client::events::on_disconnect>(&impl::on_disconnect)
 			, event_dest<sync::client::events::on_contacting>(&impl::on_contacting)
@@ -666,6 +716,58 @@ std::string json_manager::send_message(std::string_view const& arg) {
 
 		auto msg = channel.send_message(message);
 		return json::serialize(impl_->message_to_object(msg));
+	});
+}
+
+std::string json_manager::share_file(std::string_view const& arg) {
+	return call([&]() -> std::string {
+		json::object obj = json::parse(arg).as_object();
+		std::filesystem::path const path{extract<std::string>(obj, "path")};
+		auto const name = extract_opt<std::string>(obj, "name").value_or(path.filename().string());
+		auto const mime = extract_opt<std::string>(obj, "mime").value_or("application/octet-stream");
+		auto const file = impl_->channel_of(obj).share_file(path, name, mime);
+		return json::serialize(impl_->file_to_object(file));
+	});
+}
+
+std::string json_manager::get_files(std::string_view const& arg) const {
+	return call([&]() -> std::string {
+		json::object obj = json::parse(arg).as_object();
+		file_search search;
+		search.start_index = extract_opt<int>(obj, "start").value_or(0);
+		search.max_count = extract_opt<int>(obj, "count").value_or(0);
+		search.order = (extract_opt<std::string>(obj, "order").value_or("descending") == "descending")
+			? msg_order::index_descending : msg_order::index_ascending;
+		json::array files;
+		for(auto const& f : impl_->channel_of(obj).files(search)) {
+			files.push_back(impl_->file_to_object(f));
+		}
+		return json::serialize(json::object{{"data", files}});
+	});
+}
+
+std::string json_manager::fetch_file(std::string_view const& arg) {
+	return call([&]() -> std::string {
+		json::object obj = json::parse(arg).as_object();
+		impl_->channel_of(obj).fetch_file(file_id{from_hex(extract<std::string>(obj, "file"))});
+		return "{}";
+	});
+}
+
+std::string json_manager::save_file(std::string_view const& arg) {
+	return call([&]() -> std::string {
+		json::object obj = json::parse(arg).as_object();
+		impl_->channel_of(obj).save_file(file_id{from_hex(extract<std::string>(obj, "file"))}
+			, std::filesystem::path{extract<std::string>(obj, "path")});
+		return "{}";
+	});
+}
+
+std::string json_manager::remove_file(std::string_view const& arg) {
+	return call([&]() -> std::string {
+		json::object obj = json::parse(arg).as_object();
+		impl_->channel_of(obj).remove_file(file_id{from_hex(extract<std::string>(obj, "file"))});
+		return "{}";
 	});
 }
 

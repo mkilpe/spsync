@@ -1,0 +1,68 @@
+[source]
+.Commands
+--
+share_file, get_files, fetch_file, save_file, remove_file
+--
+
+Files shared with a chat (shared_files.txt). A shared file is its own entry of the chat,
+next to the messages, not part of a message. Nothing is fetched unasked: a file another
+member shared stays on the server until fetch_file asks for it.
+
+[caption=""]
+.share_file arguments
+[cols="1,1"]
+|===
+| id   | Id of the chat (hex)
+| path | Path of the file to share; it is read once and stored encrypted in the chat's data directory
+| name | (Optional) name shown to the members; the file name of the path by default
+| mime | (Optional) media type; application/octet-stream by default
+|===
+
+Response: the file object (see below), state `pending`.
+
+[caption=""]
+.get_files arguments
+[cols="1,1"]
+|===
+| id    | Id of the chat (hex)
+| start | (Optional) index to start from
+| count | (Optional) at most this many
+| order | (Optional) `descending` (default) or `ascending` by index
+|===
+
+Response: `{"data": [file objects]}`.
+
+[caption=""]
+.fetch_file / remove_file arguments
+[cols="1,1"]
+|===
+| id   | Id of the chat (hex)
+| file | Id of the file (hex)
+|===
+
+fetch_file asks for the data of a file another member shared; the file_state
+notification reports `fetching` and `fetched`. remove_file lets the local copy of the
+data go; the share stays listed with state `removed` and can be fetched again.
+
+[caption=""]
+.save_file arguments
+[cols="1,1"]
+|===
+| id   | Id of the chat (hex)
+| file | Id of the file (hex)
+| path | Where the plaintext is written; the file must be in state `fetched` or `shared`
+|===
+
+[caption=""]
+.File object
+[cols="1,1"]
+|===
+| file   | Id of the file (hex)
+| name   | Name given by the sharer
+| mime   | Media type given by the sharer
+| size   | Size in octets
+| date   | When it was shared
+| index  | Position in the chat's file list
+| state  | `pending` (own, the server has not confirmed the share), `sharing` (own, the data goes up), `shared` (own, done), `on_server` (another member's, not fetched), `fetching`, `fetched`, `removed` (the local copy was let go), `gone` (the data is invalid or the server let it go)
+| sharer | The member who shared it, as the sender object of a message
+|===

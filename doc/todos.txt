@@ -72,6 +72,8 @@
   * use storage connection to send broadcast message to all online members (msg not saved on server side)
   * client side interface to send and receive such messages
   * message encrypted using storage encryption key?
+* groupchat shared files (doc/shared_files.txt, written 2026-09-25): files as their own
+  object kind in a chat, listed and fetched on demand; SF 1 (file store + channel API) first
 * review of the record data work (doc/review_2026-09-21.txt): F1-F14 fixed, duplication
   D1-D7 and test helpers T1 fixed 2026-09-22, robustness O1-O9 fixed 2026-09-23 (liveness
   on the data links and ticket requests, retry vs reset, detach, staged pieces and sessions

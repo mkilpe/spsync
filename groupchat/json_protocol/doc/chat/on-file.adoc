@@ -1,0 +1,33 @@
+[source]
+.Notifications
+--
+file, file_state
+--
+
+`file` comes with a new share: an own one when it is sent and again when the server
+confirmed it, another member's when its record arrives. `file_state` comes when the
+transfer state of a file changed, and with an `error` when a transfer ended with one
+(the state stays what it was), or when the server refused an own share for good
+(state `gone`).
+
+[caption=""]
+.file data
+[cols="1,1"]
+|===
+| action | `file`
+| server | Server id
+| chat   | Id of the chat (hex)
+| file   | The file object (see the file commands)
+|===
+
+[caption=""]
+.file_state data
+[cols="1,1"]
+|===
+| action | `file_state`
+| server | Server id
+| chat   | Id of the chat (hex)
+| file   | Id of the file (hex)
+| state  | The new state (see the file object)
+| error  | (Optional) the error a transfer ended with
+|===

@@ -22,3 +22,11 @@ include::on-create.adoc[]
 ==== Message Received (notification)
 
 include::on-send.adoc[]
+
+==== Shared Files
+
+include::files.adoc[]
+
+==== Shared File (notification)
+
+include::on-file.adoc[]

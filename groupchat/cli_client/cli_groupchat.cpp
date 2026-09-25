@@ -120,6 +120,24 @@ void cli_groupchat::on_message(server_chat_id id, msg_data md, msg_change) {
 	win_.add_message(*c_opt, s);
 }
 
+void cli_groupchat::on_file(server_chat_id id, file_entry file, file_change) {
+	auto c_opt = map_to_channel(id.cid);
+	if(!c_opt) {
+		auto conn = find(id.sid);
+		c_opt = add_channel(id.cid, conn ? conn->get(id.cid).name() : to_hex(id.cid));
+	}
+	auto opt_contact = contacts().find(file.sharer);
+	std::string name = opt_contact ? opt_contact->name() : file.sharer.public_key_id().in_hex();
+	auto s = print("[%] %> shared file #% '%' (% bytes)", time_to_string(file.shared_time), name, file.index, file.name, file.size);
+	win_.add_message(*c_opt, s);
+}
+
+void cli_groupchat::on_file_state(server_chat_id id, file_id fid, file_state state, error err) {
+	auto s = err ? print("file % (%): %", fid, file_state_name(state), err)
+		: print("file %: %", fid, file_state_name(state));
+	win_.add_info(notice_channel(id.cid), to_wstring(s));
+}
+
 void cli_groupchat::on_message_failed(server_chat_id id, message_id mid, error err) {
 	auto s = print("message % was refused by the server: %", mid, err);
 	win_.add_info(notice_channel(id.cid), to_wstring(s));
@@ -144,7 +162,9 @@ void cli_groupchat::handle_event(std::unique_ptr<event_system::event_base> ev) {
 			, event_dest<events::on_change_user>(&cli_groupchat::on_change_user)
 			, event_dest<events::on_join>(&cli_groupchat::on_join)
 			, event_dest<events::on_message>(&cli_groupchat::on_message)
-			, event_dest<events::on_message_failed>(&cli_groupchat::on_message_failed) );
+			, event_dest<events::on_message_failed>(&cli_groupchat::on_message_failed)
+			, event_dest<events::on_file>(&cli_groupchat::on_file)
+			, event_dest<events::on_file_state>(&cli_groupchat::on_file_state) );
 }
 
 int cli_groupchat::notice_channel(chat_id const& cid) const {

@@ -40,6 +40,10 @@ public:
 	void on_message(server_chat_id, msg_data, msg_change);
 	/// called when the server refused a pending message for good
 	void on_message_failed(server_chat_id, message_id, error);
+	/// called when a file was shared with a chat (shared_files.txt)
+	void on_file(server_chat_id, file_entry, file_change);
+	/// called when the transfer state of a shared file changed
+	void on_file_state(server_chat_id, file_id, file_state, error);
 
 	void on_contacting(sync::client::request const& req
 		, std::string const& name

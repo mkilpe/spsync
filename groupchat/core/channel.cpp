@@ -7,8 +7,12 @@
 #include <spsync/engine/record_verifier.hpp>
 #include <spsync/client/record_util.hpp>
 
+#include <spsync/core/data/source_record_data.hpp>
+
 #include <securepath/database/sqlite/connection.hpp>
 #include <securepath/serialisation/util.hpp>
+
+#include <fstream>
 #include <securepath/util/conversions.hpp>
 #include <securepath/util/string_util.hpp>
 
@@ -21,6 +25,40 @@ std::string const gc_anchor_tag = "gc.chat.anchor";
 std::string channel::db_path(chat_conn_context const& context, chat_id const& cid) {
 	std::string path = context.path.empty() ? "" : context.path + "/";
 	return path + to_hex(cid) + ".db";
+}
+
+std::string channel::data_path(chat_conn_context const& context, chat_id const& cid) {
+	std::string path = context.path.empty() ? "" : context.path + "/";
+	return path + to_hex(cid) + "-data";
+}
+
+namespace {
+
+/// what a file is doing here from its record and its data (shared_files.txt SF-D7)
+file_state state_of(sync::record_data_state data, bool own, bool pending_record) {
+	if(pending_record) {
+		return file_state::pending;
+	}
+	switch(data) {
+	case sync::record_data_state::upload_pending:
+	case sync::record_data_state::remote_not_complete:
+		return file_state::sharing;
+	case sync::record_data_state::download_pending:
+		return file_state::fetching;
+	case sync::record_data_state::in_sync:
+		return own ? file_state::shared : file_state::fetched;
+	case sync::record_data_state::removed:
+		return file_state::removed;
+	case sync::record_data_state::deferred:
+	case sync::record_data_state::unknown:
+		return file_state::on_server;
+	case sync::record_data_state::invalid:
+	case sync::record_data_state::pruned:
+		return file_state::gone;
+	}
+	return file_state::gone;
+}
+
 }
 
 static database::connection_ptr open_db(chat_conn_context& context, chat_id const& cid) {
@@ -37,10 +75,12 @@ channel::channel(chat_conn_context& context, chat_id const& cid, database::conne
 	context.context,
 	context.callback.event_loop(),
 	db,
-	sync::sync_engine_config{.mode=channel_storage_modes().mode, .auth_mode=channel_storage_modes().auth, .log_id=to_hex(cid)})
+	sync::sync_engine_config{.mode=channel_storage_modes().mode, .auth_mode=channel_storage_modes().auth
+		, .data_root=data_path(context, cid), .log_id=to_hex(cid)})
 , ccontext_(context)
 , chat_id_(cid)
 , messages_(db)
+, files_(db)
 , db_(db)
 , db_path_(db_path(context, cid))
 , my_key_id_(my_private_key(context.context.private_data()).id())
@@ -48,6 +88,7 @@ channel::channel(chat_conn_context& context, chat_id const& cid, database::conne
 	// make sure we are in sync with record storage and messages storage in case the application
 	// was interrupted in between updating the messages storage
 	sync_message_storage(messages_, crypto_context().records(), crypto_context().enc_keys());
+	sync_file_storage(files_, crypto_context().records(), crypto_context().enc_keys());
 	// a joined chat keeps anchoring on the invitation's first block (plan 5.5)
 	if(auto anchor = find(gc_anchor_tag)) {
 		set_trusted_anchor(serialisation::asn_der_deserialise<sync::chain_block_id>(*anchor));
@@ -100,20 +141,151 @@ void channel::on_data_change(sync::record_handle rec, std::deque<sync::single_da
 
 	for(auto const& c : changes) {
 		// check the previous oid for data record to ensure compatibility in the later versions when we do use it
-		if(c.data.previous_oid_record_tag.empty()) {
-			auto opt = c.header.metadata().find<message_data>(groupchat_message_id);
-			if(opt) {
-				// insert to message storage
-				msg_data data{*opt, c.signer.value_or(crypto::public_key_id{}), c.internal_id, c.seq};
-				auto change = messages_.insert(c.data.id, data, msg_state::in_sync);
-				// notify higher level
-				ccontext_.callback.emit<events::on_message>(server_chat_id{ccontext_.sid, chat_id_}, data, change);
-			} else {
-				LOG_WARN("invalid record, no groupchat message found");
-			}
-		} else {
+		if(!c.data.previous_oid_record_tag.empty()) {
 			LOG_WARN("data record with parent? (using old version of client?)");
+		} else if(c.header.metadata().find<message_data>(groupchat_message_id)) {
+			add_message(c);
+		} else if(auto file = file_of(c)) {
+			add_file(c, *file);
+		} else {
+			LOG_WARN("invalid record, no groupchat message or file found");
 		}
+	}
+}
+
+void channel::add_message(sync::single_data_change const& c) {
+	auto opt = c.header.metadata().find<message_data>(groupchat_message_id);
+	msg_data data{*opt, c.signer.value_or(crypto::public_key_id{}), c.internal_id, c.seq};
+	auto change = messages_.insert(c.data.id, data, msg_state::in_sync);
+	// notify higher level
+	ccontext_.callback.emit<events::on_message>(server_chat_id{ccontext_.sid, chat_id_}, data, change);
+}
+
+void channel::add_file(sync::single_data_change const& c, stored_file const& file) {
+	auto change = files_.insert(c.data.id, file, false);
+	auto entry = entry_of(file_storage::row{c.data.id, file, change.new_index, false});
+	ccontext_.callback.emit<events::on_file>(server_chat_id{ccontext_.sid, chat_id_}, entry, change);
+}
+
+bool channel::own(stored_file const& file) const {
+	return file.sharer.public_key_id() == my_key_id_;
+}
+
+sync::record_data_handle channel::data_of(file_storage::row const& row) {
+	sync::record_data_handle ret;
+	if(auto record = crypto_context().records().find_internal(row.file.iid)) {
+		ret = object_data(record);
+	}
+	return ret;
+}
+
+file_entry channel::entry_of(file_storage::row const& row) {
+	auto const data = data_of(row);
+	auto const state = state_of(data ? data->state() : sync::record_data_state::unknown, own(row.file), row.pending);
+	return file_entry{row.id, row.file.data.name, row.file.data.mime, row.file.data.size, row.file.sharer
+		, row.file.data.shared_time, row.index, state};
+}
+
+file_storage::row channel::stored_row(file_id const& id) const {
+	auto row = files_.find(id);
+	if(!row) {
+		throw make_error(errc::no_such_data, "no such shared file");
+	}
+	return *row;
+}
+
+file_entry channel::share_file(std::filesystem::path const& path, std::string name, std::string mime) {
+	file_data entry{std::move(name), std::move(mime), std::filesystem::file_size(path), clock_type::now()};
+	sync::metadata header;
+	header.insert(groupchat_file_id, entry);
+	auto const id = sync::util::create_object_id();
+
+	// the lock covers the send too, so the insert is done before the events come in
+	std::unique_lock l{mutex_};
+	auto handle = send_data_change(id, std::move(header), std::make_shared<sync::file_record_data>(path));
+	// the data id is in the record: the descriptor the engine made of the source
+	std::deque<sync::single_data_change> changes;
+	auto const err = extract_single_data_changes(crypto_context().enc_keys(), handle, changes);
+	auto stored = changes.empty() ? std::nullopt : file_of(changes.front());
+	if(err || !stored) {
+		throw make_error(errc::invalid_state, "the shared file's record cannot be read back");
+	}
+	stored->sharer = user_id{my_key_id_};
+	auto const change = files_.insert(id, *stored, true);
+	auto ret = entry_of(file_storage::row{id, *stored, change.new_index, true});
+	ccontext_.callback.emit<events::on_file>(server_chat_id{ccontext_.sid, chat_id_}, ret, change);
+	return ret;
+}
+
+std::deque<file_entry> channel::files(file_search s) {
+	std::unique_lock l{mutex_};
+	std::deque<file_entry> ret;
+	for(auto const& row : files_.get(s)) {
+		ret.push_back(entry_of(row));
+	}
+	return ret;
+}
+
+std::optional<file_entry> channel::file(file_id const& id) {
+	std::unique_lock l{mutex_};
+	std::optional<file_entry> ret;
+	if(auto row = files_.find(id)) {
+		ret = entry_of(*row);
+	}
+	return ret;
+}
+
+void channel::fetch_file(file_id const& id) {
+	std::unique_lock l{mutex_};
+	auto const row = stored_row(id);
+	auto record = crypto_context().records().find_internal(row.file.iid);
+	if(!record) {
+		throw make_error(errc::no_such_data, "the shared file's record is gone");
+	}
+	fetch_object_data(record);
+}
+
+void channel::save_file(file_id const& id, std::filesystem::path const& path) {
+	std::unique_lock l{mutex_};
+	auto const data = data_of(stored_row(id));
+	if(!data || data->state() != sync::record_data_state::in_sync) {
+		throw make_error(errc::invalid_state, "the shared file is not fetched");
+	}
+	std::ofstream out(path, std::ios::binary | std::ios::trunc);
+	if(!out) {
+		throw make_error(errc::invalid_state, "cannot write the file");
+	}
+	octet_vector piece(1024 * 1024);
+	std::uint64_t pos = 0;
+	for(auto n = data->read(pos, piece.data(), piece.size()); n != 0; n = data->read(pos, piece.data(), piece.size())) {
+		out.write(reinterpret_cast<char const*>(piece.data()), static_cast<std::streamsize>(n));
+		pos += n;
+	}
+}
+
+void channel::remove_file(file_id const& id) {
+	std::unique_lock l{mutex_};
+	if(auto data = data_of(stored_row(id))) {
+		data->remove_data();
+	}
+}
+
+void channel::on_data_state_changed(sync::data_id id, sync::record_data_state state) {
+	std::unique_lock l{mutex_};
+	if(auto fid = files_.find_by_data(id)) {
+		auto const row = files_.find(*fid);
+		bool const mine = row && own(row->file);
+		ccontext_.callback.emit<events::on_file_state>(server_chat_id{ccontext_.sid, chat_id_}, *fid
+			, state_of(state, mine, row && row->pending), error{});
+	}
+}
+
+void channel::on_data_transfer_failed(sync::data_id id, error err) {
+	std::unique_lock l{mutex_};
+	if(auto fid = files_.find_by_data(id)) {
+		auto const row = files_.find(*fid);
+		auto const state = row ? entry_of(*row).state : file_state::gone;
+		ccontext_.callback.emit<events::on_file_state>(server_chat_id{ccontext_.sid, chat_id_}, *fid, state, err);
 	}
 }
 
@@ -128,6 +300,9 @@ void channel::on_record_rejected(sync::record_handle rec, error err) {
 		if(messages_.remove_pending(c.data.id)) {
 			LOG_WARN("message refused by the server [id={}, err={}]", c.data.id, err);
 			ccontext_.callback.emit<events::on_message_failed>(server_chat_id{ccontext_.sid, chat_id_}, c.data.id, err);
+		} else if(files_.remove_pending(c.data.id)) {
+			LOG_WARN("shared file refused by the server [id={}, err={}]", c.data.id, err);
+			ccontext_.callback.emit<events::on_file_state>(server_chat_id{ccontext_.sid, chat_id_}, c.data.id, file_state::gone, err);
 		}
 	}
 }

@@ -218,6 +218,52 @@ std::string json_send_message(std::string chat_id, std::string message) {
 	return print(R"({ "id" : "%", "message": "%"})", chat_id, message);
 }
 
+std::string json_share_file(std::string chat_id, std::string path, std::string name, std::string mime) {
+	return print(R"({ "id" : "%", "path": "%", "name": "%", "mime": "%"})", chat_id, path, name, mime);
+}
+
+static json_file plain_file(json::object const& obj) {
+	return json_file{
+		extract<std::int64_t>(obj, "index"),
+		extract<std::string>(obj, "file"),
+		extract<std::string>(obj, "name"),
+		extract<std::string>(obj, "mime"),
+		extract<std::uint64_t>(obj, "size"),
+		extract<std::string>(obj, "state"),
+		crypto::public_key_id{extract<std::string>(extract<json::object>(obj, "sharer"), "id")},
+		extract<bool>(extract<json::object>(obj, "sharer"), "me")};
+}
+
+json_file json_file_result(std::string str) {
+	json_file res;
+	CAPTURE(str);
+	CHECK_NOTHROW([&]{ res = plain_file(json::parse(str).as_object()); }());
+	return res;
+}
+
+std::string json_get_files(std::string chat_id) {
+	return print(R"({ "id": "%"})", chat_id);
+}
+
+std::vector<json_file> list_files(std::string str) {
+	std::vector<json_file> res;
+	CAPTURE(str);
+	CHECK_NOTHROW([&]{
+		for(auto const& v : extract<json::array>(json::parse(str).as_object(), "data")) {
+			res.push_back(plain_file(v.as_object()));
+		}
+	}());
+	return res;
+}
+
+std::string json_file_command(std::string chat_id, std::string file_id, std::optional<std::string> path) {
+	std::string res = print(R"({ "id": "%", "file": "%")", chat_id, file_id);
+	if(path) {
+		res += print(R"(, "path": "%")", *path);
+	}
+	return res + "}";
+}
+
 std::string json_handle_qr_code_user(json_contact user) {
 	return print(R"(sp-gc:{
 			"type":"user",

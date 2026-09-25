@@ -1,6 +1,8 @@
 #pragma once
 
 #include "message.hpp"
+#include "object_store.hpp"
+
 #include <spsync/core/encryption_key_storage.hpp>
 #include <spsync/core/record_storage.hpp>
 
@@ -42,7 +44,8 @@ struct msg_data {
 };
 
 /**
- * Class to store and fetch message for single channel
+ * Class to store and fetch message for single channel: the messages of the chat over an
+ * object_store (confirmed messages in arrival order, own pending ones after them)
  * Not thread-safe!
  */
 class message_storage {
@@ -60,15 +63,9 @@ public:
 
 	/// drop a pending message (the record was rejected for good); false when not pending
 	bool remove_pending(message_id const& id);
-private:
-	std::int64_t update_pending(message_id const& id);
-	std::deque<message> get_by_time(message_search) const;
-	void get_in_sync(message_search, std::deque<message>&) const;
-	void get_pending(message_search, std::deque<message>&) const;
 
 private:
-	database::connection_ptr db_;
-	std::int64_t sync_max_index_{};
+	object_store store_;
 };
 
 void sync_message_storage(message_storage&, sync::record_storage const&, sync::encryption_key_storage const&);

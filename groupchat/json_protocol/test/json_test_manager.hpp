@@ -111,6 +111,27 @@ struct json_test_manager : json_manager {
 				 })", cid, mid));
 	}
 
+	bool has_file_event(std::string cid, std::string fid) const {
+		return contains_event(event_type::state_change, print(R"(
+				{"type": "chat",
+				 "data":
+				 	{ "action": "file",
+				 	  "chat": "%",
+				 	  "file": {"file" : "%"} }
+				 })", cid, fid));
+	}
+
+	bool has_file_state_event(std::string cid, std::string fid, std::string state) const {
+		return contains_event(event_type::state_change, print(R"(
+				{"type": "chat",
+				 "data":
+				 	{ "action": "file_state",
+				 	  "chat": "%",
+				 	  "file": "%",
+				 	  "state": "%" }
+				 })", cid, fid, state));
+	}
+
 	bool has_contacting_event(crypto::public_key_id kid, std::string name, std::string message) const {
 		return contains_event(event_type::request, print(R"(
 				{"type": "contact",

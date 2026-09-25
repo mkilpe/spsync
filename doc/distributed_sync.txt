@@ -1152,12 +1152,107 @@ Phase 5  Server recovery and evidence  (M4)
 Phase 6  Strict mode with consensus  (M5)
 -----------------------------------------
 
-- 6.1 Decide: library vs own Raft                                                 [2d]
++ 6.1 Decide: library vs own Raft -- decided 2026-09-25: own, minimal              [0d]
       Evaluate NuRaft (Apache-2, asio based like this code base, has log store /
       state machine / snapshot interfaces). Own implementation is only justified if
       the dependency is unacceptable for the mobile gc_lib build (it is server side
       only, so probably fine). Criteria: asio integration, Android not needed, log
       store pluggable onto chain_log, membership change support.
+      Decided without the spike: NuRaft brings its own TCP transport, authenticated
+      with OpenSSL TLS certificates, which the post-quantum transport rule rules out
+      - it would need a custom rpc client and listener over the encrypted peer
+      connections anyway - and it wants a snapshot model where here the log is the
+      state. The adapter is most of the work either way; an own minimal Raft is the
+      same size (about 12 days for the phase, table below), fits the s2s layer that
+      exists, adds no dependency and no snapshot machinery. The risk, a subtle
+      election or term bug, is met the 4.7 way: a seeded simulation over a fake
+      transport with random partitions, restarts and leader kills, checked against
+      the 6.7 invariants, written BEFORE the real transport is wired in.
+
+      Design: own Raft, minimal
+      -------------------------
+      One instance per replicated strict storage (replication_mode::strict, the
+      third value next to none/weak) over the static peer set of storage_config
+      .peers; majority = floor(n/2) + 1; the own server counts. Weak storages keep
+      the phase 4 multi-master path untouched.
+
+      Log: the Raft index IS the chain sequence and an entry is a block_envelope
+      (its term field, 0 so far, is the entry's term). Entries beyond the commit
+      index are appended but not applied: chain_log gains an uncommitted tail -
+      record rows in a new state (record_state::acked reused on the server side:
+      "in the log, not committed") that get_records/get/get_by_origin and the
+      cursors do not see; commit moves them to in_sync in order, truncate_from
+      drops a conflicting suffix (rows in acked only; a committed row is never
+      removed, D2). Persistent per storage: current term, voted for, commit index
+      (a raft_state table next to replica_state). No snapshots: a lagging follower
+      catches up by append_entries from its head, a new replica bootstraps the
+      committed prefix with the 5.2 pulls and joins the log from there.
+
+      Roles and timers: follower / candidate / leader, election timeout randomised
+      in [T, 2T] (T configurable, default 1 s: the s2s links reconnect with backoff
+      and the storage is fine leaderless for a moment), heartbeat every T/4, both
+      asio steady_timers on the io_context held weakly like the anti-entropy timer.
+      A term seen higher than ours steps down at once. Votes need the candidate's
+      log to be at least as up to date (last term, then last index). The commit
+      index advances only over entries of the current term that a majority
+      matches (Raft 5.4.2); earlier-term entries commit with them.
+
+      Wire (s2s packets, storage scoped like peer_heads): request_vote {term,
+      candidate, last index, last term} / response_vote {term, granted};
+      append_entries {term, leader, prev index, prev term, entries (envelopes),
+      leader commit} / response_append {term, success, match index}. Heartbeats
+      are empty append_entries. The peer connection dispatches them to the
+      storage's raft instance; the transport is the existing authenticated one,
+      so the sender identity is the peer id, never a packet field.
+
+      Commit path (storage::commit_block on a strict replicated storage): leader
+      only - validate with chain_sync (pre_commit: a cheap reject answers
+      record_out_of_sync without a round), append to the own log at head + 1
+      with the current term, sign the envelope, replicate; the client is answered
+      acked with the assignment right away (6.4), and hears in_sync when the
+      entry commits (notify_record carries committed_seq). A follower answers
+      request_commit with errc::not_leader and the leader's endpoint; the comm
+      layer follows once, then rotates through the replicas as for
+      storage_syncing (4.5). Reads (request_records, request_sequence_number)
+      are served from the committed prefix by every replica.
+
+      Apply: every replica applies committed entries in order through
+      chain_sync::commit_foreign with the entry's own sequence - the leader
+      assigned it, nobody reassigns. Validation is a pure function of the log
+      prefix, the record and the keys, so a follower's apply agrees with the
+      leader's pre_commit: no tombstones (Q6). The one input that is not local -
+      a record signer's key the follower lacks - holds the apply cursor and asks
+      the leader with the 5.2 request_key, never skips.
+
+      Rollback (6.5): a follower whose uncommitted tail conflicts with the
+      leader's prev index/term truncates it (acked rows only). The 5.3 divergence
+      finder names the fork point from the leader's samples when the tail is
+      long. Clients holding those records as acked demote them to pending_commit,
+      rebase and recommit (op id keeps them exactly-once).
+
+      Membership (6.6): static per storage; a change is a config change on every
+      replica and a restart (no joint consensus in the minimal version; the
+      storage_management packet stays not_implemented until an operator path
+      exists). Not in the minimal version either: pre-vote, leadership transfer,
+      log compaction (the segments plan's cuts are the compaction, and they cut
+      below the commit index only).
+
+      Files: server_lib/raft.hpp/.cpp (the algorithm over an abstract transport
+      and log: roles, terms, votes, append, commit rule - pure, deterministic,
+      simulation tested), server_lib/raft_log (the chain_log tail + raft_state),
+      storage_server owns the instances and the timers, peer_connection carries
+      the packets, protocol/s2s_protocol.hpp the four packets, protocol errc
+      not_leader.
+
+      Estimate (replaces the 6.2-6.7 budgets below where they differ):
+        core algorithm with a fake transport and the simulation      2d
+        log tail, raft_state, apply into chain_sync                  1.5d
+        packets, peer connection plumbing, timers, instances         1d
+        commit path and leader redirect, client follows once (6.3)   1.5d
+        acked versus in_sync watermark on the client (6.4)           2d
+        rollback of an uncommitted suffix (6.5)                      1.5d
+        three-node fault and stress tests (6.7)                      3d
+        total                                                        12.5d
 
 - 6.2 State machine adapter                                                       [3d]
       log entry = serialised block_envelope. pre_commit on leader = chain_sync::validate
@@ -1167,6 +1262,9 @@ Phase 6  Strict mode with consensus  (M5)
       the log stays identical, and the client is told out_of_sync).
       Log store = chain_log (3.2) with term column; snapshot = "record range up to
       seq N" (the records *are* the state; no reconstruction needed).
+      With the 6.1 decision: the Raft core (2d) plus the log tail and apply (1.5d)
+      and the wire plumbing (1d) take this step's place; no tombstones, no
+      snapshots (see the design).
 
 - 6.3 Leader redirect                                                             [1d]
       request_commit on follower -> response_commit error errc::not_leader with leader
@@ -1238,9 +1336,18 @@ Q4 (phase 4.3)  Change record_base (structure_version 2) or carry last_seen_spec
 
 Q5 (phase 6.1)  NuRaft vs own. Decide with a one-day spike: chain_log as NuRaft
                 log_store, one storage, three nodes, commit a block.
+                DECIDED 2026-09-25 without the spike: own minimal Raft (design under
+                6.1). NuRaft's transport is TLS with certificates, which the PQ
+                transport rule excludes, so a custom rpc layer would be needed
+                anyway; the log needs no snapshots.
 
 Q6 (phase 6.2)  Tombstone vs reject for entries that fail validate at apply time.
                 Tombstone keeps logs identical and is simpler; costs a log slot.
+                DECIDED 2026-09-25: neither. Validation is deterministic over the
+                log prefix, the record and the keys, and the leader validates
+                before appending, so a committed entry cannot fail at apply; the
+                one non-local input (an unknown signer key) holds the apply cursor
+                and is fetched (5.2) instead of being skipped.
 
 Q7 (phase 0.0c) Parameter sets: ML-DSA-65 + ML-KEM-768 (NIST level 3) as the default
                 suite, or go straight to ML-DSA-87 + ML-KEM-1024 (level 5, what CNSA 2.0

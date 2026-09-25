@@ -1,0 +1,185 @@
+Groupchat shared files plan
+===========================
+
+Markers as in dev-phases.txt:  + done   * in progress   - todo
+Written 2026-09-25. Cross-references: record_data.txt (the transfer machinery this
+uses, RD1-RD13, RDS 1-10), use_cases.txt (1: file-like sync on mobile),
+distributed_sync.txt 5.5 (a joiner's anchor), segments.txt (S6 retention).
+
+
+Purpose
+-------
+
+A chat gets a shared file area: a member shares a file, every member sees it in the
+chat's file list with who shared it, when, its name, type and size, and fetches it
+when wanted. Files are their own object kind in the chat storage, next to messages,
+not attachments hanging off messages: a file has its own life (listed, fetched,
+removed locally, later versioned or deleted for everyone) and messages stay text.
+The record data work made all of this possible on the client sync layer and the
+server; groupchat only has to use it.
+
+
+Current state (2026-09-25)
+--------------------------
+
+Exists:
+  - client_sync::send_data_change(object id, metadata, record_data_handle): the
+    engine streams a source (file_record_data, memory_record_data) once into the
+    chat's chunk store and uploads it; object_data / fetch_object_data return a
+    record_data_handle (size, available_size, read in pieces, state, remove_data);
+    on_data_state_changed and on_data_transfer_failed report; resume after a
+    dropped connection in both directions, verification per chunk, lazy fetching
+    (sync_engine_config::auto_fetch_max_size, 0 = nothing unasked).
+  - the server's data role (spsync_server --data_role --data_servers, quotas,
+    replication among data servers) and the system test with real clients over
+    an all-in-one server (client/test/test_record_data_system.cpp).
+  - groupchat: channels run without a data directory (sync_engine_config::
+    data_root empty: a change with data is refused, the data of others stays
+    deferred) and leave the two data callbacks at their empty defaults.
+    message_storage maps data change records with a gc_message_v1 metadata entry
+    to messages, reconciled from the records on start (sync_message_storage).
+
+Missing: everything user visible - the file object kind, its store, the channel
+API, the json commands and events, the cli, the data role in the groupchat test
+server and the multi-server script.
+
+
+Decisions
+---------
+
+SF-D1  A file is a data change record on its own object id whose metadata carries a
+       gc_file_v1 entry {name, mime, size, shared_time} and whose data is the file
+       (the descriptor rides in the record, the bytes out of band, RD2). Messages
+       are untouched: a record is a message or a file by its metadata entry.
+
+SF-D2  Same name, different file. Every share is a new object id; the name is a
+       label. A version of a file - a record on the same object id, which the
+       record format links to the previous one - comes later, by an explicit
+       command (SF 5); nothing in the first cut blocks it.
+
+SF-D3  Nothing is fetched unasked (auto_fetch_max_size 0, the mobile default). A
+       share arrives as an entry that stays on the server until a member asks for
+       it. A fetch policy option (a threshold per chat) is a later step (SF 5).
+
+SF-D4  The client makes two data operations only: fetch and remove the local copy.
+       The chunk store under <chat path>/<cid>-data is the one copy the client
+       manages; save_file writes the plaintext wherever the caller says, by reading
+       the handle in pieces. The local store never grows without an explicit
+       action.
+
+SF-D5  Deleting a share for everyone is a later step (SF 5): a record on the same
+       object id without data marks it removed, and the storage's retention policy
+       (storage_limits::kept_data_versions) lets the data go at the next history
+       cut (RD9). No engine change needed.
+
+SF-D6  Sizes: the record size limit does not apply (the data is out of band); the
+       server's data quota (RD10, none by default) and data_too_big bound a share.
+       The chat shows the size from the descriptor's plain_size (the encrypted
+       header, readable by members only).
+
+SF-D7  State is read off the data handle when listed, not stored twice: the file
+       store keeps what the record says (name, mime, size, sharer, times, record
+       ids, data id); record_data_state gives the transfer state
+       (deferred = on the server, download_pending = fetching, in_sync = fetched
+       or, for an own share, upload_pending = sharing / in_sync = shared, removed =
+       removed locally, invalid / pruned = gone). Own pending shares (the record
+       not committed yet) are listed like pending messages.
+
+
+Data model and API
+------------------
+
+groupchat/core/file.hpp:
+  file_state {pending, sharing, shared, on_server, fetching, fetched, removed, gone}
+  file_entry {file_id, name, mime, size, sharer, shared_time, index, state}
+  file_data (metadata entry gc_file_v1): {name, mime, size, shared_time}
+  file_search = the message_search shape (index or time order, chunking)
+
+groupchat/core/file_storage: sync_file / sync_pending_file tables as the message
+  store has them (index order, pending entries reconciled at start,
+  sync_file_storage over the records), plus data id -> file id for the state
+  events.
+
+channel:
+  file_entry share_file(path, name, mime)      the source streams from the path
+  std::deque<file_entry> files(file_search)    state read off the handles (SF-D7)
+  file_entry file(file_id)
+  void fetch_file(file_id)                     engine fetch, state fetching
+  void save_file(file_id, path)                the plaintext to the path, in pieces
+  void remove_file(file_id)                    the local copy only (SF-D4)
+  events: on_file(server_chat_id, file_entry, change) for a new share (own pending
+  and in sync, like on_message); on_file_state(server_chat_id, file_id,
+  file_state, error) from on_data_state_changed / on_data_transfer_failed.
+
+json (json_manager): share_file {id, path, name?, mime?} -> file object;
+  get_files {id, start?, count?, order?} -> {data: [file objects]}; fetch_file
+  {id, file}; save_file {id, file, path}; remove_file {id, file}; file object
+  {file, name, mime, size, date, index, state, sharer}; events action "file"
+  (a new share, with the file object) and "file_state" {file, state, error?}.
+
+cli: share <chat> <path>, files <chat>, get <chat> <file> <path>, unfetch.
+
+Deployment: the data role on the server (--data_role, --data_servers, quota) and in
+  the groupchat test server; scripts/multi_server_env.sh knows no data role yet.
+
+
+Implementation steps
+--------------------
+
++ SF 1  File store and channel API -- done 2026-09-25                            [1.5d]
+      file.hpp, file_storage, the channel's data directory in its engine config,
+      share_file / files / file / fetch_file / save_file / remove_file, the data
+      callbacks into on_file_state, on_data_change split by metadata entry,
+      sync_file_storage at start. Test (groupchat core, real all-in-one server
+      with the data role): alice shares a file, bob lists it on the server, fetches,
+      saves and compares; alice sees her own state go sharing -> shared; bob
+      removes the local copy and the entry stays; a reload lists it again.
+      Implemented: the message store's two-table indexing moved into
+      groupchat/core/object_store (confirmed and pending lists, index and time
+      order, the record walk both stores reconcile with at start); message_storage
+      and the new file_storage sit on it. file.hpp (file_state, file_data,
+      file_entry, file_search, file_state_name), file_storage keeps stored_file
+      {entry, sharer, record ids, data id} plus a data id -> file id table for the
+      data events. channel: data_root = <path>/<cid>-data in its engine config,
+      share_file (file_record_data source, the data id read back off the pending
+      record), files/file (state off the data handle via the record's internal
+      id), fetch_file, save_file (1 MiB reads), remove_file; on_data_change splits
+      by metadata entry; on_data_state_changed / on_data_transfer_failed ->
+      events::on_file_state, on_file for shares, a refused share -> on_file_state
+      gone. Test "groupchat shared files" over a chat_pair fixture with the data
+      role on the test server.
+
++ SF 2  JSON commands and events -- done 2026-09-25                              [1d]
+      share_file / get_files / fetch_file / save_file / remove_file, the file
+      object, the file and file_state events; json protocol test.
+      Implemented as planned (json_manager share_file/get_files/fetch_file/
+      save_file/remove_file, channel_of helper, on_file/on_file_state), documented
+      in json_protocol/doc/chat/files.adoc and on-file.adoc; the json test's server
+      has the data role and a shared files block runs after the messages.
+
++ SF 3  CLI -- done 2026-09-25                                                   [0.5d]
+      share, files, get, unfetch; the file list in the chat window.
+      Implemented: the commands work on the current chat window (share <path>
+      [name], files, get <index> <path> - fetches when not held, saves when it is -,
+      unfetch <index>); shares and state changes are lines in the chat window.
+
++ SF 4  Deployment -- done 2026-09-25                                            [0.5d]
+      the data role in scripts/multi_server_env.sh, server config documentation,
+      a size limit in the groupchat server config (data quota).
+      Implemented: both replicas of the script run the data role (ports 18203 /
+      18213), list each other's data server with --data_copies 2 and cap a single
+      data at 1 GiB (--max_data_size); the cli lines printed name the file
+      commands; groupchat/readme.txt describes shared files and the server
+      requirement. The server options themselves are spsync_server --help.
+
+- SF 5  Later: versions of a file by command (SF-D2), delete for everyone
+      (SF-D5), the fetch policy option (SF-D3), a message referring to a file by id.
+
+
+Open questions
+--------------
+
+q: mime type - given by the caller or sniffed from the name? Caller's, with the
+   extension as the fallback label; the chat does not open files.
+q: should the file list show who fetched what? No: the server knows holders, the
+   chat does not need to.

@@ -11,6 +11,8 @@
 #include <securepath/common/version_number.hpp>
 
 
+#include <filesystem>
+
 namespace securepath::groupchat {
 
 version_number const gc_cli_version{0,0,1,"alpha"};
@@ -129,6 +131,11 @@ void gc_cli::init_commands() {
 
 	add_command(L"chat", 1, [this](auto v){ manage_chat(v); });
 	add_command(L"window", 1, [this](auto v){ manage_window(v); });
+
+	add_command(L"share", 1, [this](auto v){ share_file(v); });
+	add_command(L"files", 0, [this](auto v){ show_files(v); });
+	add_command(L"get", 2, [this](auto v){ get_file(v); });
+	add_command(L"unfetch", 1, [this](auto v){ unfetch_file(v); });
 
 	add_command(L"account", 0, [this](auto v){ my_info(v); });
 }
@@ -342,6 +349,76 @@ void gc_cli::send_message(std::string_view message) {
 			win_->add_message(ch, std::format("--> {}", message));
 		}
 	}
+}
+
+channel& gc_cli::current_chat(int& ch) {
+	ch = win_->current_channel();
+	auto cid = ch ? gc_->map_to_cid(ch) : std::optional<chat_id>{};
+	if(!cid) {
+		throw make_error(errc::invalid_state, "select a chat window first");
+	}
+	auto hp = gc_->channel_ids().find_server(*cid);
+	if(!hp) {
+		throw make_error(errc::no_such_data, "could not find chat");
+	}
+	return gc_->load(*hp)->get(*cid);
+}
+
+/// the shared file of the current chat by its index in the list
+static file_entry file_at(channel& chat, std::wstring_view index_arg) {
+	auto const index = std::stoll(to_string(index_arg));
+	for(auto const& f : chat.files()) {
+		if(f.index == index) {
+			return f;
+		}
+	}
+	throw make_error(errc::no_such_data, "no shared file with that index");
+}
+
+// share <path> [name]: a file for the members of the current chat (shared_files.txt)
+void gc_cli::share_file(std::vector<std::wstring_view> const& args) {
+	int ch = 0;
+	auto& chat = current_chat(ch);
+	std::filesystem::path const path{to_string(args[0])};
+	auto const name = args.size() > 1 ? to_string(args[1]) : path.filename().string();
+	auto const file = chat.share_file(path, name, "application/octet-stream");
+	win_->add_info(ch, print("sharing file #% '%' (% bytes)", file.index, file.name, file.size));
+}
+
+void gc_cli::show_files(std::vector<std::wstring_view> const& args) {
+	int ch = 0;
+	auto& chat = current_chat(ch);
+	win_->add_info(ch, L"Shared files:");
+	file_search all;
+	all.order = msg_order::index_ascending;
+	for(auto const& f : chat.files(all)) {
+		auto contact = gc_->contacts().find(f.sharer);
+		win_->add_info(ch, print("  #% '%' % bytes, % by %", f.index, f.name, f.size, file_state_name(f.state)
+			, contact ? contact->name() : f.sharer.public_key_id().in_hex()));
+	}
+}
+
+// get <index> <path>: fetch a shared file when it is not held yet, save it once it is
+void gc_cli::get_file(std::vector<std::wstring_view> const& args) {
+	int ch = 0;
+	auto& chat = current_chat(ch);
+	auto const file = file_at(chat, args[0]);
+	if(file.state == file_state::fetched || file.state == file_state::shared) {
+		chat.save_file(file.id, std::filesystem::path{to_string(args[1])});
+		win_->add_info(ch, print("saved file #% to %", file.index, to_string(args[1])));
+	} else {
+		chat.fetch_file(file.id);
+		win_->add_info(ch, print("fetching file #%; run the command again once it is fetched", file.index));
+	}
+}
+
+// unfetch <index>: let the local copy of a shared file go
+void gc_cli::unfetch_file(std::vector<std::wstring_view> const& args) {
+	int ch = 0;
+	auto& chat = current_chat(ch);
+	auto const file = file_at(chat, args[0]);
+	chat.remove_file(file.id);
+	win_->add_info(ch, print("removed the local copy of file #%", file.index));
 }
 
 void gc_cli::my_info(std::vector<std::wstring_view> const& args) {

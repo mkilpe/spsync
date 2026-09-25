@@ -17,17 +17,94 @@
 
 #include <spsync/test/test_server_runner.hpp>
 #include <spsync/test/test_context.hpp>
+#include <spsync/core/data/data_ticket.hpp>
+#include <spsync/protocol/ports.hpp>
+
+#include <securepath/crypto/hash.hpp>
+#include <securepath/crypto/private_data_access.hpp>
+
+#include <fstream>
 
 namespace securepath::groupchat::json_protocol::test {
+
+namespace {
+
+/// the test server with the data role (shared_files.txt), the way a deployment enables it
+sync::spsync_server_params data_role_params(sync::test::test_context& net_context) {
+	std::filesystem::remove_all("json_test_server");
+	auto const server_key = crypto::my_private_key(net_context.server_context().private_data());
+	sync::spsync_server_params params;
+	params.storage_params.storage_root = "json_test_server";
+	params.storage_params.data_servers = {sync::data_endpoint{"127.0.0.1", sync::default_data_server_port, server_key.id(), {}, {}}};
+	params.data_params.enabled = true;
+	params.data_params.storage_root = "json_test_server";
+	return params;
+}
+
+/// a file of random content; its sha3
+octet_vector write_random_file(std::filesystem::path const& path, std::size_t size) {
+	auto const content = securepath::test::random_octet_vector(size);
+	std::ofstream out(path, std::ios::binary | std::ios::trunc);
+	out.write(reinterpret_cast<char const*>(content.data()), static_cast<std::streamsize>(content.size()));
+	crypto::hash_stream hash;
+	hash.update(content);
+	return hash.final();
+}
+
+/// the sha3 of a file
+octet_vector file_digest(std::filesystem::path const& path) {
+	std::ifstream in(path, std::ios::binary);
+	octet_vector content{std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>()};
+	crypto::hash_stream hash;
+	hash.update(content);
+	return hash.final();
+}
+
+/// (shared_files.txt SF 2) a file shared over the json commands: listed by the other
+/// member on the server, fetched on demand, saved and read back, its local copy let go
+void check_shared_files(json_test_manager& manager1, json_test_manager& manager2, std::string const& id
+	, crypto::public_key_id const& sharer) {
+	std::filesystem::create_directories("client_0");
+	std::filesystem::create_directories("client_1");
+	auto const digest = write_random_file("client_0/share.bin", 200000);
+
+	auto const shared = json_file_result(manager1.share_file(json_share_file(id, "client_0/share.bin", "share.bin", "text/plain")));
+	CHECK(!shared.id.empty());
+	CHECK(shared.name == "share.bin");
+	CHECK(shared.mime == "text/plain");
+	CHECK(shared.size == 200000);
+	CHECK(shared.state == "pending");
+	CHECK(shared.sharer_kid == sharer);
+	CHECK(shared.me);
+	WAIT_CHECK(manager1.has_file_state_event(id, shared.id, "shared"), 20s);
+	WAIT_CHECK(manager1.has_file_event(id, shared.id), 5s);
+
+	// the other member lists it on the server, fetches, saves and reads it back
+	WAIT_CHECK(list_files(manager2.get_files(json_get_files(id))).size() == 1, 10s);
+	auto const listed = list_files(manager2.get_files(json_get_files(id))).at(0);
+	CHECK(listed.id == shared.id);
+	CHECK(listed.name == "share.bin");
+	CHECK(listed.size == 200000);
+	CHECK(listed.state == "on_server");
+	CHECK(!listed.me);
+	WAIT_CHECK(manager2.has_file_event(id, shared.id), 5s);
+	CHECK_EQUAL_JSON(manager2.fetch_file(json_file_command(id, shared.id)), "{}");
+	WAIT_CHECK(manager2.has_file_state_event(id, shared.id, "fetched"), 30s);
+	CHECK_EQUAL_JSON(manager2.save_file(json_file_command(id, shared.id, "client_1/got.bin")), "{}");
+	CHECK(file_digest("client_1/got.bin") == digest);
+	CHECK_EQUAL_JSON(manager2.remove_file(json_file_command(id, shared.id)), "{}");
+	CHECK(list_files(manager2.get_files(json_get_files(id))).at(0).state == "removed");
+}
+
+}
 
 TEST_CASE("json_manager_test", "[system]") {
 
 	sync::test::test_context net_context;
 	net_context.add_client(3);
 
-	sync::test::test_server server(net_context.server_context());
+	sync::test::test_server server(net_context.server_context(), data_role_params(net_context));
 	server.run();
-	std::this_thread::sleep_for(1s);
 
 	{
 		json_test_manager manager(net_context, 0, remove_db);
@@ -167,6 +244,7 @@ TEST_CASE("json_manager_test", "[system]") {
 			WAIT_CHECK_JSON(manager1.get_messages(json_get_messages(id))
 				, json_get_messages_result({{2, res.id, "other message", net_context.key_id(1), false}}), 2s);
 		}
+		check_shared_files(manager1, manager2, id, net_context.key_id(0));
 	}
 	{ //qr code
 		json_test_manager manager3(net_context, 2, keep_db);

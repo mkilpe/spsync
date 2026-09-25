@@ -43,6 +43,12 @@ private:
 	void manage_chat(std::vector<std::wstring_view> const& args);
 	void manage_window(std::vector<std::wstring_view> const& args);
 	void send_message(std::string_view message);
+	/// the chat of the current window, its window number in ch
+	channel& current_chat(int& ch);
+	void share_file(std::vector<std::wstring_view> const& args);
+	void show_files(std::vector<std::wstring_view> const& args);
+	void get_file(std::vector<std::wstring_view> const& args);
+	void unfetch_file(std::vector<std::wstring_view> const& args);
 
 	void add_member(std::vector<std::wstring_view> const& args);
 	void invite(std::vector<std::wstring_view> const& args);
