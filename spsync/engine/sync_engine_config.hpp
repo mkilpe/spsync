@@ -1,5 +1,6 @@
 #pragma once
 
+#include <spsync/core/chain_block_id.hpp>
 #include <spsync/core/sync_mode.hpp>
 
 #include <securepath/util/octet_vector.hpp>
@@ -50,13 +51,17 @@ struct sync_engine_config {
 	history_verification verification{history_verification::fast};
 
 	/**
-	 * Block hash of the trusted chain anchor (segments plan SEG 5): the segment record
-	 * accepted as the chain start when the history before it was cut on the server. The
-	 * hash comes with the invite. Retained records below the anchor are accepted content
-	 * authenticated with an advisory position - the cut kept only the anchor as
-	 * positional proof. Empty for storages with full history.
+	 * The trusted chain anchor: the block the chain must start with. From the invitation
+	 * (plan 5.5, root anchoring): the storage's first record, or after a history cut the
+	 * segment record the history starts at (segments plan SEG 5); after a local prune the
+	 * segment pruned at. Nothing enters in sync before the anchor is held, and a record
+	 * the server shows at the anchor's sequence under another hash is the server showing
+	 * another history: refused, reported (engine_output::on_anchor_mismatch) and commits
+	 * stop. Retained records below a cut anchor are accepted content authenticated with
+	 * an advisory position - the cut kept only the anchor as positional proof. Invalid
+	 * for a storage joined without an anchor.
 	 */
-	octet_vector trusted_anchor;
+	chain_block_id trusted_anchor;
 
 	/// the replication mode the storage is expected to have (plan 2.4: replication
 	/// requires sign_records, the engine refuses an invalid combination)

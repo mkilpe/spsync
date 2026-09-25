@@ -56,7 +56,7 @@ public:
 	/**
 	 * Prune the local history before the given committed segment record (segments plan
 	 * SEG 6), keeping the records current objects depend on; the server keeps the full
-	 * history. An empty tag prunes at the newest segment. Returns the anchor block hash:
+	 * history. An empty tag prunes at the newest segment. Returns the anchor block id:
 	 * it becomes the trusted anchor for this session and the caller must persist it into
 	 * sync_engine_config::trusted_anchor for later sessions, so a reload verifies from
 	 * the anchor.
@@ -67,7 +67,7 @@ public:
 	 * not known). The others become pruned - on_data_state_changed tells - except data
 	 * that is still to be uploaded.
 	 */
-	octet_vector prune_history(record_tag const& segment_tag = {});
+	chain_block_id prune_history(record_tag const& segment_tag = {});
 private:
 	class impl;
 	std::unique_ptr<impl> impl_;

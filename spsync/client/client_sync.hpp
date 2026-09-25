@@ -26,6 +26,13 @@ public:
 
 	void init(storage_id const& sid, network_connection& conn);
 
+	/**
+	 * The block the chain must start with (plan 5.5): the invitation's first block for a
+	 * joiner, the segment a prune left. Set before init() for a session; kept by the
+	 * caller for the next ones (sync_engine_config::trusted_anchor).
+	 */
+	void set_trusted_anchor(chain_block_id const&);
+
 	/// this needs to be called from the most derived class when destroying it to make sure there are no calls via the virtual functions any more
 	void stop_handler();
 
@@ -66,6 +73,8 @@ protected:
 	virtual void on_data_state_changed(data_id, record_data_state) {}
 	/// a record data transfer ended with an error (engine_output::on_data_transfer_failed)
 	virtual void on_data_transfer_failed(data_id, error) {}
+	/// the server showed another history than the trusted anchor names (engine_output::on_anchor_mismatch)
+	virtual void on_anchor_mismatch(chain_block) {}
 
 private:
 	class impl;

@@ -6,7 +6,8 @@
 
 = records
 * get history for higher levels
-* allow to give tag of the first record (or some other record?) to engine when joining a storage to check the authenticity
++ allow to give tag of the first record (or some other record?) to engine when joining a storage to check the authenticity
+  (done 2026-09-25, distributed plan 5.5: the invitation's first block is the engine's trusted anchor)
 * allow to start local chain from given record, so that when someone joins, he needs to only anchor the user change that contains the key for him and everything after that
 * support signing records
 

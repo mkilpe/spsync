@@ -2,17 +2,21 @@
 #include "groupchat.hpp"
 #include "events.hpp"
 
+#include <spsync/core/error.hpp>
 #include <spsync/core/records/util.hpp>
 #include <spsync/engine/record_verifier.hpp>
 #include <spsync/client/record_util.hpp>
 
 #include <securepath/database/sqlite/connection.hpp>
+#include <securepath/serialisation/util.hpp>
 #include <securepath/util/conversions.hpp>
 #include <securepath/util/string_util.hpp>
 
 namespace securepath::groupchat {
 
 std::string const gc_name_tag = "gc.chat.name";
+/// the block the chat's chain must start with (plan 5.5), from the invitation
+std::string const gc_anchor_tag = "gc.chat.anchor";
 
 std::string channel::db_path(chat_conn_context const& context, chat_id const& cid) {
 	std::string path = context.path.empty() ? "" : context.path + "/";
@@ -44,6 +48,10 @@ channel::channel(chat_conn_context& context, chat_id const& cid, database::conne
 	// make sure we are in sync with record storage and messages storage in case the application
 	// was interrupted in between updating the messages storage
 	sync_message_storage(messages_, crypto_context().records(), crypto_context().enc_keys());
+	// a joined chat keeps anchoring on the invitation's first block (plan 5.5)
+	if(auto anchor = find(gc_anchor_tag)) {
+		set_trusted_anchor(serialisation::asn_der_deserialise<sync::chain_block_id>(*anchor));
+	}
 }
 
 channel::~channel() {
@@ -62,15 +70,26 @@ void channel::set_data(std::string name, users members) {
 }
 
 void channel::set_join_data(sync::client::storage_info const& sinfo, std::string const& name) {
-	//t: check initial block
-
 	insert(gc_name_tag, name);
+	// the chain must start with the block the inviter named (plan 5.5): the server cannot
+	// show this client another storage's history
+	if(sinfo.chain_id.is_valid()) {
+		insert(gc_anchor_tag, serialisation::asn_der_serialise(sinfo.chain_id));
+		set_trusted_anchor(sinfo.chain_id);
+	}
 
 	// add encryption keys for the storage
 	auto& keys = crypto_context().enc_keys();
 	for(auto&& k : sinfo.enc_keys) {
 		keys.insert(k);
 	}
+}
+
+void channel::on_anchor_mismatch(sync::chain_block served) {
+	LOG_WARN("the chat's history on the server does not start with the invited block [cid={}, seq={}]"
+		, to_hex(chat_id_), served.sequence());
+	ccontext_.callback.emit<events::on_join>(server_chat_id{ccontext_.sid, chat_id_}, sync::users{}
+		, make_error(sync::errc::not_authentic, "the chat served is not the one invited to"));
 }
 
 void channel::on_data_change(sync::record_handle rec, std::deque<sync::single_data_change> changes) {

@@ -102,6 +102,14 @@ struct engine_output : event_system::event_handler {
 	virtual void on_equivocation(equivocation_proof const&) {}
 
 	/**
+	 * Called when the server showed a record at the trusted anchor's sequence that is not
+	 * the anchor (plan 5.5): the history served is not the one the invitation (or the
+	 * last prune) named. The record is refused and the engine stops committing to the
+	 * storage (D10); the application decides what to do with the storage.
+	 */
+	virtual void on_anchor_mismatch(chain_block served) {}
+
+	/**
 	 * Called when an object changed underneath a pending record (per conflicting object).
 	 * local is the own pending record, remote the newest record for the object. With
 	 * conflict_policy::rebase_on_top the local record has been rebuilt on top of remote;
@@ -159,6 +167,9 @@ struct on_fork_suspected {
 };
 struct on_equivocation {
 	typedef void type(equivocation_proof);
+};
+struct on_anchor_mismatch {
+	typedef void type(chain_block);
 };
 struct on_record_rejected {
 	typedef void type(record_handle, error);

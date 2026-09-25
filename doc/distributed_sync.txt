@@ -1112,10 +1112,41 @@ Phase 5  Server recovery and evidence  (M4)
       Clients receive on_fork_suspected with the proof attached (strict: halt,
       weak: continue but surface).
 
-- 5.5 Root anchoring for joiners                                                  [1d]
++ 5.5 Root anchoring for joiners -- done 2026-09-25                               [1d]
       todos.txt item: join_chat invitation carries the tag + hash of the first record
       (and of the user_change that added the joiner); engine verifies on first fetch.
       Closes the one case where a malicious server can still fully deceive a client.
+      Implemented: the invitation already carried the first block
+      (storage_info::chain_id, filled by channel::storage_info from find_root) and
+      nobody used it. sync_engine_config::trusted_anchor is a chain_block_id now
+      (sequence + hash; prune_history returns and sets one). Engine rules
+      (sync_engine::impl::anchor_gate, ahead of the mode rules in every mode): with
+      an anchor, nothing enters in sync before the anchor block itself - every
+      other record waits in pending_sync (the retained records below a cut anchor
+      are promoted when it lands, the tail chains from it in strict mode, weak
+      modes take them as before once the anchor is held); a record served at the
+      anchor's sequence under another hash is the server showing another history:
+      refused as invalid, engine_output::on_anchor_mismatch(served), commits stop
+      (fork_suspected, D10) and no record enters in sync after that
+      (anchor_contradicted) - weak modes would otherwise have taken the other
+      history's authentic records one by one.
+      client_sync::set_trusted_anchor + on_anchor_mismatch; groupchat channel
+      persists the invitation's block under gc.chat.anchor at set_join_data,
+      applies it on every load, and reports a mismatch as events::on_join with
+      errc::not_authentic ("the chat served is not the one invited to"). The
+      user_change that added the joiner is not anchored: a chain that starts at
+      the invited block and chains by hash cannot hide or replace it, and joining
+      from a later anchor (segments plan SEG 5) covers the cut case.
+      Tests: engine "root anchor from the invitation" (strict and weak: the right
+      anchor syncs everything, another hash at sequence 1 gets nothing, hears why,
+      and cannot commit), "nothing before the anchor" (anchor at a segment while
+      the server serves the whole history: promotion below, chain above),
+      groupchat "join refuses another history than the invited one" (a tampered
+      first block: on_join fails, no messages). Existing anchor tests moved to the
+      block id.
+
+      M4 done 2026-09-25 with 5.5: restart, bootstrap, divergence, equivocation
+      evidence, root anchoring.
 
 
 Phase 6  Strict mode with consensus  (M5)

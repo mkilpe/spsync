@@ -100,6 +100,10 @@ struct client_sync::impl : engine_output {
 		parent->on_data_transfer_failed(std::move(id), std::move(err));
 	}
 
+	void on_anchor_mismatch(chain_block served) override {
+		parent->on_anchor_mismatch(std::move(served));
+	}
+
 	void on_object_data_changed(record_handle rec) override {
 		assert(engine);
 
@@ -309,6 +313,13 @@ void client_sync::init(storage_id const& sid, network_connection& conn) {
 
 void client_sync::stop_handler() {
 	impl_->stop_handler();
+}
+
+void client_sync::set_trusted_anchor(chain_block_id const& anchor) {
+	impl_->config.trusted_anchor = anchor;
+	if(impl_->engine) {
+		impl_->engine->set_config(impl_->config);
+	}
 }
 
 record_handle client_sync::send_data_change(object_id oid, metadata mdata, record_data_handle dhandle) {

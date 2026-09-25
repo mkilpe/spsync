@@ -133,8 +133,8 @@ public:
 	 */
 	sequence_number fetch_cursor() const {
 		sequence_number from{1};
-		if(!config.trusted_anchor.empty()) {
-			if(auto anchor = records.find(config.trusted_anchor)) {
+		if(config.trusted_anchor.is_valid()) {
+			if(auto anchor = records.find(config.trusted_anchor.hash)) {
 				from = anchor->block_id().sequence;
 			}
 		}
@@ -379,10 +379,39 @@ public:
 	}
 
 	record_state check_chain_block(chain_block const& record, chain_block_id const& id) {
-		record_state state = config.mode == sync_mode::require_all_seen
-			? check_chain_block_strict(record, id)
-			: check_chain_block_weak(record, id);
+		record_state state = record_state::invalid;
+		if(anchor_contradicted) {
+			LTRACE("record refused, the server showed another history than the anchor names [block id = {}]", id);
+		} else if(auto gated = anchor_gate(record)) {
+			state = *gated;
+		} else if(config.mode == sync_mode::require_all_seen) {
+			state = check_chain_block_strict(record, id);
+		} else {
+			state = check_chain_block_weak(record, id);
+		}
 		LTRACE("check_chain_block returns state {}", state);
+		return state;
+	}
+
+	/**
+	 * Until the trusted anchor is held nothing enters in sync but the anchor itself, in
+	 * every mode (plan 5.5): a record at its sequence under another hash is the server
+	 * showing another history, every other record waits for the anchor. Nothing once the
+	 * anchor is held: the mode's rules take over.
+	 */
+	std::optional<record_state> anchor_gate(chain_block const& record) {
+		std::optional<record_state> state;
+		if(config.trusted_anchor.is_valid() && !records.find(config.trusted_anchor.hash)) {
+			if(record.hash() == config.trusted_anchor.hash) {
+				LINFO("accepting the trusted anchor as the chain start [seq = {}]", record.sequence());
+				state = record_state::in_sync;
+			} else if(contradicts_anchor(record)) {
+				anchor_mismatch(record);
+				state = record_state::invalid;
+			} else {
+				state = record_state::pending_sync;
+			}
+		}
 		return state;
 	}
 
@@ -403,23 +432,37 @@ public:
 		return state;
 	}
 
+	/// the server shows a record at the trusted anchor's sequence that is not the anchor
+	bool contradicts_anchor(chain_block const& record) const {
+		return config.trusted_anchor.is_valid() && record.sequence() == config.trusted_anchor.sequence
+			&& record.hash() != config.trusted_anchor.hash;
+	}
+
+	/// the history served is not the one the anchor names (plan 5.5): refused, reported,
+	/// and commits stop (D10: detection halts, never heals)
+	void anchor_mismatch(chain_block const& record) {
+		LWARN("the record served at the trusted anchor's sequence is not the anchor [seq = {}, served = {}, anchor = {}]"
+			, record.sequence(), to_hex(record.hash()), to_hex(config.trusted_anchor.hash));
+		fork_suspected = true;
+		anchor_contradicted = true;
+		if(output) {
+			output->emit<engine_events::on_anchor_mismatch>(record);
+		}
+	}
+
 	/**
-	 * Chain acceptance around a trusted anchor (segments plan SEG 5): the anchor block
-	 * itself starts the chain after a history cut, and the retained records below it are
-	 * accepted content authenticated with an advisory position - the cut kept only the
-	 * anchor as positional proof.
+	 * Strict acceptance below a held trusted anchor (segments plan SEG 5): the retained
+	 * records below a cut anchor are accepted content authenticated with an advisory
+	 * position - the cut kept only the anchor as positional proof. The records above
+	 * chain from the anchor as from any block. (Before the anchor is held anchor_gate
+	 * rules, in every mode.)
 	 */
 	std::optional<record_state> check_anchor_chain_block(chain_block const& record) {
 		std::optional<record_state> state;
-		if(!config.trusted_anchor.empty() && !records.find(record.sequence())) {
-			if(record.hash() == config.trusted_anchor) {
-				LINFO("accepting the trusted anchor as the chain start [seq = {}]", record.sequence());
+		if(config.trusted_anchor.is_valid() && !records.find(record.sequence())) {
+			auto anchor = records.find(config.trusted_anchor.hash);
+			if(anchor && record.sequence() < anchor->block_id().sequence) {
 				state = record_state::in_sync;
-			} else {
-				auto anchor = records.find(config.trusted_anchor);
-				if(anchor && record.sequence() < anchor->block_id().sequence) {
-					state = record_state::in_sync;
-				}
 			}
 		}
 		return state;
@@ -430,7 +473,7 @@ public:
 	 * anchor block is in sync their content stands on its own (SEG 5)
 	 */
 	void promote_pre_anchor_records(chain_block_id const& id) {
-		if(!config.trusted_anchor.empty() && id.hash == config.trusted_anchor) {
+		if(config.trusted_anchor.is_valid() && id.hash == config.trusted_anchor.hash) {
 			for(auto const& h : records.find_range(sequence_number{1}, id.sequence - 1, record_state::pending_sync)) {
 				LTRACE("promoting retained pre-anchor record [id = {}]", h->block_id());
 				h->set_state(record_state::in_sync);
@@ -1121,6 +1164,9 @@ public:
 	std::map<record_tag, rejection> rejected_pending;
 	// set when the server is suspected of showing two histories; commits stop (plan 2.6)
 	bool fork_suspected{};
+	/// the server showed another history than the trusted anchor names (plan 5.5): no
+	/// record of it is taken any more
+	bool anchor_contradicted{};
 	/// the record data half; none when the storage keeps no record data. Declared last:
 	/// it works on the members above and reports through output
 	std::optional<data_sync> data;
@@ -1424,7 +1470,7 @@ record_handle sync_engine::sync_segment_end(metadata mdata) {
 	return h;
 }
 
-octet_vector sync_engine::prune_history(record_tag const& segment_tag) {
+chain_block_id sync_engine::prune_history(record_tag const& segment_tag) {
 	std::unique_lock lock{impl_->mutex};
 	LTRACE("prune history");
 
@@ -1447,16 +1493,16 @@ octet_vector sync_engine::prune_history(record_tag const& segment_tag) {
 	LINFO("pruned local history [anchor=({},{}), removed={}, retained={}]"
 		, anchor.sequence, to_hex(anchor.hash), removed.size(), retained.size());
 
-	// verification anchors here from now on; later sessions get the hash from the config
-	impl_->config.trusted_anchor = anchor.hash;
-	return anchor.hash;
+	// verification anchors here from now on; later sessions get the anchor from the config
+	impl_->config.trusted_anchor = anchor;
+	return anchor;
 }
 
 util::result<history_verify_report> sync_engine::verify_history() const {
 	std::unique_lock lock{impl_->mutex};
 	LTRACE("verify history");
 	return sync::verify_history(impl_->records, impl_->crypto.enc_keys(), impl_->config.verification
-		, impl_->config.trusted_anchor);
+		, impl_->config.trusted_anchor.hash);
 }
 
 }

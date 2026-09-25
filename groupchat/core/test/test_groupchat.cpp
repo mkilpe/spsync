@@ -248,4 +248,44 @@ TEST_CASE("groupchat invite join message test", "[system]") {
 	}
 }
 
+
+// (plan 5.5) an invitation names the chat's first block; a join whose block does not
+// match what the server serves fails instead of taking the other history
+TEST_CASE("groupchat join refuses another history than the invited one", "[system]") {
+	std::filesystem::remove_all("gc_test_c0");
+	std::filesystem::remove_all("gc_test_c1");
+	std::filesystem::create_directories("gc_test_c0");
+	std::filesystem::create_directories("gc_test_c1");
+
+	sync::test::test_context net_context;
+	net_context.add_client(2);
+	sync::test::test_server server(net_context.server_context());
+	server.run();
+
+	gc_servers hp{"127.0.0.1", sync::default_key_server_port, sync::default_storage_server_port, packet_transport::default_packet_server_port};
+	event_system::single_thread_event_loop loop;
+
+	test_groupchat alice(net_context.client_context(0), loop, groupchat_config{"gc_test_c0"});
+	alice.create_account(hp, "alice");
+	auto conn0 = alice.load(hp.sync_server());
+	conn0->connect().get();
+	chat_id cid = conn0->create_chat("room").id();
+	REQUIRE(alice.created.get_future().wait_for(5s) == std::future_status::ready);
+
+	// what alice would send, with the first block's hash changed on the way
+	auto info = conn0->get(cid).storage_info();
+	REQUIRE(info.chain_id.sequence == sync::sequence_number{1});
+	info.chain_id.hash = securepath::test::random_octet_vector(64);
+
+	test_groupchat bob(net_context.client_context(1), loop, groupchat_config{"gc_test_c1"});
+	bob.create_account(hp, "bob");
+	auto conn1 = bob.load(hp.sync_server());
+	conn1->connect().get();
+	conn1->join(info, "room");
+	auto joined = bob.joined.get_future();
+	REQUIRE(joined.wait_for(5s) == std::future_status::ready);
+	CHECK_THROWS(joined.get());
+	CHECK(conn1->get(cid).messages().empty());
+}
+
 }

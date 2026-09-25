@@ -14,6 +14,8 @@
 #include <spsync/test/test_record_data.hpp>
 
 #include <securepath/test_frame/test_suite.hpp>
+
+#include <atomic>
 #include <securepath/test_frame/test_serialisation.hpp>
 #include <securepath/test_frame/test_utils.hpp>
 
@@ -178,7 +180,7 @@ void check_segment(test::test_sync_context& context, record_handle const& h, std
 
 /// a new client joins with the anchor hash and the keys from the invite (the root
 /// record that used to carry the enveloped keys is gone)
-test::test_sync_server_client_context& join_from_anchor(test::test_sync_context& context, octet_vector const& anchor) {
+test::test_sync_server_client_context& join_from_anchor(test::test_sync_context& context, chain_block_id const& anchor) {
 	context.add_client(false, 1);
 	auto& fresh = context.client(1);
 	auto cfg = fresh.engine_config;
@@ -885,7 +887,7 @@ TEST_CASE("engine sync rejoin from anchor after cut", "[unit]") {
 	REQUIRE(removed.size() == 1);
 	CHECK(removed[0].sequence() == sequence_number{1});
 
-	auto& fresh = join_from_anchor(context, seg->block_id().hash);
+	auto& fresh = join_from_anchor(context, seg->block_id());
 
 	// the sparse history synced: retained records promoted, anchor as the chain start
 	auto& recs = fresh.io.records();
@@ -902,7 +904,7 @@ TEST_CASE("engine sync rejoin from anchor after cut", "[unit]") {
 	// verification anchors at the segment: retained records detached, tail chained
 	check_fast_verification(fresh, 4);
 	auto cfg = fresh.engine_config;
-	cfg.trusted_anchor = seg->block_id().hash;
+	cfg.trusted_anchor = seg->block_id();
 	cfg.verification = history_verification::full;
 	fresh.engine.set_config(cfg);
 	auto full = fresh.engine.verify_history();
@@ -939,7 +941,7 @@ TEST_CASE("engine sync local prune at segment", "[unit]") {
 
 	// client 0 prunes at the newest segment; the server and client 1 keep everything
 	auto anchor = context.client(0).engine.prune_history();
-	CHECK(anchor == seg->block_id().hash);
+	CHECK(anchor == seg->block_id());
 
 	auto& recs = context.client(0).io.records();
 	CHECK(!recs.find(sequence_number{1}));
@@ -1051,6 +1053,114 @@ TEST_CASE("engine sync colliding encryption keys", "[unit]") {
 	CHECK(recs.last_block().sequence == sequence_number{3});
 	CHECK(recs.find(sequence_number{2}));
 	CHECK(recs.find(sequence_number{3}));
+}
+
+
+namespace {
+
+struct anchor_observer : engine_output {
+	using engine_output::engine_output;
+	~anchor_observer() { stop_handler(); }
+
+	void on_anchor_mismatch(chain_block served) override {
+		served_seq = served.sequence();
+		++mismatches;
+	}
+
+	std::atomic<int> mismatches{0};
+	sequence_number served_seq;
+};
+
+/// a fresh client joining with the anchor from its invitation and the key it carried
+test::test_sync_server_client_context& join_with_anchor(test::test_sync_context& context, int n, chain_block_id const& anchor
+	, anchor_observer& observer) {
+	context.add_client(false, 1);
+	auto& fresh = context.client(n);
+	auto cfg = fresh.engine_config;
+	cfg.trusted_anchor = anchor;
+	fresh.engine.set_config(cfg);
+	fresh.engine.set_output(&observer);
+	fresh.enc_keys.insert(encryption_key{sequence_number{1}, to_octet_vector("12345678901234567890123456789012")});
+	context.connect_client(n);
+	while(context.handle_events()) {}
+	return fresh;
+}
+
+/// the first record's id as the inviter reads it off its records
+chain_block_id root_of(test::test_sync_context& context) {
+	auto root = context.server.sync.records().find(sequence_number{1});
+	REQUIRE(root);
+	return root->block_id();
+}
+
+/// a storage of three records; a joiner with the right root anchor syncs all of them, one
+/// with another hash at sequence 1 gets nothing, hears why and cannot commit
+void check_root_anchoring(sync_mode mode) {
+	test::test_sync_context context(chain_sync_config{mode});
+	context.add_client(true, 1);
+	context.create_initial_record();
+	change_each(context, {create_object_id(), create_object_id()});               // 2, 3
+	while(context.handle_events()) {}
+	auto const root = root_of(context);
+
+	anchor_observer trusting{context.client(0).single_thread_event_loop};
+	auto& joiner = join_with_anchor(context, 1, root, trusting);
+	CHECK(context.compare_record_storages(sequence_number{3}));
+	CHECK(trusting.mismatches == 0);
+	joiner.engine.set_output(nullptr);
+
+	// the server shows a history that does not start with the invited block
+	anchor_observer deceived{context.client(0).single_thread_event_loop};
+	auto& victim = join_with_anchor(context, 2, chain_block_id{sequence_number{1}, securepath::test::random_octet_vector(64)}, deceived);
+	WAIT_CHECK(deceived.mismatches == 1, 2s);
+	CHECK(deceived.served_seq == sequence_number{1});
+	auto const& recs = victim.io.records();
+	CHECK(!recs.find(sequence_number{1}));
+	CHECK(!recs.find(sequence_number{2}));
+	CHECK(!recs.find(sequence_number{3}));
+	CHECK(recs.find(sequence_number{1}, record_state::invalid));
+	CHECK(!recs.find_last());
+	CHECK(context.server.sync.current_sequence_number() == sequence_number{3});
+	victim.engine.set_output(nullptr);
+}
+
+}
+
+// (plan 5.5) root anchoring: the invitation names the first block, the chain must start
+// with it - in strict and in weak modes
+TEST_CASE("engine sync root anchor from the invitation", "[unit]") {
+	SECTION("strict") {
+		check_root_anchoring(sync_mode::require_all_seen);
+	}
+	SECTION("weak") {
+		check_root_anchoring(sync_mode::allow_all);
+	}
+}
+
+// (plan 5.5) with an anchor above the first record (a joiner after a history cut) nothing
+// enters in sync before the anchor: a root record served first waits, promoted when the
+// anchor lands, and the tail chains from the anchor
+TEST_CASE("engine sync nothing before the anchor", "[unit]") {
+	test::test_sync_context context(chain_sync_config{sync_mode::require_all_seen});
+	context.add_client(true, 1);
+	context.create_initial_record();
+	change_each(context, {create_object_id()});                                    // 2
+	auto seg = seal_segment(context);                                              // 3
+	change_each(context, {create_object_id()});                                    // 4
+	while(context.handle_events()) {}
+
+	// the joiner anchors on the segment while the server still serves the whole history
+	anchor_observer observer{context.client(0).single_thread_event_loop};
+	auto& joiner = join_with_anchor(context, 1, seg->block_id(), observer);
+	CHECK(observer.mismatches == 0);
+	auto const& recs = joiner.io.records();
+	CHECK(recs.find(sequence_number{3}));
+	CHECK(recs.find(sequence_number{4}));
+	// the records below the anchor were promoted when it landed
+	CHECK(recs.find(sequence_number{1}));
+	CHECK(recs.find(sequence_number{2}));
+	CHECK(context.compare_record_storages(sequence_number{4}));
+	joiner.engine.set_output(nullptr);
 }
 
 }
