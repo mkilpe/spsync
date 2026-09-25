@@ -1073,10 +1073,37 @@ Phase 5  Server recovery and evidence  (M4)
       client elsewhere" (the client's session is dropped with storage_syncing
       while bootstrapping, syncs after).
 
-- 5.3 Divergence finder                                                           [1d]
++ 5.3 Divergence finder -- done 2026-09-25                                        [1d]
       chain_log::find_divergence: given a peer's (origin, seq, hash) samples, binary
       search back to the last matching block per origin. Used by 4.4 to avoid full
       pulls and by 6.5 for truncation. Test with synthetic forks.
+      Implemented: core/divergence.hpp holds the pure parts - sample_sequences(head)
+      (the head, 1, 2, 4, ... behind it and the first record: about log2(head)
+      samples), find_divergence(samples, held_hash) -> divergence{last_common,
+      first_divergent} (the newest sample held under the same hash, the oldest held
+      under another; samples not held say nothing; adjacent bounds pin the fork,
+      wider ones are narrowed by samples in between - the binary search, done by
+      the next announcements), plan_pull(known, peer_head, divergence) (the pull
+      starts after the stored head or the newest common sample, whichever is
+      further; nothing over a fork). record_storage::origin_block_hash(origin,
+      origin_seq) is the lookup; chain_log::samples_of(origin) /
+      find_divergence(origin_samples) are the log's side; storage forwards both.
+      Wire: peer_heads carries the sender's origin_samples per announced head (s2s
+      version 2). peer_connection::pull_origin plans every pull with the samples
+      and remembers (storage, origin) pairs whose history at the peer parts from
+      ours: not pulled, logged, and not counted by is_syncing (behind_a_peer) so a
+      fork cannot keep a replica "syncing" for good. storage::apply_foreign refuses
+      an envelope whose (origin, origin seq) is held under another hash with the
+      new errc::origin_diverged - the point 5.4 turns into evidence (a push of the
+      conflicting record was silently applied under a second row before).
+      Tests: core "divergence sample sequences / between histories / pull plan"
+      (synthetic histories, a fork between two samples narrowed by samples in
+      between), chain_log "samples and divergence between origin histories" (two
+      logs with the same origin key, forked at the fourth record), s2s "divergent
+      origin history is not pulled" (a replica took a record the origin's key
+      assigned sequence 4 to; the origin's own fourth record is refused, the heads
+      exchange places the fork, nothing is pulled, neither side is syncing, the
+      fifth record applies as usual).
 
 - 5.4 Equivocation detection between servers                                      [1d]
       Two envelopes with same (origin, term, seq) and different block hash, both

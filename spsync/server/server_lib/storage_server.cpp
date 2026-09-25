@@ -374,12 +374,14 @@ public:
 		return context_.public_keys().find(id);
 	}
 
-	/// a connected peer announced a head of the storage we have not reached
+	/// a connected peer announced a head of the storage we have not reached; an origin
+	/// whose history parts from ours there is not one we could reach (plan 5.3)
 	bool behind_a_peer(std::shared_ptr<storage> const& handle) {
 		auto const& own = identity_.server_id;
 		for(auto const& conn : peer_connections()) {
 			for(auto const& head : conn->heads_of_peer(handle->id())) {
-				if(head.origin != own && handle->known_origin_seq(head.origin) < head.block.sequence) {
+				bool const reachable = head.origin != own && !conn->origin_diverged(handle->id(), head.origin);
+				if(reachable && handle->known_origin_seq(head.origin) < head.block.sequence) {
 					return true;
 				}
 			}

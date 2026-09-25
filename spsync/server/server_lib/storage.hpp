@@ -2,6 +2,8 @@
 
 #include "chain_sync.hpp"
 #include "storage_heads.hpp"
+
+#include <spsync/core/divergence.hpp>
 #include <spsync/core/records/block_envelope.hpp>
 #include "storage_config.hpp"
 
@@ -125,6 +127,12 @@ public:
 	 * the stored heads of the other origins.
 	 */
 	std::vector<origin_head> heads() const;
+
+	/// the history samples behind the heads (plan 5.3): one entry per announced origin
+	std::vector<origin_samples> history_samples() const;
+
+	/// where this replica's view of an origin parts from a peer's samples of it (plan 5.3)
+	divergence find_divergence(origin_samples const&) const;
 
 	/// the stored per-origin heads; phase 4 records foreign heads here when applying
 	storage_heads& origin_heads() { return *heads_; }

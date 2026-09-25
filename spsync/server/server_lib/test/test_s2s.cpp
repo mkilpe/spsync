@@ -557,6 +557,65 @@ TEST_CASE("s2s own origin pull across many foreign records", "[unit]") {
 	b->close();
 }
 
+// (plan 5.3) a replica holding a record the origin assigned a sequence to differently -
+// the origin's history parts from the replica's there - refuses the origin's record at
+// that sequence, pulls nothing of that history and is not "syncing" for it
+TEST_CASE("s2s divergent origin history is not pulled", "[unit]") {
+	peer_pair pair{"test-s2s-da", "test-s2s-db", 21, 22};
+	auto const key_a = pair.key(0);
+	storage_server a(pair.context(0), pair.params(0, std::chrono::seconds{1}));
+	storage_server b(pair.context(1), pair.params(1, std::chrono::seconds{1}));
+	protocol::storage_id const sid = securepath::test::random_octet_vector(8);
+	auto [sa, sb] = open_on_both(a, b, sid, weak_modes());
+	a.start();
+	b.start();
+	WAIT_CHECK(peers_connected(a, b), 5s);
+
+	auto creator = pair.creator(0);
+	REQUIRE(sa->commit_block(creator.test_user_change()).block);
+	REQUIRE(sa->commit_block(creator.test_data_change()).block);
+	REQUIRE(sa->commit_block(creator.test_data_change()).block);
+	WAIT_REQUIRE(sb->current_sequence_number() == sequence_number{3}, 5s);
+
+	// B takes a record A's key assigned sequence 4 to, before A's own fourth record
+	auto other = creator;
+	auto forged = other.test_data_change();
+	forged.set_sequence_and_parent_hash(sequence_number{4}, sa->get_records(sequence_number{3}, sequence_number{3}).at(0).hash());
+	block_envelope env{forged, key_a};
+	env.sign(sid, pair.signer(0));
+	REQUIRE(!sb->apply_foreign(env));
+	CHECK(sb->known_origin_seq(key_a) == sequence_number{4});
+
+	// A's real fourth record is pushed and refused: the sequence is held under another hash
+	auto const fourth = creator.test_data_change();
+	REQUIRE(sa->commit_block(fourth).block);
+	auto const announced_head = [&] {
+		auto const heads = b.heads_of_peer(key_a, sid);
+		auto it = std::ranges::find(heads, key_a, &origin_head::origin);
+		return it == heads.end() ? sequence_number{} : it->block.sequence;
+	};
+	// the next announcement carries head 4 with samples: B sees the fork, pulls nothing
+	// of it and does not count itself behind on that origin
+	WAIT_REQUIRE(announced_head() == sequence_number{4}, 5s);
+	CHECK(!b.is_syncing(sid));
+	CHECK(!a.is_syncing(sid));
+	auto tags = tag_set(*sb, sequence_number{4});
+	CHECK(std::ranges::find(tags, forged.tag()) != tags.end());
+	CHECK(std::ranges::find(tags, fourth.tag()) == tags.end());
+
+	// what A assigns after that has no counterpart on B and applies as usual
+	auto const fifth = creator.test_data_change();
+	REQUIRE(sa->commit_block(fifth).block);
+	WAIT_CHECK(sb->current_sequence_number() == sequence_number{5}, 5s);
+	tags = tag_set(*sb, sequence_number{5});
+	CHECK(std::ranges::find(tags, fifth.tag()) != tags.end());
+	CHECK(std::ranges::find(tags, fourth.tag()) == tags.end());
+	CHECK(sb->known_origin_seq(key_a) == sequence_number{5});
+
+	a.close();
+	b.close();
+}
+
 // the timer and link handlers of a storage server hold it weakly: a server that is
 // closed and destroyed while its anti-entropy timer fires continuously and its link to
 // an unreachable peer keeps reconnecting must go away cleanly

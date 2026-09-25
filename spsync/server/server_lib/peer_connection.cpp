@@ -7,8 +7,9 @@
 #include <securepath/crypto/error.hpp>
 #include <securepath/log/log.hpp>
 
-#include <map>
 #include <securepath/util/conversions.hpp>
+
+#include <map>
 
 #include <algorithm>
 
@@ -47,9 +48,14 @@ std::vector<origin_head> peer_connection::heads_of_peer(protocol::storage_id con
 	std::vector<origin_head> ret;
 	auto it = peer_heads_.find(sid);
 	if(it != peer_heads_.end()) {
-		ret = it->second;
+		ret = it->second.heads;
 	}
 	return ret;
+}
+
+bool peer_connection::origin_diverged(protocol::storage_id const& sid, crypto::public_key_id const& origin) const {
+	std::unique_lock lock{mutex_};
+	return diverged_.contains({sid, origin.data()});
 }
 
 void peer_connection::set_connected_handler(std::function<void()> f) {
@@ -216,7 +222,7 @@ void peer_connection::send_our_heads() {
 	for(auto const& sid : sctx_.replicated_storages()) {
 		auto handle = sctx_.find_open_sync(sid);
 		if(handle) {
-			send_packet(protocol::peer_heads{sid, handle->heads(), handle->modes()});
+			send_packet(protocol::peer_heads{sid, handle->heads(), handle->modes(), handle->history_samples()});
 		}
 	}
 }
@@ -294,10 +300,20 @@ void peer_connection::operator()(protocol::peer_heads const& p) {
 		LOG_TRACE("peer heads [sid={}, heads={}]", to_hex(p.sid), p.heads.size());
 		{
 			std::unique_lock lock{mutex_};
-			peer_heads_[p.sid] = p.heads;
+			peer_heads_[p.sid] = p;
 		}
 		start_pulls(p);
 	}
+}
+
+namespace {
+
+/// the peer's samples of one origin's history, none when it announced no samples for it
+origin_samples const* samples_of(protocol::peer_heads const& p, crypto::public_key_id const& origin) {
+	auto it = std::ranges::find(p.samples, origin, &origin_samples::origin);
+	return it == p.samples.end() ? nullptr : &*it;
+}
+
 }
 
 /// pull every origin the peer is ahead on (plan 4.4); the peer does the same for the
@@ -305,16 +321,9 @@ void peer_connection::operator()(protocol::peer_heads const& p) {
 void peer_connection::start_pulls(protocol::peer_heads const& p) {
 	auto handle = sctx_.acquire_replica(p.sid, protocol::peer_modes(p.modes));
 	if(handle && handle->modes().replication == replication_mode::weak) {
-		auto const& own = sctx_.identity().server_id;
 		bool behind = false;
 		for(auto const& head : p.heads) {
-			if(head.origin != own) {
-				auto const known = handle->known_origin_seq(head.origin);
-				if(known < head.block.sequence) {
-					behind = true;
-					request_pull(p.sid, head.origin, known + 1, head.block.sequence);
-				}
-			}
+			behind = pull_origin(handle, p, head) || behind;
 		}
 		if(!behind) {
 			sctx_.note_caught_up(p.sid);
@@ -322,16 +331,49 @@ void peer_connection::start_pulls(protocol::peer_heads const& p) {
 	}
 }
 
+/**
+ * Pull one origin when the peer is ahead on it and the histories agree (plan 5.3): the
+ * pull starts after the newest record we hold of the origin, the stored head or the
+ * newest common sample. A history that parts from ours is not pulled (the records would
+ * conflict with held ones), nor is our own origin. True when a pull went out.
+ */
+bool peer_connection::pull_origin(std::shared_ptr<storage> const& handle, protocol::peer_heads const& p, origin_head const& head) {
+	auto const* samples = samples_of(p, head.origin);
+	auto const div = samples ? handle->find_divergence(*samples) : divergence{};
+	note_divergence(p.sid, head.origin, div.diverged());
+	bool wanted = false;
+	if(div.diverged()) {
+		LOG_WARN("the history of origin {} at peer {} parts from ours between sequences {} and {}: not pulled (rsid={})"
+			, head.origin, peer_id().value_or(crypto::public_key_id{}), div.last_common, div.first_divergent, to_hex(p.sid));
+	} else if(head.origin != sctx_.identity().server_id) {
+		auto const plan = plan_pull(handle->known_origin_seq(head.origin), head.block.sequence, div);
+		wanted = plan.wanted();
+		if(wanted) {
+			request_pull(p.sid, head.origin, plan.from, plan.to);
+		}
+	}
+	return wanted;
+}
+
+void peer_connection::note_divergence(protocol::storage_id const& sid, crypto::public_key_id const& origin, bool diverged) {
+	std::unique_lock lock{mutex_};
+	if(diverged) {
+		diverged_.insert({sid, origin.data()});
+	} else {
+		diverged_.erase({sid, origin.data()});
+	}
+}
+
 /// re-run the pulls the last announced heads call for (after a signer key arrived)
 void peer_connection::resume_pulls() {
-	std::map<protocol::storage_id, std::vector<origin_head>> heads;
+	std::map<protocol::storage_id, protocol::peer_heads> heads;
 	{
 		std::unique_lock lock{mutex_};
 		heads = peer_heads_;
 	}
-	for(auto const& [sid, h] : heads) {
-		if(auto handle = sctx_.find_open_sync(sid)) {
-			start_pulls(protocol::peer_heads{sid, h, handle->modes()});
+	for(auto const& [sid, p] : heads) {
+		if(sctx_.find_open_sync(sid)) {
+			start_pulls(p);
 		}
 	}
 }

@@ -1,5 +1,7 @@
 #pragma once
 
+#include <spsync/core/divergence.hpp>
+#include <spsync/core/origin_head.hpp>
 #include <spsync/core/record_storage.hpp>
 #include <spsync/core/records/block_envelope.hpp>
 
@@ -87,11 +89,18 @@ public:
 	record_handle find_by_op_id(octet_vector const&) const;
 
 	/**
-	 * The lowest sequence at which this log disagrees with the given peer heads: a head
-	 * whose sequence we hold under a different hash. A peer sequence beyond our head is
-	 * not divergence (we are only behind). Returns an invalid sequence when there is none.
+	 * The samples of one origin's history in this log (plan 5.3): its head and the
+	 * exponentially spaced records behind it that this log holds, by origin sequence.
+	 * Empty for an origin without records here.
 	 */
-	sequence_number find_divergence(std::vector<chain_block_id> peer_heads) const;
+	origin_samples samples_of(crypto::public_key_id const& origin) const;
+
+	/**
+	 * Where this log's view of the origin parts from a peer's samples of it (plan 5.3):
+	 * the newest sample held under the same hash, the oldest held under a different one.
+	 * A peer ahead of us on the origin is not divergence, we are only behind.
+	 */
+	divergence find_divergence(origin_samples const&) const;
 
 	record_storage& records() { return records_; }
 	record_storage const& records() const { return records_; }

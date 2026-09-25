@@ -44,6 +44,10 @@ public:
 	/// the last heads the peer announced for the storage (anti-entropy input, plan 4.4)
 	std::vector<origin_head> heads_of_peer(protocol::storage_id const&) const;
 
+	/// the peer's history of the origin parts from ours, as its last announcement showed
+	/// (plan 5.3): nothing of that origin is pulled from it
+	bool origin_diverged(protocol::storage_id const&, crypto::public_key_id const& origin) const;
+
 	/// called on the connection strand when the connection went down (reconnect hook)
 	void set_disconnect_handler(std::function<void(securepath::error const&)>);
 
@@ -104,6 +108,8 @@ private:
 	bool check_ready(char const* what);
 	bool check_peer(char const* what);
 	void start_pulls(protocol::peer_heads const&);
+	bool pull_origin(std::shared_ptr<storage> const&, protocol::peer_heads const&, origin_head const&);
+	void note_divergence(protocol::storage_id const&, crypto::public_key_id const& origin, bool diverged);
 	void request_pull(protocol::storage_id const&, crypto::public_key_id const&,
 		sequence_number from, sequence_number to);
 	void apply_envelopes(std::shared_ptr<storage> const&, std::deque<block_envelope> const&, char const* what);
@@ -125,7 +131,10 @@ private:
 	/// the remote is a separate data server (RD12), not a replication peer: it announces
 	/// what it holds and takes no part in the record exchange
 	bool data_server_link_{};
-	std::map<protocol::storage_id, std::vector<origin_head>> peer_heads_;
+	/// the last announcement per storage: heads, modes and history samples
+	std::map<protocol::storage_id, protocol::peer_heads> peer_heads_;
+	/// (storage, origin) whose history at the peer parts from ours (plan 5.3)
+	std::set<std::pair<protocol::storage_id, octet_vector>> diverged_;
 	std::function<void(securepath::error const&)> on_disconnect_;
 	std::function<void()> on_connected_;
 	/// (storage, origin) pulls in flight, so periodic heads do not double-pull

@@ -24,7 +24,7 @@ inline namespace v1 {
  * reply_base correlation of the client protocol.
  */
 
-std::uint16_t const s2s_current_version{1};
+std::uint16_t const s2s_current_version{2};
 
 /// first packet in both directions after the transport is up
 struct peer_hello : protocol_base {
@@ -48,21 +48,27 @@ struct peer_hello : protocol_base {
  * The anti-entropy heads of one storage (the 3.4 table plus the sender's own head). The
  * storage modes ride along so a replica that does not hold the storage yet can create
  * it with the same modes (a chat created on one replica appears on the others).
+ * Version 2 added the history samples (plan 5.3).
  */
 struct peer_heads : storage_request_base {
-	peer_heads(storage_id sid = {}, std::vector<origin_head> h = {}, std::optional<storage_modes> m = {})
+	peer_heads(storage_id sid = {}, std::vector<origin_head> h = {}, std::optional<storage_modes> m = {}
+		, std::vector<origin_samples> s = {})
 	: storage_request_base(0, std::move(sid))
 	, heads(std::move(h))
 	, modes(to_wire(m))
+	, samples(std::move(s))
 	{}
 
 	std::vector<origin_head> heads;
 	wire_modes modes;
+	/// the sender's history samples behind the heads (plan 5.3): the receiver places a
+	/// fork with them instead of pulling a history that conflicts with its own
+	std::vector<origin_samples> samples;
 
 	template<typename S>
 	void serialise(S& s) {
 		serialisation::sequence<S> seq(s);
-		seq & static_cast<storage_request_base&>(*this) & heads & modes;
+		seq & static_cast<storage_request_base&>(*this) & heads & modes & samples;
 	}
 };
 

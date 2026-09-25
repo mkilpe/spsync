@@ -214,6 +214,20 @@ std::vector<origin_head> storage::heads() const {
 	return ret;
 }
 
+std::vector<origin_samples> storage::history_samples() const {
+	std::vector<origin_samples> ret;
+	for(auto const& head : heads()) {
+		std::unique_lock l{mutex_};
+		ret.push_back(sync_->log().samples_of(head.origin));
+	}
+	return ret;
+}
+
+divergence storage::find_divergence(origin_samples const& samples) const {
+	std::unique_lock l{mutex_};
+	return sync_->log().find_divergence(samples);
+}
+
 sequence_number storage::current_sequence_number() const {
 	std::unique_lock l{mutex_};
 	return sync_->current_sequence_number();
@@ -289,11 +303,19 @@ error storage::apply_foreign(block_envelope const& env) {
 		LOG_WARN("foreign envelope does not verify [origin={}] (rsid={})", env.origin(), to_hex(id_));
 		return err;
 	}
+	auto const& block = env.block();
+	// the origin assigned this sequence to another record than the one held: its history
+	// parts from ours here (plan 5.3) and nothing of it applies; the proof is plan 5.4's
+	auto const held = sync_->records().origin_block_hash(env.origin().data(), block.sequence());
+	if(!held.empty() && held != block.hash()) {
+		LOG_WARN("origin {} assigned sequence {} to another record than the one held (rsid={})"
+			, env.origin(), block.sequence(), to_hex(id_));
+		return make_error(protocol::errc::origin_diverged);
+	}
 	if(env.origin() == own_id_) {
 		// our own record came back around
 		return {};
 	}
-	auto const& block = env.block();
 	// the origin head is kept fresh for records we already hold, but never advanced past
 	// a record that did not apply: anti-entropy pulls from the head, so the record would
 	// be skipped for good (found by the 5.2 bootstrap: a signer key learned later)

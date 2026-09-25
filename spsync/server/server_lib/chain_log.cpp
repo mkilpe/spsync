@@ -129,20 +129,21 @@ record_handle chain_log::find_by_op_id(octet_vector const& op_id) const {
 	return records_.find_op_id(op_id);
 }
 
-sequence_number chain_log::find_divergence(std::vector<chain_block_id> peer_heads) const {
-	std::ranges::sort(peer_heads, {}, &chain_block_id::sequence);
-	sequence_number divergence;
-	for(auto const& peer : peer_heads) {
-		bool const comparable = !divergence.is_valid() && peer.sequence.is_valid()
-			&& peer.sequence <= head_.sequence;
-		if(comparable) {
-			auto handle = records_.find(peer.sequence);
-			if(!handle || handle->block_id().hash != peer.hash) {
-				divergence = peer.sequence;
-			}
+origin_samples chain_log::samples_of(crypto::public_key_id const& origin) const {
+	origin_samples ret{origin, {}};
+	for(auto const seq : sample_sequences(origin_head(origin).sequence)) {
+		auto hash = records_.origin_block_hash(origin.data(), seq);
+		if(!hash.empty()) {
+			ret.blocks.push_back(chain_block_id{seq, std::move(hash)});
 		}
 	}
-	return divergence;
+	return ret;
+}
+
+divergence chain_log::find_divergence(origin_samples const& samples) const {
+	return sync::find_divergence(samples.blocks, [&](sequence_number seq) {
+		return records_.origin_block_hash(samples.origin.data(), seq);
+	});
 }
 
 }

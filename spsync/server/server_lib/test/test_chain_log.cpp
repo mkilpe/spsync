@@ -127,34 +127,60 @@ TEST_CASE("chain_log truncate recomputes head", "[unit]") {
 	CHECK(log.head() == b2b.id());
 }
 
-TEST_CASE("chain_log find_divergence", "[unit]") {
+/// the origin's signed assignment of a block
+block_envelope assigned(chain_block const& block, crypto::private_key const& origin, octet_vector const& sid) {
+	block_envelope env{block, origin.id()};
+	env.sign(sid, origin);
+	return env;
+}
+
+// (plan 5.3) two logs hold an origin's history; where they part is found from the
+// samples one of them announces
+TEST_CASE("chain_log samples and divergence between origin histories", "[unit]") {
+	std::string const theirs_db = "chain_log_test_theirs.db";
 	remove_chain_log_db();
-	chain_log log(database::sqlite::create_sqlite_connection(chain_log_db));
+	std::remove(theirs_db.c_str());
+	auto const origin = crypto::generate_private_key();
+	octet_vector const sid = securepath::test::random_octet_vector(8);
+	chain_log ours(database::sqlite::create_sqlite_connection(chain_log_db));
+	chain_log theirs(database::sqlite::create_sqlite_connection(theirs_db));
 
+	// the same three records in both
 	test_block_creator creator;
-	auto b1 = creator.test_user_change();
-	log.append(block_envelope{b1, {}});
-	auto b2 = creator.test_data_change();
-	log.append(block_envelope{b2, {}});
-	auto b3 = creator.test_data_change();
-	log.append(block_envelope{b3, {}});
+	for(int i = 0; i != 3; ++i) {
+		auto const env = assigned(i == 0 ? creator.test_user_change() : creator.test_data_change(), origin, sid);
+		ours.append(env);
+		theirs.append(env);
+	}
+	auto samples = ours.samples_of(origin.id());
+	CHECK(samples.origin == origin.id());
+	REQUIRE(samples.blocks.size() == 3);
+	CHECK(samples.blocks[0] == ours.head());
+	CHECK(samples.blocks[2].sequence == sequence_number{1});
+	CHECK(ours.samples_of(crypto::generate_private_key().id()).blocks.empty());
+	CHECK(ours.find_divergence(theirs.samples_of(origin.id())) == divergence{sequence_number{3}, {}});
 
-	// matching heads: no divergence
-	CHECK(!log.find_divergence({}).is_valid());
-	CHECK(!log.find_divergence({b1.id(), b2.id(), b3.id()}).is_valid());
+	// the origin assigned the fourth sequence to different records: they part there
+	auto forked = creator;
+	ours.append(assigned(creator.test_data_change(), origin, sid));
+	ours.append(assigned(creator.test_data_change(), origin, sid));
+	theirs.append(assigned(forked.test_data_change(), origin, sid));
+	theirs.append(assigned(forked.test_data_change(), origin, sid));
+	auto const div = ours.find_divergence(theirs.samples_of(origin.id()));
+	CHECK(div == divergence{sequence_number{3}, sequence_number{4}});
+	CHECK(div.exact());
+	CHECK(theirs.find_divergence(ours.samples_of(origin.id())) == div);
 
-	// a peer ahead of us is not divergence, we are only behind
-	chain_block_id const ahead{sequence_number{4}, securepath::test::random_octet_vector(16)};
-	CHECK(!log.find_divergence({ahead}).is_valid());
-
-	// a different hash at a sequence we hold is divergence at that sequence
-	chain_block_id const fork2{sequence_number{2}, securepath::test::random_octet_vector(16)};
-	chain_block_id const fork3{sequence_number{3}, securepath::test::random_octet_vector(16)};
-	CHECK(log.find_divergence({fork2}) == sequence_number{2});
-
-	// the lowest divergent sequence wins regardless of the input order
-	CHECK(log.find_divergence({fork3, fork2, b1.id(), ahead}) == sequence_number{2});
-	CHECK(log.find_divergence({fork3, b2.id()}) == sequence_number{3});
+	// a log behind on the origin sees no divergence, only how far it agrees
+	std::string const behind_db = "chain_log_test_behind.db";
+	std::remove(behind_db.c_str());
+	chain_log behind(database::sqlite::create_sqlite_connection(behind_db));
+	for(auto const& env : ours.get({}, sequence_number{2}, 10)) {
+		behind.append(env);
+	}
+	// the samples behind a head of 5 are 4, 3 and 1: the agreement is known down to 1 only
+	CHECK(behind.find_divergence(ours.samples_of(origin.id())) == divergence{sequence_number{1}, {}});
+	CHECK(ours.find_divergence(behind.samples_of(origin.id())) == divergence{sequence_number{2}, {}});
 }
 
 }

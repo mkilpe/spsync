@@ -56,6 +56,9 @@ enum class errc {
 	/// let it go at a history cut (RD9, storage_limits::kept_data_versions): no ticket,
 	/// for good - the version is a superseded one
 	data_pruned,
+	/// a record of an origin server at a sequence the receiver holds under another hash:
+	/// the origin's history parts from the one held (plan 5.3), nothing of it applies
+	origin_diverged,
 	end_of_list
 };
 

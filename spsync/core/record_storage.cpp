@@ -876,6 +876,19 @@ chain_block_id record_storage::last_of_origin(octet_vector const& origin) const 
 	return ret;
 }
 
+octet_vector record_storage::origin_block_hash(octet_vector const& origin, sequence_number origin_seq) const {
+	auto q = impl_->db->prepare(
+		"SELECT hash FROM record WHERE state = :state AND origin = :o AND origin_seq = :os LIMIT 1;");
+	q.bind(":state", std::to_underlying(record_state::in_sync));
+	q.bind(":o", origin);
+	q.bind(":os", static_cast<std::uint64_t>(origin_seq.value));
+	octet_vector ret;
+	if(auto res = q.execute()) {
+		ret = res.value<octet_vector>(0).value_or(octet_vector{});
+	}
+	return ret;
+}
+
 std::vector<octet_vector> record_storage::find_origin_assignments(octet_vector const& origin,
 	sequence_number from, sequence_number to, std::size_t max) const {
 	auto q = impl_->db->prepare(
