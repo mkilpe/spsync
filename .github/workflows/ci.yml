@@ -25,3 +25,49 @@ jobs:
         run: cmake --build --preset default -j"$(nproc)"
       - name: test
         run: ctest --preset default
+
+  # gc_lib and the JNI adapter for Android, arm64-v8a, with the NDK the code is built
+  # against here (r30: its libc++ has flat_map and format; older NDKs lack them). The
+  # dependencies (Botan, sqlite3, asio headers) are built once by our script and cached
+  # by its content and the NDK version; the first run takes a quarter of an hour longer.
+  android-arm64:
+    runs-on: ubuntu-latest
+    env:
+      NDK_VERSION: 30.0.16248370
+      ANDROID_ABI: arm64-v8a
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - name: install host tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake libasio-dev python3
+      - name: install the NDK
+        run: yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --install "ndk;$NDK_VERSION"
+      - name: dependency cache
+        id: deps
+        uses: actions/cache@v4
+        with:
+          path: ~/gc-deps/android
+          key: android-deps-${{ env.NDK_VERSION }}-${{ env.ANDROID_ABI }}-${{ hashFiles('scripts/build-android-deps.sh') }}
+      - name: build the dependencies
+        if: steps.deps.outputs.cache-hit != 'true'
+        run: ANDROID_NDK="$ANDROID_HOME/ndk/$NDK_VERSION" scripts/build-android-deps.sh ~/gc-deps "$ANDROID_ABI"
+      - name: build gc_lib
+        run: ANDROID_NDK="$ANDROID_HOME/ndk/$NDK_VERSION" ./build-android.sh ~/gc-deps "$ANDROID_ABI"
+      - name: build the JNI adapter
+        run: |
+          cmake -S groupchat/android -B build-adapter \
+            -DCMAKE_TOOLCHAIN_FILE="$ANDROID_HOME/ndk/$NDK_VERSION/build/cmake/android.toolchain.cmake" \
+            -DANDROID_ABI="$ANDROID_ABI" -DANDROID_PLATFORM=android-26 -DCMAKE_BUILD_TYPE=Release \
+            -DGC_DEPS="$HOME/gc-deps"
+          cmake --build build-adapter -j"$(nproc)"
+      - name: keep the archives
+        uses: actions/upload-artifact@v4
+        with:
+          name: gc-android-${{ env.ANDROID_ABI }}
+          path: |
+            ~/gc-deps/android/${{ env.ANDROID_ABI }}/libgc_lib.a
+            ~/gc-deps/include/json_manager.hpp
+            build-adapter/libgc_adapter.so
