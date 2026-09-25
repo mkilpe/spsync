@@ -12,6 +12,7 @@
 #include <string>
 #include <functional>
 #include <future>
+#include <spsync/util/move_only_function.hpp>
 
 namespace securepath::groupchat {
 
@@ -43,7 +44,7 @@ public:
 	 * connect that succeeds next (the automatic reconnect keeps trying); disconnect()
 	 * fails the waiting actions with the error. Called on the event loop thread.
 	 */
-	void when_connected(std::move_only_function<void(error const&)>);
+	void when_connected(move_only_function<void(error const&)>);
 
 	/// the awaitable form of when_connected: completes on the loop thread when the
 	/// session is up, throws the error when the connection was stopped

@@ -1,4 +1,5 @@
 #include "comm_test_interface.hpp"
+#include <spsync/util/move_only_function.hpp>
 
 namespace securepath::sync::test {
 
@@ -10,18 +11,18 @@ public:
 	request_handle req_handle{};
 
 	// save per action responses
-	std::deque<std::move_only_function<void()>> event_queue;
-	std::deque<std::move_only_function<fetch_record_sig>> fetch_records_queue;
-	std::deque<std::move_only_function<fetch_data_sig>> fetch_data_queue;
-	std::deque<std::move_only_function<commit_sig>> commit_queue;
-	std::deque<std::move_only_function<upload_sig>> upload_queue;
+	std::deque<move_only_function<void()>> event_queue;
+	std::deque<move_only_function<fetch_record_sig>> fetch_records_queue;
+	std::deque<move_only_function<fetch_data_sig>> fetch_data_queue;
+	std::deque<move_only_function<commit_sig>> commit_queue;
+	std::deque<move_only_function<upload_sig>> upload_queue;
 
 	record_data_store* data_store{};
 	std::vector<data_id> upload_requests;
 	std::vector<data_id> fetch_requests;
 
 	// generic actions which are handled before the above specific ones
-	std::deque<std::move_only_function<void(comm_output&)>> action_queue;
+	std::deque<move_only_function<void(comm_output&)>> action_queue;
 };
 
 comm_test_interface::comm_test_interface(sync::progress& p, record_storage& s, record_data_store* data)
@@ -40,19 +41,19 @@ void comm_test_interface::set_output(comm_output& output) {
 	impl_->output = &output;
 }
 
-void comm_test_interface::add_fetch_records_response(std::move_only_function<fetch_record_sig> f) {
+void comm_test_interface::add_fetch_records_response(move_only_function<fetch_record_sig> f) {
 	impl_->fetch_records_queue.push_back(std::move(f));
 }
 
-void comm_test_interface::add_fetch_data_response(std::move_only_function<fetch_data_sig> f) {
+void comm_test_interface::add_fetch_data_response(move_only_function<fetch_data_sig> f) {
 	impl_->fetch_data_queue.push_back(std::move(f));
 }
 
-void comm_test_interface::add_commit_record_response(std::move_only_function<commit_sig> f) {
+void comm_test_interface::add_commit_record_response(move_only_function<commit_sig> f) {
 	impl_->commit_queue.push_back(std::move(f));
 }
 
-void comm_test_interface::add_upload_data_response(std::move_only_function<upload_sig> f) {
+void comm_test_interface::add_upload_data_response(move_only_function<upload_sig> f) {
 	impl_->upload_queue.push_back(std::move(f));
 }
 
@@ -68,7 +69,7 @@ record_data_store* comm_test_interface::data() const {
 	return impl_->data_store;
 }
 
-void comm_test_interface::add_action(std::move_only_function<void(comm_output&)> f) {
+void comm_test_interface::add_action(move_only_function<void(comm_output&)> f) {
 	impl_->action_queue.push_back(std::move(f));
 }
 

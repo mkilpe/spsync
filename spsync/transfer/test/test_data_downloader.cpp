@@ -14,6 +14,7 @@
 #include <fstream>
 #include <map>
 #include <mutex>
+#include <spsync/util/move_only_function.hpp>
 
 namespace securepath::sync {
 namespace {
@@ -100,7 +101,7 @@ public:
 		std::size_t n = 0;
 		bool more = true;
 		while(more && n != max) {
-			std::move_only_function<void()> next;
+			move_only_function<void()> next;
 			{
 				std::unique_lock lock{mutex_};
 				more = !answers_.empty();
@@ -118,7 +119,7 @@ public:
 	}
 
 private:
-	void answer(std::unique_lock<std::mutex>& lock, std::move_only_function<void()> f) {
+	void answer(std::unique_lock<std::mutex>& lock, move_only_function<void()> f) {
 		if(hold) {
 			answers_.push_back(std::move(f));
 		} else {
@@ -151,7 +152,7 @@ public:
 private:
 	record_data_store& origin_;
 	std::mutex mutex_;
-	std::deque<std::move_only_function<void()>> answers_;
+	std::deque<move_only_function<void()>> answers_;
 };
 
 using download_log = test::transfer_log;

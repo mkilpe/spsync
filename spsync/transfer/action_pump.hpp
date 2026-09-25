@@ -4,6 +4,7 @@
 #include <functional>
 #include <mutex>
 #include <vector>
+#include <spsync/util/move_only_function.hpp>
 
 namespace securepath::sync {
 
@@ -17,7 +18,7 @@ namespace securepath::sync {
  */
 class action_pump {
 public:
-	using action = std::move_only_function<void()>;
+	using action = move_only_function<void()>;
 
 	/// collect() returns the actions of the next round; it takes the owner's lock itself
 	template<typename Collect>

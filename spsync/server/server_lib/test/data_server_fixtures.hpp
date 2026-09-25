@@ -17,6 +17,7 @@
 #include <chrono>
 #include <mutex>
 #include <thread>
+#include <spsync/util/move_only_function.hpp>
 
 /// the servers of the record data tests and a client's part against them
 namespace securepath::sync::test {
@@ -95,7 +96,7 @@ public:
 inline ticket_source signed_tickets(crypto::private_key signer, std::vector<data_endpoint> holders, protocol::storage_id sid
 	, crypto::public_key_id client, std::chrono::seconds validity = std::chrono::seconds{600}) {
 	return [signer, holders, sid, client, validity](data_descriptor const& d, data_right right
-		, std::move_only_function<void(util::result<data_grant>)> cb) {
+		, move_only_function<void(util::result<data_grant>)> cb) {
 		data_ticket ticket{sid, d, client, right, clock_type::now() + validity};
 		ticket.sign(signer);
 		cb(util::result<data_grant>{data_grant{std::move(ticket), holders}});
@@ -106,7 +107,7 @@ inline ticket_source signed_tickets(crypto::private_key signer, std::vector<data
 inline ticket_source tickets_of(storage_server& records, std::shared_ptr<storage> const& storage, network::context& record_context
 	, std::vector<data_endpoint> const& servers, crypto::public_key_id const& member) {
 	return [&records, storage, &record_context, servers, member](data_descriptor const& d, data_right right
-		, std::move_only_function<void(util::result<data_grant>)> cb) {
+		, move_only_function<void(util::result<data_grant>)> cb) {
 		ticket_issuer issuer{servers, records.availability(), std::chrono::seconds{600}};
 		auto issued = issuer.issue(storage->id(), storage->committed_data(d.manifest_digest), member
 			, static_cast<std::uint32_t>(right), record_context.private_data().my_private_key(), clock_type::now());

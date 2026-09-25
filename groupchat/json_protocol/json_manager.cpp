@@ -3,6 +3,7 @@
 #include "json_helpers.hpp"
 
 #include <groupchat/core/groupchat.hpp>
+#include <securepath/util/task.hpp>
 #include <groupchat/core/events.hpp>
 #include <groupchat/core/version.hpp>
 #include <spsync/client/events.hpp>
@@ -30,8 +31,8 @@
 
 namespace securepath::groupchat::json_protocol {
 
-void initialise_logging() {
-	log::backend::add_backend<log::backend::file_output>("file", "gc.log");
+void initialise_logging(std::string const& file) {
+	log::backend::add_backend<log::backend::file_output>("file", file);
 	LOG_TRACE("logging initialised");
 }
 
@@ -56,6 +57,12 @@ public:
 	impl(event_system::event_loop& l, event_callback func)
 	: event_handler(l)
 	, groupchat(*this, groupchat_config{})
+	, notify(std::move(func))
+	{}
+
+	impl(event_system::event_loop& l, event_callback func, std::string path, std::string root)
+	: event_handler(l)
+	, groupchat(*this, groupchat_config{std::move(path), std::move(root)})
 	, notify(std::move(func))
 	{}
 
@@ -340,6 +347,13 @@ public:
 json_manager::json_manager(event_callback func)
 : loop_(std::make_unique<event_system::single_thread_event_loop>())
 , impl_(std::make_unique<impl>(*loop_, std::move(func)))
+{
+	LOG_TRACE("json_manager ctor {}", static_cast<void const*>(this));
+}
+
+json_manager::json_manager(event_callback func, std::string path, std::string root_public_key_file)
+: loop_(std::make_unique<event_system::single_thread_event_loop>())
+, impl_(std::make_unique<impl>(*loop_, std::move(func), std::move(path), std::move(root_public_key_file)))
 {
 	LOG_TRACE("json_manager ctor {}", static_cast<void const*>(this));
 }

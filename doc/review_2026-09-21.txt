@@ -1,0 +1,378 @@
+Review of the record data work (record_data.txt RDS 1-10), 2026-09-21
+=====================================================================
+
+Scope: commits bdeba63^..fc925ef plus 30121b1 (RDS 8) - about 9.5k lines of
+production code and 7.7k lines of tests in core/data, comm, engine, client,
+server_lib and protocol. Asked for: correctness, quality, duplication,
+unnecessary complexity.
+
+Method: five areas (core data layer, comm transfer machinery, engine + client,
+data role of the server, record role + protocol). Three were read by independent
+reviewers (core, comm, data role), two by the author of the code (engine, record
+role); a mechanical pass checked the style rules over every added line. Every
+finding below was checked against the code before it was written down; the ones
+marked "fixed" have a test that failed before the fix unless noted. Markers as in
+the plans: + done, * open, - not doing / note.
+
+Style rules (mechanical pass): production code has no continue, no break outside
+a switch, no const_cast, no function over 50 lines, no built-in member without an
+initialiser. Members before functions only in the packet structs of
+data_protocol.hpp and in data_server_params, which follow the older protocol
+headers and storage_server_params. One real miss: storage_limits (fixed).
+Tests: 45 TEST_CASE bodies are over 50 lines, see T2.
+
+
+Fixed
+-----
+
++ F1  a member could make a data server DELETE its chunks (found twice,
+      independently). read_piece / serve_piece checked `offset + size <=
+      chunk size` with both values from the wire: an offset near 2^64 wraps,
+      the check passes, the file layer (which had the safe form) returns
+      nothing, and the store took "nothing" for "chunk lost": file removed,
+      have bit cleared, in_sync -> download_pending. One download_data_piece
+      per chunk, with any valid download ticket, emptied a complete copy; the
+      availability table kept saying complete. Now:
+      data_descriptor::chunk_holds_range (no addition), used by both stores;
+      and a read that fails drops the chunk only when the file is absent or
+      shorter than the descriptor says (drop_if_lost) - a refused range or a
+      file that does not open (descriptors, the disk: F1 also covers "EMFILE
+      made the only copy invalid for good") says nothing about the chunk.
+      Tests: record data store "chunk pieces / reading", data connection
+      "download" (the hostile packet, then the chunk is still served).
++ F2  descriptor arithmetic wrapped. chunk_count() = (enc_size + per_chunk -
+      1) / per_chunk: enc_size near 2^64 gave 0 chunks, which passed
+      valid_data_descriptor (0 <= max_data_chunks) - such a record committed,
+      an empty manifest matched it, a bitmap of nothing was "complete", and on
+      a data server the negative int64 in the sum of enc_size undid the quota.
+      Also accepted: a last chunk of a tag or less, which can never decrypt.
+      Now: chunk_count rounds up without adding; usable_data_descriptor (at
+      least one and at most max_data_chunks chunks, last chunk more than its
+      tag) is part of valid_data_descriptor, is what a data server's
+      storable_descriptor builds on, and guards every place that sizes a
+      bitmap from a descriptor - data_state_table::ensure (throws),
+      record_data_store::open / register_data, and record_storage's
+      reference_data: a CLIENT handed such a record keeps the record and
+      indexes no data for it (it used to depend on the server having checked).
+      Test: chain_sync "data descriptor bounds" (both commit paths).
++ F3  auto fetch asked again for ever. A download refused with unknown_data
+      went back to deferred - which is exactly what mark_auto_fetch turns into
+      download_pending on every record event: one ticket request per incoming
+      record per such data (8 instead of 2 in the test). The refusal is
+      remembered for the connection like any failed download, and auto fetch
+      skips what was refused. Test: engine "fetches record data / auto fetch
+      does not ask again for what the server refused".
++ F4  closing the data channel failed over. close() failed the opens that
+      were out as "transport failure", which is what moves an open on to the
+      next holder: a close made NEW connections, the next data server got a
+      manifest (and reserved quota) nobody waited for - in the test the upload
+      went through to the second server after close(). A shutdown now fails
+      calls as final. Test: data server "data channel close does not fail
+      over" (checked to fail without the fix).
++ F5  action_pump was not exception safe: a collect() or an action that threw
+      left running_ set, and no transfer of that storage ever ran again
+      (reset() did not help). A guard gives the pump up when the runner is
+      unwound (std::uncaught_exceptions compared as counts, the idiom of
+      database::transaction, so a run during another unwind is fine). Test: new
+      comm/test/test_action_pump.cpp (also the first direct test of "rounds
+      never nest").
++ F6  local store failures escaped from the transfer machines. In the
+      downloader plan() and take_piece() (sqlite, file append, rename) ran
+      inside the answer handlers after --outstanding: an exception skipped the
+      bookkeeping and reached the link's packet handler, which logged "bad
+      packet" and closed the link every other transfer shares; with the last
+      piece it could end as a "success" of an incomplete data. Now the
+      download fails with the store's error; start_queued and begin_chunk do
+      not throw into the pump's caller either (both machines). Test: data
+      downloader "stopped half way / the local store fails".
++ F7  a received chunk was verified by hashing the pieces in memory while the
+      staged FILE is what gets adopted: a write that failed half way left
+      partial bytes, a piece sent again landed behind them, the hash was right
+      and a corrupt chunk was adopted and announced. append discards the chunk
+      when the write throws, finish() compares the staged file's size. Test:
+      record data store "chunk pieces / receiving".
++ F8  record server: a sweep opened and destroyed a storage once PER DATA.
+      with_storage acquired and released around every committed_data question,
+      so a whole view of n data of a storage nobody had open built the storage
+      (sqlite, chain_sync, heads) n times on a connection's strand; an
+      exception in between left the storage open for good. storage_pass opens
+      each storage once per pass and gives it back in its destructor. The
+      sweep timer now also survives a sweep that throws (it would have
+      stopped sweeping silently).
++ F9  handles and row keys. record_data.key had no AUTOINCREMENT: after a
+      rollback + sweep the next data got the key of the removed row, and a
+      handle that outlived its row read and WROTE the other data's state. New
+      tables are autoincrement, and a handle addresses its row by data id.
+      Also: a handle's cached plaintext chunk survived an eviction or prune
+      made through the store or another handle (store-wide drop counter now
+      invalidates it); evict turned every state but upload_pending/invalid
+      into removed - undoing the tombstone of a prune (pruned again and
+      announced again at the next cut), cancelling a wanted download, marking
+      a never held data removed: only a held data becomes removed now. Test:
+      record data store "evictions and stale handles".
++ F10 a local prune could hit a data that was being fetched: the downloader
+      planned its chunks once, the rest landed in a pruned row with nothing to
+      ever collect them. prune_superseded_data leaves a data alone while it is
+      on its way in either direction (in_transfer).
++ F11 retry policy: invalid_client_key (the data server is not the one the
+      grant names) was retried every 60 s for ever; the server's retry_after
+      hint was believed unbounded (uint32 seconds) and also doubled the
+      backoff of later, unrelated failures. Deny list extended, hint capped
+      (transfer_retry_config::max_hint, 2 h), hints leave the backoff alone.
+      Tests: "retryable transfer errors", "transfer retry hint".
++ F12 data links were keyed by host:port only: a later grant naming another
+      key for the same address reused the link authenticated against the first
+      grant's key. Keyed by address and key now.
++ F13 data_server: the impl called back into the outer object through a raw
+      owner_ pointer that was never cleared (the impl can outlive it: sessions
+      and handlers hold the server), only because seven functions lived on the
+      wrong side of the pimpl; data_server was implicitly copyable. Functions
+      moved into the impl, pointer gone, copies deleted. find/release look a
+      store up directly instead of copying the map of all stores, the load
+      signals are computed once per announcement instead of twice.
++ F14 small ones: open_upload / open_replica were the same 20 lines (one
+      private open()); chunk_kept returned a result that could not fail and
+      replica_progress was documented as keeping the expiry off a pull while
+      it ran once, at the end (now replica_pulled, comment says what really
+      keeps the expiry off); record_server_link left ticket callbacks
+      unanswered when it was closed or destroyed; a link started between the
+      closing_ check and close_links() connected anew with nobody left to
+      close it; data_state_table ran its schema check for every stored change
+      (existing_schema constructor for the storage's hot paths); the class
+      comment of server_data_store had ended up on storable_descriptor;
+      storage_limits had its members before operator== (style rule).
+
+
+Robustness - fixed 2026-09-23
+-----------------------------
+
++ O1  liveness. A data link (transfer/net_data_channel data_link) now watches
+      itself: every half silence limit (default 60 s, net_data_channel's
+      fourth parameter) it checks, on its own strand, whether calls are out
+      and nothing was received for the limit - then it is given up: closed
+      and its calls failed as a transport failure, so an open moves on to the
+      next holder (test: "data channel gives a silent holder up", a mute
+      acceptor first in the holder list, the real server second). A ticket
+      request has the same limit: each attempt arms a timer, whoever answers
+      first - the record server or the timer - wins (attempt::first_answer),
+      a late ticket is dropped (test: "a ticket nobody answers" ->
+      securepath::errc::timeout). The data server's link to a record server
+      does the same for its replica ticket requests (record_server_link:
+      overdue requests fail with timeout and the link is given up, which the
+      owner's reconnect timer answers). The container of calls waiting for
+      their answer is transfer/pending_calls.hpp now, shared by both links.
+      The closes from timers had to go onto the connection's strand:
+      securepath's encrypted_connection got a protected post_on_strand()
+      (submodule edit, needs its own commit there), because close() from any
+      other thread waits for the strand - which the only io thread of a small
+      client cannot do (that is O3's deadlock in general form). The channel's
+      close() posts the links' shutdowns the same way and returns at once.
++ O2  retry vs reset. comm keeps a connected_ flag under upload_mutex_
+      (on_connected / on_disconnected): a transfer that ends while
+      disconnected is not tried again (the engine queues it after the
+      reconnect), and a ticket asked while disconnected is answered at once
+      with invalid_state instead of going into a connection that is not there
+      (test "comm upload data / the real channel is made when none is given"
+      expects that now; "comm retries transfers" tells comm it is connected).
+      The race the review described - a retry firing after the reset and its
+      ticket request lost - cannot leave an entry active any more: the ticket
+      fails at once, the transfer ends, nothing is retried.
++ O3  detach. network_connection::detach takes the comm's nodes out under the
+      lock and destroys them after it; with O1's posted closes ~comm blocks
+      on nothing either way. Not reproduced by a test: the deadlock needed a
+      record packet arriving on the one io thread at the moment of the
+      detach, which the fixture cannot arrange deterministically; the fix is
+      structural.
++ O4  staged pieces and sessions. data_connection_limits: max_staged_bytes
+      (256 MiB) over every upload of the connection - a chunk that would take
+      it over is not begun (invalid_data_chunk) - next to the 32 chunks per
+      upload; a chunk the server holds already is not staged again (the
+      store's begin_chunk refuses it: the F1 kind of waste closed on the
+      upload side); data_server_params::max_sessions_per_key (64,
+      --max_sessions_per_key): the connection over the cap is refused at its
+      hello (data_server_context::admit / leave). Tests: "data connection
+      bounds what a client keeps open", "data server caps the connections of
+      a key".
++ O5  the manifest per chunk. The record data table keeps the manifest as one
+      blob of digests (column `digests`; a table from before it moves its
+      DER manifests over on open, test "data state table manifest
+      migration"), and data_state_table::chunk_digest reads one digest with
+      substr: begin_chunk on both sides decodes nothing, the server's
+      no_such_upload check is has_manifest. data_manifest::octets /
+      from_octets.
++ O6  per connection state. The server's uploads_ / downloads_ entries carry
+      last_used: entries idle for transfer_idle_limit (10 min) go before
+      every request, staged pieces with them, and the least recently used
+      goes when max_transfers (256) is reached. The client channel's routes
+      the same (route_idle_limit, max_routes) when a route is remembered.
++ O7  where the rounds run. transfer_queue takes an asio::io_context: with
+      one, pump() posts the round and enqueue() returns at once - the engine
+      thread (mutex held) and the answering strand no longer read chunks and
+      send packets; comm and the replicator pass theirs, the unit tests run
+      inline as before. The owner's destructor close()s the queue, so a
+      round posted for a queue that went does nothing (test "data uploader
+      runs on the io context").
++ O9  contracts. data_uploader / data_downloader say what holds now: a done
+      whose round was collected before reset() may still be made after it
+      (the owner keeps its own idea of what is connected), the store is
+      called under the lock from the answering thread, and with an io
+      context the rounds run there.
+- O10 stream_source takes the group key before streaming and the record is
+      made with the key current afterwards: a rotation in between gives a
+      record under the new key naming data under the old one. Handled (the
+      data header carries its key_seq) - noted because a removed member's key
+      still opens that data; membership checks are phase 7 anyway.
+- O11 an oversized metadata is detected (record_too_big) only after the whole
+      source was encrypted. Cheap to check first once somebody minds.
+- O8  closed with D3 (2026-09-22).
+
+Duplication - fixed 2026-09-22
+------------------------------
+
++ D1  data_uploader / data_downloader (301 + 350 lines, about half the same)
+      are 122 + 182 lines over transfer/transfer_queue.hpp (307) and
+      transfer/piece_cursor (100): piece_cursor is the value type that hands out
+      the pieces (chunks in order, at most piece_size each, the short last
+      chunk and piece), unit tested on its own (test_piece_cursor.cpp - the
+      last-piece cases were only reachable through the whole machines before);
+      transfer_queue<Transfer> owns the queue, the active map, the generation,
+      the notifications, the pump, enqueue/reset/queued/in_flight, the answer
+      preamble and tail (answered/opened/piece_answered), fill_window,
+      finish_if_done, local() and read_store(), with four hooks a direction
+      fills in: start (the opening action), begin_chunk (the downloader's
+      staged file), piece_action, outcome (the downloader's data_not_held).
+      The two configs are one transfer_config (the old names are aliases),
+      the callback types one pair. The downloader's idle pass in collect()
+      (C3) is gone: finish_if_done runs after every fill with an erase safe
+      iteration, so collect() is shared as well. F5/F6/O2-class fixes are now
+      in one place.
++ D2  net_data_channel: data_link has one generic call<Reply>(make, handler)
+      over one map of pending calls (a reply variant in a util::result, the
+      transport flag next to it), one take, one fail_all loop, one templated
+      reply handler; the channel has one open_transfer / try_holder /
+      remember algorithm over an `opening<Result>` (the right, the "nobody"
+      error, the moves-on predicate, the route map, the call that opens) and
+      one find_route for send_piece / fetch_piece; the reply conversions
+      (refusal(), fetched(), the two open_*_at) are the only per direction
+      code left. `struct upload` used for downloads is `route` (C4).
++ D3  server_lib/guarded.hpp: one guarded(what, sid, work) that turns what
+      escapes into the error the answer carries; the four data_connection
+      handlers, connection's request_data_ticket and peer_connection's
+      request_replica_ticket use it, the ticket checks inside it - a throwing
+      key lookup answers invalid_data_ticket now instead of ending the
+      connection (O8 closed). data_connection's `struct download` is beside
+      `struct upload` where it belongs.
++ D4  core: record_storage::unreferenced_data() is one query (key NOT IN the
+      data_refs), remove_unreferenced_data() removes those rows in one
+      transaction, and record_data_store::remove(ids) is what the client's
+      sweep and the server store's release / expire use - the predicate sweep
+      with n+1 queries is gone; register_created / register_adopted are one
+      register_held(stage, result, state, replace) with its table writes in
+      transactions (data_state_table::transaction()); read_file is
+      read_file_piece(0, size); chunk_crypto's counter and digest_buffer's
+      u32/u64 share util::append_big_endian; seconds_since_epoch lives once
+      in core/types.hpp; the descriptor's functions are in
+      data_descriptor.cpp (C6); superseded_rows() serves both the query and
+      the prune without a second lookup per row.
++ D5  wire_modes serialises itself (and gives its limits()): create_storage,
+      response_sequence_number, peer_heads and push_records carry one
+      `modes` field instead of six spelled out - a wire change (a nested
+      sequence), everything in tree.
++ D6  peer_connection::ready_as(data_server_link): push / announce_heads /
+      announce / release / replicate are one line each.
++ D7  engine: request_uploads / request_downloads are request_transfers_of
+      (state, map, refused set, comm call); is_error(optional<error>, errc)
+      replaces the spelled out code comparisons; fetch_object_data reads and
+      verifies the record once and hands the result to plan_adoption and
+      fetch_change_data.
+- D8  ticket_issuer: shared refusal() already.
+
+Open - complexity and dead code
+-------------------------------
+
++ C1  (2026-09-24) server_data_store::store_chunk and read_chunk are gone -
+      the whole-chunk path from before the wire pieces had no production
+      caller and was a second "accept a chunk" path to keep consistent (the
+      O4 refusal of a held chunk lived only in the piece path). Tests seed
+      through the piece path now (data_server_fixtures store_whole_chunk,
+      idempotent for a held chunk) and read through chunks().
++ C2  (2026-09-24) request_data / response_data (tags 7 of both typelists,
+      from the first server commit: a "bytes [start, end] of a record" fetch
+      from before the record data design) and their handlers are gone; the
+      server always answered not_implemented, the client ignored it.
++ C3  gone with D1: one collect().
++ C4  `struct upload` as the channel's download route: done with D2 (route);
+      (2026-09-24) commit_staging(stage, id, replace) says which of the two
+      the caller means instead of deciding by whether the directory exists.
++ C5  (2026-09-24) server_data_store keeps used_bytes and uploads_in_progress
+      as counters (atomic; read from the tables once when the store opens,
+      adjusted where they change: open reserves, drop frees, touch / forget
+      count an activity row in and out) - a completed data no longer costs
+      a sum over record_data and a count over data_activity per open store.
+      Test "server data store counters" (also across a reopen).
++ C6  the stale client_sync.cpp comment is gone; the descriptor's functions
+      are in data_descriptor.cpp (with D4).
+
+
+Open - tests
+------------
+
++ T1  (2026-09-22) spsync/test/test_record_data.hpp (header only, so the
+      core and comm tests use it without linking spsync_test) holds
+      test_group_key, test_descriptor, fresh_database, client_data /
+      make_client_data, stored_data / store_data, read_all, transfer_log (one
+      for uploads and downloads, with reports_of / ended_with / count) and
+      is_error over error / net_error / optional<error> / result;
+      server/server_lib/test/data_server_fixtures.hpp holds all_in_one (with
+      all_in_one_params, also the replicas of the replication test),
+      signed_tickets, tickets_of, upload, holds, complete_holders. What the
+      files keep are one line wrappers with their own defaults. Was: helpers
+      in copies - client_data + make_data byte identical in
+      test_data_connection.cpp and test_data_store.cpp (two more variants in
+      the downloader and replication tests); read_all x3; fresh_database x3;
+      test_descriptor x2; test_group_key x2; upload_log / download_log near
+      copies in comm and server tests; is_error in four forms although
+      util::check_result_error exists; the fixtures all_in_one / replica,
+      upload_to / upload and the ticket lambda / tickets_of of
+      test_data_announce.cpp and test_data_replication.cpp do the same job.
+* T2  45 TEST_CASE bodies over 50 lines; worst: "engine fetches record data"
+      (233), transfer_with_interruptions (122, a helper function), "client_sync
+      transfers record data" (109), "record_storage data references" (107).
+      The existing suites have the same habit; SECTIONs into test cases would
+      do most of it.
+* T3  16 fixed sleeps in the new tests (about 10 s a run), most of them
+      "nothing must happen" waits. Where the machine has a fake channel or
+      clock the wait can go.
+* T4  every fixed test port lies in the ephemeral range (todos.txt "tests").
+      (T2-T4 fixed 2026-09-25. T2: measured by the longest linear segment - the
+      setup before the first SECTION or one SECTION body - 52 test cases were
+      over 50 lines; fixtures and step helpers in the files' anonymous
+      namespaces brought every one under, assertions kept. T3: test_server::run
+      listens on return (spsync_server::run starts the roles synchronously), so
+      the 16 one-second waits after it went; two waits became condition waits;
+      17 sleeps remain, timing checks that nothing happens and polling loops.
+      T4: the test servers take slots of spsync/test/test_ports.hpp, 25700 and
+      up; a held port fails that one test only.)
+
+
+Looked at closely and found sound
+---------------------------------
+
+Chunk crypto (per data HKDF key, counter IV never reused, AAD = nonce + chunk
+number, truncation and reordering covered by the manifest digest and plain_size
+inside the authenticated record, the fixed nonce encryptor of adopt_content
+keeps only output that hashes to the wanted manifest); Padme padding; have_bitmap
+bounds and normalisation of foreign octets; incoming_chunk::append (no overflow,
+gaps and overruns lose the chunk); temp + rename writes under the store mutex;
+lock order handle -> store; the ticket gate (signature over every used field,
+issuer, member == connection key, right, storage id, chunk bound; piece packets
+only for (sid, data) opened on the same connection, the store comes from that
+entry; replicate tickets bound to a key, not obtainable by members, not
+charged); the quota reservation (check and register under one mutex, a resume
+never refused, release/expiry free it); transfer_budget; the window accounting
+of both transfer machines (cannot go negative or stall by itself); the
+generation counters (needed, and they do protect); piece order; every link call
+answered exactly once; the engine's connection lifecycle (in flight maps and
+failed sets cleared on the right side); writer.finish + record creation under
+the engine mutex; request_data_ticket only for attached storages;
+superseded_data_below against the documented rule; modes_match / limits_or.

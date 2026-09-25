@@ -1,4 +1,4 @@
 [submodule "submodules/securepath"]
 	path = submodules/securepath
-	url = git@github.com:mkilpe/securepath.git
+	url = https://github.com/mkilpe/securepath.git
 	branch = main

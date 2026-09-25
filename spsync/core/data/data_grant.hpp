@@ -6,6 +6,7 @@
 
 #include <functional>
 #include <vector>
+#include <spsync/util/move_only_function.hpp>
 
 namespace securepath::sync {
 
@@ -25,6 +26,6 @@ struct data_grant {
  * over the record server connection comes with the ticket issuing (RDS 5).
  */
 using ticket_source = std::function<void(data_descriptor const&, data_right
-	, std::move_only_function<void(util::result<data_grant>)>)>;
+	, move_only_function<void(util::result<data_grant>)>)>;
 
 }

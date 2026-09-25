@@ -11,6 +11,7 @@
 #include <iostream>
 #include <limits>
 #include <string_view>
+#include <spsync/util/move_only_function.hpp>
 
 namespace securepath::sync::test {
 
@@ -59,7 +60,7 @@ bool test_sync_server_client::handle_events() {
 		}
 	}
 	// take the events out in case handling an event adds another event
-	std::deque<std::move_only_function<void()>> events;
+	std::deque<move_only_function<void()>> events;
 	events.swap(events_);
 
 	for(auto&& event : events) {

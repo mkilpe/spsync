@@ -12,6 +12,7 @@
 #include <functional>
 #include <memory>
 #include <vector>
+#include <spsync/util/move_only_function.hpp>
 
 namespace securepath::sync {
 
@@ -23,7 +24,7 @@ struct data_replicator_hooks {
 	/// the grant of a pull - a ticket with the right replicate and the holders to use it
 	/// at - asked for when the pull starts; answered once, from any thread
 	std::function<void(protocol::storage_id const&, data_descriptor const&
-		, std::move_only_function<void(util::result<data_grant>)>)> ticket;
+		, move_only_function<void(util::result<data_grant>)>)> ticket;
 
 	/// a copy is complete here (RD13): the record servers are told
 	std::function<void(protocol::storage_id const&, data_id const&)> complete;

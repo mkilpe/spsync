@@ -1,46 +1,30 @@
-*.[oa]
-*.pyc
-*.swp
-*.dblite
-local_config.py
-bin
-src/bin
-*-workspace
-*.exe
-*.cc
-*.os
-*.so
-*.la
-*.depends
-src/build
-src/html
-src/latex
-src/tmp
+# build trees (out-of-source only; see CMakePresets.json and build-android.sh)
+build/
+build-*/
+build_*/
+compile_commands.json
 
-qrc_*.cpp
-
-android-build
+# stray in-source cmake leftovers (an old in-source build left Makefiles in the source
+# directories; none is tracked)
 CMakeCache.txt
-Makefile
-CMakeFiles
+CMakeFiles/
 cmake_install.cmake
+CTestTestfile.cmake
+Testing/
 *_autogen/
-src/cmake.config
+Makefile
+
+# leftovers of the old in-source build system (bin/, lib/ and the local cmake.config)
+/bin/
+/lib/
 cmake.config
 
-external_libs
-
-CMakeDoxyfile.in
-CMakeDoxygenDefaults.cmake
-Doxyfile.Doxygen
-
-.asciidoctor
-
-
-build*/
-compile_commands.json
+# editors and scratch
+*.swp
+*.log
+*.sublime-project
+*.sublime-workspace
 .cache/
-debug.log
 
 # test binaries run from the repo root leave these behind (all regenerated;
 # test_keys/*.db stay tracked - only root level databases are ignored)
@@ -51,7 +35,8 @@ debug.log
 /test-s2s-*/
 /client_*/
 /gc_test_c*/
-/spsync_server.log
+/gc_test_server/
+/json_test_server/
 
 # asciidoctor-diagram intermediate image cache
 doc/diagrams/diag-*.png

@@ -1,0 +1,27 @@
+name: ci
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+jobs:
+  # Full build and test on current Fedora (GCC 16, Botan 3.9): the toolchain
+  # spsync is developed with. Ubuntu's Botan is too old for securepath's crypto,
+  # and everything here needs it. The suites run one at a time: they bind fixed
+  # ports and share database file names in the working directory.
+  linux-gcc-latest:
+    runs-on: ubuntu-latest
+    container: fedora:44
+    steps:
+      - name: install dependencies
+        run: dnf install -y gcc-c++ cmake make git asio-devel botan3-devel sqlite-devel ncurses-devel
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - name: configure
+        run: cmake --preset default
+      - name: build
+        run: cmake --build --preset default -j"$(nproc)"
+      - name: test
+        run: ctest --preset default

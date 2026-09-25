@@ -126,7 +126,7 @@ void comm::handle(protocol::response_commit const& p) {
 }
 
 void comm::handle(protocol::response_data_ticket const& p) {
-	std::move_only_function<void(util::result<data_grant>)> callback;
+	move_only_function<void(util::result<data_grant>)> callback;
 	{
 		std::unique_lock lock{mutex_};
 		auto it = ticket_requests_.find(p.cid);
@@ -143,7 +143,7 @@ void comm::handle(protocol::response_data_ticket const& p) {
 }
 
 ticket_source comm::tickets() {
-	return [this](data_descriptor const& d, data_right right, std::move_only_function<void(util::result<data_grant>)> cb) {
+	return [this](data_descriptor const& d, data_right right, move_only_function<void(util::result<data_grant>)> cb) {
 		// registered before the request leaves: the answer may be quicker than this thread
 		std::unique_lock lock{mutex_};
 		if(!connected_) {
@@ -158,7 +158,7 @@ ticket_source comm::tickets() {
 }
 
 void comm::fail_ticket_requests(error const& err) {
-	std::map<request_handle, std::move_only_function<void(util::result<data_grant>)>> requests;
+	std::map<request_handle, move_only_function<void(util::result<data_grant>)>> requests;
 	{
 		std::unique_lock lock{mutex_};
 		requests.swap(ticket_requests_);

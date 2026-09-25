@@ -72,14 +72,14 @@ struct chat_connection::impl
 
 	/// the actions waiting for the session (when_connected): all of them get this outcome
 	void run_waiters(error const& outcome) {
-		std::vector<std::move_only_function<void(error const&)>> actions;
+		std::vector<move_only_function<void(error const&)>> actions;
 		actions.swap(waiters);
 		for(auto& action : actions) {
 			action(outcome);
 		}
 	}
 
-	void when_connected(std::move_only_function<void(error const&)> action) {
+	void when_connected(move_only_function<void(error const&)> action) {
 		if(net.is_connected()) {
 			action(error{});
 		} else {
@@ -249,7 +249,7 @@ struct chat_connection::impl
 	event_system::timer_handle reconnect_timer{};
 	std::chrono::milliseconds reconnect_delay{initial_reconnect_delay};
 	/// actions waiting for the next successful connect (when_connected)
-	std::vector<std::move_only_function<void(error const&)>> waiters;
+	std::vector<move_only_function<void(error const&)>> waiters;
 
 	std::flat_map<sync::storage_id, std::unique_ptr<channel>> channels;
 	sync::network_connection net;
@@ -276,7 +276,7 @@ bool chat_connection::is_connected() const {
 	return impl_->net.is_connected();
 }
 
-void chat_connection::when_connected(std::move_only_function<void(error const&)> action) {
+void chat_connection::when_connected(move_only_function<void(error const&)> action) {
 	impl_->when_connected(std::move(action));
 }
 

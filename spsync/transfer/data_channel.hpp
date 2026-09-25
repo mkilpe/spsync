@@ -7,6 +7,7 @@
 
 #include <functional>
 #include <optional>
+#include <spsync/util/move_only_function.hpp>
 
 namespace securepath::sync {
 
@@ -23,8 +24,8 @@ namespace securepath::sync {
 struct data_channel {
 	virtual ~data_channel() = default;
 
-	using open_callback = std::move_only_function<void(util::result<have_bitmap>)>;
-	using piece_callback = std::move_only_function<void(std::optional<error>)>;
+	using open_callback = move_only_function<void(util::result<have_bitmap>)>;
+	using piece_callback = move_only_function<void(std::optional<error>)>;
 
 	/**
 	 * Open the upload of a data, or resume it: the holder checks the manifest against
@@ -56,8 +57,8 @@ struct download_info {
 struct data_download_channel {
 	virtual ~data_download_channel() = default;
 
-	using download_callback = std::move_only_function<void(util::result<download_info>)>;
-	using fetch_callback = std::move_only_function<void(util::result<octet_vector>)>;
+	using download_callback = move_only_function<void(util::result<download_info>)>;
+	using fetch_callback = move_only_function<void(util::result<octet_vector>)>;
 
 	/// open the download of a data at a holder that has it, or some of it
 	virtual void open_download(data_descriptor const&, download_callback) = 0;

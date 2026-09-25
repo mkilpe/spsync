@@ -4,6 +4,7 @@
 
 #include <memory>
 #include <vector>
+#include <spsync/util/move_only_function.hpp>
 
 namespace securepath::sync::test {
 
@@ -25,14 +26,14 @@ public:
 	using commit_sig = result<chain_block>(record_handle);
 	using upload_sig = std::optional<error>(data_id const&);
 
-	void add_fetch_records_response(std::move_only_function<fetch_record_sig>);
+	void add_fetch_records_response(move_only_function<fetch_record_sig>);
 	/// the answer to the next fetch_data (it may put the data into the store first); a
 	/// fetch without a queued answer stays on its way
-	void add_fetch_data_response(std::move_only_function<fetch_data_sig>);
-	void add_commit_record_response(std::move_only_function<commit_sig>);
+	void add_fetch_data_response(move_only_function<fetch_data_sig>);
+	void add_commit_record_response(move_only_function<commit_sig>);
 	/// the answer to the next upload_data; an upload without a queued answer stays on its way
-	void add_upload_data_response(std::move_only_function<upload_sig>);
-	void add_action(std::move_only_function<void(comm_output&)>);
+	void add_upload_data_response(move_only_function<upload_sig>);
+	void add_action(move_only_function<void(comm_output&)>);
 
 	/// every upload_data call so far, in order
 	std::vector<data_id> const& upload_requests() const;

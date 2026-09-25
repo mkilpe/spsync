@@ -13,6 +13,7 @@
 
 #include <algorithm>
 #include <map>
+#include <spsync/util/move_only_function.hpp>
 
 namespace securepath::sync {
 
@@ -133,7 +134,7 @@ void data_coordinator::attach_data_role(data_server& role, std::weak_ptr<void> o
 	});
 	// the pulls this record role asks its own data role to make get their tickets here
 	role.set_replica_ticket_source([this, owner](protocol::storage_id const& sid, data_descriptor const& descriptor
-		, std::move_only_function<void(util::result<data_grant>)> answer) {
+		, move_only_function<void(util::result<data_grant>)> answer) {
 		auto const keep = owner.lock();
 		auto issued = keep ? issue_replica_ticket(sid, descriptor.manifest_digest, server_id())
 			: util::result<issued_ticket>{make_error(securepath::errc::invalid_state, "the record role is gone")};

@@ -1,0 +1,295 @@
+Architecture and dependency review, 2026-09-24
+==============================================
+
+After the record data work (record_data.txt RDS 1-10) and the three follow-up
+passes (review_2026-09-21.txt: correctness, duplication, robustness, dead code).
+Question asked: are the components and their dependencies still going the right
+way. Method: the declared graph (target_link_libraries) against the actual one
+(every #include <spsync/...> in production code, by component), plus the size
+and responsibilities of the pieces that grew. Markers as in the plans: + fine
+or done, * a recommendation, - a note.
+
+
+The graph as it is
+------------------
+
+Declared (CMake), bottom up:
+
+    util  <-  core  <-  protocol  <-  comm  <-  engine  <-  client  <-  groupchat
+                           ^                                  |
+                           +------  transfer  <---------------+
+                                       ^
+                                       |
+                                   server_lib                  test  <-  everything
+
+    (before 2026-09-24: no transfer library, comm held the machinery and
+    server_lib linked comm, see R1; comm and transfer meet only in core's
+    data_transfers port now)
+
+    external: securepath (crypto, serialisation, database, event_system, log,
+    network); core uses no network, comm and server_lib do.
+
+Actual (includes, production code only):
+
+    protocol   -> core, util
+    core       -> util
+    transfer   -> core, protocol, util                 (since R1)
+    comm       -> core, protocol, util                 (was: transfer too)
+    engine     -> comm (interface.hpp only), core, protocol (errc, types), util
+    client     -> comm (net_connection), core, engine, protocol (ports), util,
+                  transfer (net_data_transfers, wired in client_sync)
+    server_lib -> transfer, core, protocol, util       (was: comm, 2 files)
+    test       -> client, comm, core, engine, protocol, server_lib, util
+
+No cycles, nothing includes a layer above itself, core knows no wire and no
+network. The one edge my checker flagged was server_lib -> comm (R1, done).
+
+
++ What went the right way in the record data work
+-------------------------------------------------
+
+- The engine never learned about tickets, holders, pieces or data servers. It
+  sees record data through record_data_store (core) and two calls on
+  comm_input (upload_data, fetch_data) with two answers; the data policy it
+  carries (auto fetch, prune, adoption) is about records and states. The
+  engine is still testable against the fake comm.
+- The data role is behind its own listener and a 7-method seam
+  (data_server_context: store, keys, trusted issuer, announce, now, admit,
+  leave), content-blind and chain-blind; the ticket is the only thing the
+  record role and the data role share, and it is a signed value, not a call.
+- The transfer machinery is written against interfaces (data_channel,
+  data_download_channel) and the core store, with the ticket as a callback
+  (ticket_source): the machines know neither the record server nor the
+  network. That is exactly what let RDS 10 reuse the whole client path for a
+  data server pulling a copy - one verification path, one queue.
+- The record side's decisions are pure pieces with their own tests: holder
+  ordering and placement (data_availability), the copy plan
+  (data_replication_plan), release batching (data_release), ticket issuing
+  (ticket_issuer). storage_server only wires them.
+- core/data serves three uses from one code: the client's store with chunks,
+  the data server's store (server_data_store composes it), the record
+  server's index of data ids (rows without chunks). The reference counting
+  between record_objects and record_data stays inside core.
+
+
++ R1  server_lib -> comm: split the transfer machinery out of comm -- done 2026-09-24
+--------------------------------------------------------------------------------------
+      Done as proposed: spsync/transfer (library spsync_transfer, depends on
+      spsync_protocol + network) holds data_channel, data_grant (new:
+      data_grant and ticket_source out of net_data_channel.hpp),
+      net_data_channel, data_uploader, data_downloader, transfer_queue,
+      piece_cursor, transfer_config, transfer_retry, action_pump and
+      pending_calls, with the tests that were comm's (test_spsync_transfer;
+      test_spsync_comm is gone, it had nothing left). comm keeps the record
+      connection and the engine seam and links spsync_transfer; server_lib
+      links spsync_transfer instead of spsync_comm and includes nothing from
+      comm any more - record_server_link and data_replicator.hpp take
+      data_grant.hpp, only the replicator's cpp sees the network channel.
+      Files moved with git mv, no code changed. The paths in
+      record_data.txt and the earlier review were updated.
+
+      Second half, same day: comm needs none of it. The question was whether
+      a client that wants only the chain has to carry the transfer stack, and
+      it did, because comm built the channel, the two queues and the retries
+      inside its constructor (170 lines of comm.cpp). Now core has the seam:
+      core/data/data_transfers.hpp is a port with attach(ticket_source,
+      upload_done, download_done), upload(id), fetch(id), on_connected(),
+      on_disconnected() - core types only - and core/data/data_grant.hpp
+      holds data_grant and ticket_source (out of transfer, the server's
+      record_server_link and data_replicator take it from there). comm owns a
+      unique_ptr<data_transfers> given to create_storage_connection, keeps
+      the request handles, the ticket packets (tickets(), response_data_ticket,
+      the fail on disconnect) and the connected flag the tickets need, and
+      forwards the rest. transfer/net_data_transfers implements the port:
+      the real channel when none is given, uploader + downloader with their
+      progress events, the retries and the "no retry without the record
+      connection" rule (moved verbatim). client_sync makes a
+      net_data_transfers when a data_root is configured; spsync_comm links
+      protocol + network only, spsync_client links spsync_transfer. Tests:
+      client/test/test_comm_transfers.cpp drives comm with a fake port (one
+      transfer per data, handles, answer events, state and tickets passed
+      on), transfer/test/test_net_data_transfers.cpp has the retry, progress
+      and own-channel cases that were comm's.
+
+      Was:
+
+comm is two things today (3006 lines): the client's record connection
+(comm.cpp, net_connection*, interface.hpp = the engine's seam; ~1000 lines)
+and the data transfer machinery (data_channel, net_data_channel, uploader,
+downloader, transfer_queue, piece_cursor, transfer_config, transfer_retry,
+action_pump, pending_calls; ~2000 lines). A data server that pulls copies is
+a data CLIENT of another data server, so it needs the second half - and it
+links the whole of spsync_comm for it, record connection included. The
+dependency is legitimate in substance and wrong in shape: the server must
+never come to depend on the client's record connection by accident, and
+today only discipline prevents it.
+
+Proposed: a library spsync/transfer holding the second half, depending on
+core + protocol + network. comm and server_lib both depend on it; comm keeps
+the record connection and the engine seam. A file move, no code changes.
+Two details while at it: data_grant and ticket_source live in
+net_data_channel.hpp, so record_server_link includes the network channel's
+header just for those two types - they belong next to data_channel.hpp
+(transfer/data_grant.hpp). The test helpers already mirror the split
+(test_record_data.hpp needs only transfer_config).
+
+
++ R2  wire_modes belongs to the protocol, not to core -- done 2026-09-24
+--------------------------------------------------------------------------
+      protocol/wire_modes.hpp (namespace protocol) holds to_wire, wire_modes
+      and modes_from_wire; core/sync_mode.hpp keeps the modes, the limits and
+      their rules and includes no serialisation any more. The packet headers
+      include it, the six call sites in comm and server_lib say protocol::.
+
+      Was:
+
+D5 (2026-09-22) gave wire_modes its own serialise(), and with it core's
+sync_mode.hpp includes serialisation/sequence and carries a wire
+representation. Every user of wire_modes / to_wire / modes_from_wire is in
+protocol, comm or server_lib. Move them to protocol/wire_modes.hpp; core keeps
+storage_modes, storage_limits, limit_range and the validity helpers, which
+are what the engine and the chain rules use. Small, mechanical.
+
+
+- R3  the engine reads the server's error codes: acceptable, keep it visible
+---------------------------------------------------------------------------
+
+sync_engine.cpp reacts to eight protocol::errc values (record_too_big,
+invalid_record, conflicting_record, record_already_committed,
+record_out_of_sync; data_pruned, unknown_data, data_not_held). Those codes
+are the server's answers, i.e. the engine's contract with the server, and
+comm passes them through unchanged on purpose; translating them in comm
+would be a second table with the same eight rows. The three record ones
+predate the record data work. Leave as is; if the list grows, gather the
+"what the server may answer and what it means here" in one place in the
+engine rather than spread over the handlers.
+
+
++ R4  the two server impls grew into two roles each -- record side done 2026-09-24
+-----------------------------------------------------------------------------------
+      storage_server_context is the record part only (12 virtuals, plus
+      find_sync: the storage when open or on disk, never created); the six
+      data virtuals are storage_data_context (server_lib/storage_data_context.hpp),
+      and connection / peer_connection take both. data_coordinator
+      (server_lib/data_coordinator.{hpp,cpp}, 370 lines) implements the data
+      part and owns what was the impl's data half: the availability table,
+      the ticket issuer, the own data role, storage_pass, the copy plan and
+      tell_to_replicate, release_data, the announcements. It sees the storages
+      through storage_server_context, the peers through a peer_source callback
+      and signs with the private_data_access; the record role keeps the sweep
+      timer (it is s2s lifecycle) and calls sweep_copies(). storage_server.cpp
+      929 -> 698 lines, the impl is the record role, the s2s links and the
+      timers again. data_server::impl untouched (the listener, stores, links,
+      replicator, sessions, expiry and announcements are one role's).
+
+      Was:
+
+storage_server::impl (929 lines, ~45 member functions) is the record role
+(storages, peers, s2s, anti-entropy, replica bootstrap) AND the record
+side's data coordination (tickets, the availability table, the copy sweep,
+releases, data server links). data_server::impl (756 lines) is the data
+role's listener, stores, record server links, replicator, sessions, expiry
+and announcements. Both are still readable because the decisions are in the
+pure pieces above, but the seams show it: storage_server_context has 17
+virtuals mixing record operations (acquire_sync, is_syncing, note_caught_up,
+...) with data ones (issue_data_ticket, issue_replica_ticket,
+data_announced, is_data_server, own_data_announcements, ...), so
+connection.cpp and peer_connection.cpp see both.
+
+Proposed, when the next feature touches it: a record-side data_coordinator
+owning availability_, issuer_, the copy sweep, releases and the data server
+links, behind a data_context interface of its own; storage_server_context
+splits into the record part and that data part, and each connection class
+takes the one it uses. storage_server::impl goes back to being the record
+role. Not urgent.
+
+
++ R5  the engine's data half, the record storage's index half -- done 2026-09-24
+--------------------------------------------------------------------------------
+      engine/data_sync.{hpp,cpp} (435 lines) is the data orchestration: the
+      request of the transfers a state is owed, the answers, the fetch policy,
+      the refusals remembered per connection, adoption, prune and sweep, on
+      (comm_input, crypto_context, record_storage, record_data_store) with the
+      engine config for the log id and the policy, reporting through two
+      callbacks (state_changed, transfer_failed) the engine maps to its output
+      events. The engine impl holds std::optional<data_sync> - none without a
+      store, so the "no record data" checks are the if(data) at the call sites
+      and the helper itself checks nothing - and keeps what is about records:
+      read_change (the key search is the engine's), stream_source (the mutex
+      for the key), create_object_change. sync_engine.cpp 1718 -> 1437 lines.
+      core/data/data_index.{hpp,cpp} (160 lines) is the record storage's
+      index of data: reference (the shared row, revived when pruned),
+      reference_count, confirmed_in_state, unreferenced / remove_unreferenced,
+      only_referenced_by and prune - the SQL over record_objects and
+      record_data; record_storage keeps the version walk and delegates, its
+      public API is unchanged. record_storage.cpp 1144 -> 1079 lines.
+
+      Was:
+
+sync_engine.cpp is 1718 lines, of which 396 are the record data orchestration
+(request_transfers, the answers, adoption, prune, sweep) - a coherent piece
+that works on (records, data store, comm) under the engine mutex. It could
+be a data_sync helper class the engine impl owns, tested on its own with the
+fake comm and a store, and the engine impl would drop below the size where
+one reads it in one go. Same shape in record_storage.cpp (1144 lines): the
+data index (reference counting, confirmed_data_in_state, superseded and
+unreferenced data, limits and endpoints) is a data_index over the same
+database. Both are refactorings for a quiet moment, not for now.
+
+
++ R6  the securepath boundary: the close() contract -- done 2026-09-24
+----------------------------------------------------------------------
+      encrypted_connection::close_later(error, keep) in securepath: queued on
+      the strand, returns at once, on_disconnected(error) comes there once as
+      for a transport failure (close() still tells nobody), keep - the owner's
+      shared_from_this() - is held until the close ran, because the destructor
+      waits like close() does. Written down in the header and doc/network.md:
+      callbacks may still arrive until the queued close ran. Tested (pk
+      connection close_later tells the owner). The three app-side shutdowns are
+      that one call now: data_link's close from the channel (a closing_ flag
+      keeps "the channel closed" from being a failover) and its silence check,
+      record_server_link's overdue check - the timer handlers call the checks
+      directly, nothing is posted, and the by-hand on_disconnected after a
+      close() is gone from those two. post_on_strand stays in securepath,
+      unused by spsync now. The submodule edit needs its own commit.
+
+      Was:
+
+Two features went into the submodule for this work, both committed there now
+(packet_deserialiser ctor forwarding 043cd7a, post_on_strand 5f64dac). The
+second exists because encrypted_connection::close() blocks until the
+connection's strand ran it - from a timer handler or another strand with one
+io thread that is a deadlock - so three places in the app now post their
+own shutdown onto the strand (data_link, record_server_link, the channel's
+close). That workaround belongs in the transport: an encrypted_connection::
+close_later() (posts the close, returns at once, on_disconnected still
+comes) would make post_on_strand unnecessary for this and the three copies
+one line each. Worth doing in securepath, with the "callbacks may still
+arrive until on_disconnected" rule written down.
+
+
+- R7  the test library
+----------------------
+
+spsync_test links client, engine, server_lib and the packet server: a test
+binary that links it gets the whole tree. The lower layers' tests avoid it
+by using header-only helpers (test_block_creator.hpp, test_record_data.hpp;
+data_server_fixtures.hpp stays in server_lib/test) - keep that rule: a
+helper for core or comm tests is a header, spsync_test is for tests that run
+servers.
+
+
+Summary
+-------
+
+The direction is right: the record data work added a layer (transfer
+machinery) and a role (data server) without bending the graph, the engine and
+core stayed clean of the wire and the network, and the new decisions are in
+small pure pieces. What needs doing is naming what already exists: the
+transfer machinery is a library of its own (R1, done), wire_modes is protocol
+(R2, done), and the transport should own the async close (R6). R4 and R5 are size, to be
+taken when those files are next opened for a feature. (Same day: R1 went a
+step further - comm no longer depends on transfer at all, the two meet in
+core's data_transfers port and the client wires them - and R4/R5 were taken
+right away: data_coordinator, data_sync, data_index - and R6: close_later in
+securepath. Nothing open from this review.)

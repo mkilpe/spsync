@@ -18,6 +18,7 @@
 #include <map>
 #include <mutex>
 #include <vector>
+#include <spsync/util/move_only_function.hpp>
 
 namespace securepath::sync {
 
@@ -59,7 +60,7 @@ public:
 	/// send when the link is up; dropped otherwise (the whole view follows the next connect)
 	void announce(protocol::announce_data const&);
 
-	using ticket_callback = std::move_only_function<void(util::result<data_grant>)>;
+	using ticket_callback = move_only_function<void(util::result<data_grant>)>;
 
 	/**
 	 * Ask the record server for the ticket of a pull it told this data server to make

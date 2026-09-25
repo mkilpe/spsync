@@ -1,11 +1,17 @@
 #pragma once
 
-#include <securepath/util/task.hpp>
+// This header stands on its own (the standard library only): it is the API a mobile
+// front end builds against, next to the gc_lib archive - see groupchat/android.
 
 #include <functional>
 #include <memory>
 #include <string>
+#include <string_view>
 
+namespace securepath {
+	template<typename T>
+	class task;
+}
 namespace securepath::network {
 	class context;
 }
@@ -15,7 +21,8 @@ namespace securepath::event_system {
 
 namespace securepath::groupchat::json_protocol {
 
-void initialise_logging();
+/// log to the file (the default is gc.log in the working directory)
+void initialise_logging(std::string const& file = "gc.log");
 
 enum class event_type {
 	notification = 1,
@@ -28,6 +35,9 @@ public:
 	using event_callback = std::function<void(event_type, std::string)>;
 
 	json_manager(event_callback);
+	/// the core with its files under the path (the app's private directory on a phone) and,
+	/// when given, the DER file of the root public key anchoring the servers' certificates
+	json_manager(event_callback, std::string path, std::string root_public_key_file = {});
 	json_manager(network::context& context, event_callback, std::string path = "");
 	~json_manager();
 

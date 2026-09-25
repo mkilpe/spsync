@@ -20,6 +20,7 @@
 #include <future>
 #include <mutex>
 #include <thread>
+#include <spsync/util/move_only_function.hpp>
 
 namespace securepath::sync {
 namespace {
@@ -449,7 +450,7 @@ TEST_CASE("data server refusals over the wire", "[unit]") {
 
 	SECTION("a ticket of a record server the data server does not know") {
 		auto const stranger = crypto::generate_private_key();
-		ticket_source source = [&](data_descriptor const& d, data_right right, std::move_only_function<void(util::result<data_grant>)> cb) {
+		ticket_source source = [&](data_descriptor const& d, data_right right, move_only_function<void(util::result<data_grant>)> cb) {
 			data_ticket ticket{f.sid, d, f.net.key_id(0), right, clock_type::now() + 10min};
 			ticket.sign(stranger);
 			cb(util::result<data_grant>{data_grant{std::move(ticket), {f.endpoint()}}});
@@ -464,7 +465,7 @@ TEST_CASE("data server refusals over the wire", "[unit]") {
 	}
 
 	SECTION("the record server refuses the ticket") {
-		ticket_source source = [](data_descriptor const&, data_right, std::move_only_function<void(util::result<data_grant>)> cb) {
+		ticket_source source = [](data_descriptor const&, data_right, move_only_function<void(util::result<data_grant>)> cb) {
 			cb(util::result<data_grant>{make_error(protocol::errc::no_such_storage)});
 		};
 		net_data_channel channel{f.net.client_context(0), source};
@@ -669,7 +670,7 @@ TEST_CASE("spsync server data role", "[unit]") {
 		auto const server_key = crypto::my_private_key(net.server_context().private_data());
 		auto const sid = securepath::test::random_octet_vector(16);
 		data_endpoint const endpoint{"127.0.0.1", server.data().local_endpoint()->port(), server_key.id(), {}};
-		ticket_source source = [&](data_descriptor const& d, data_right right, std::move_only_function<void(util::result<data_grant>)> cb) {
+		ticket_source source = [&](data_descriptor const& d, data_right right, move_only_function<void(util::result<data_grant>)> cb) {
 			data_ticket ticket{sid, d, net.key_id(0), right, clock_type::now() + 10min};
 			ticket.sign(server_key);
 			cb(util::result<data_grant>{data_grant{std::move(ticket), {endpoint}}});

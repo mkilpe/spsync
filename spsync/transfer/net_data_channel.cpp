@@ -18,6 +18,7 @@
 #include <map>
 #include <mutex>
 #include <variant>
+#include <spsync/util/move_only_function.hpp>
 
 namespace securepath::sync {
 namespace {
@@ -28,7 +29,7 @@ using reply_packet = std::variant<protocol::upload_data_manifest_reply, protocol
 
 /// a call still out: answered with its reply, or with an error and whether it was the
 /// transport that failed (the holder is down: try the next one) or the holder that refused
-using pending_call = std::move_only_function<void(util::result<reply_packet>, bool transport_failure)>;
+using pending_call = move_only_function<void(util::result<reply_packet>, bool transport_failure)>;
 
 /// a link is to a server AND the key it has to authenticate with: a grant that names
 /// another key for the same address does not get the link an earlier grant's key opened
@@ -119,7 +120,7 @@ public:
 	 * answered; on a dead link the handler is failed at once.
 	 */
 	template<typename Reply, typename Make>
-	void call(Make make, std::move_only_function<void(util::result<Reply>, bool transport_failure)> handler) {
+	void call(Make make, move_only_function<void(util::result<Reply>, bool transport_failure)> handler) {
 		auto const cid = ++call_id_;
 		auto bytes = serialisation::asn_der_serialise_choice<protocol::c2d_types>(make(cid));
 		post(cid, std::move(bytes), [handler = std::move(handler)](util::result<reply_packet> answer, bool transport_failure) mutable {
@@ -344,7 +345,7 @@ private:
 	/// one attempt to open a transfer: the grant and how far down its holder list we are
 	template<typename Result>
 	struct attempt {
-		attempt(asio::io_context& io, data_descriptor d, data_manifest m, std::move_only_function<void(util::result<Result>)> cb)
+		attempt(asio::io_context& io, data_descriptor d, data_manifest m, move_only_function<void(util::result<Result>)> cb)
 		: descriptor(std::move(d))
 		, manifest(std::move(m))
 		, callback(std::move(cb))
@@ -368,7 +369,7 @@ private:
 		/// what an upload opens with; a download opens with the ticket alone
 		data_manifest manifest;
 		data_grant grant;
-		std::move_only_function<void(util::result<Result>)> callback;
+		move_only_function<void(util::result<Result>)> callback;
 		std::size_t holder{};
 		std::mutex mutex;
 		asio::steady_timer wait;
@@ -386,7 +387,7 @@ private:
 		/// where the pieces go once a holder took the opening
 		routes impl::* routes_of;
 		/// the call that opens at a holder
-		void (*open)(data_link&, attempt<Result> const&, std::move_only_function<void(util::result<Result>, bool)>);
+		void (*open)(data_link&, attempt<Result> const&, move_only_function<void(util::result<Result>, bool)>);
 	};
 
 	/**
@@ -396,7 +397,7 @@ private:
 	 */
 	template<typename Result>
 	void open_transfer(opening<Result> const& how, data_descriptor const& descriptor, data_manifest const& manifest
-		, std::move_only_function<void(util::result<Result>)> cb) {
+		, move_only_function<void(util::result<Result>)> cb) {
 		auto att = std::make_shared<attempt<Result>>(context_.io_context(), descriptor, manifest, std::move(cb));
 		std::weak_ptr<impl> weak = shared_from_this();
 		// the record server has the silence limit to answer the ticket request
@@ -507,7 +508,7 @@ private:
 
 	/// the manifest to a holder: its answer is the chunks it has
 	static void open_upload_at(data_link& link, attempt<have_bitmap> const& att
-		, std::move_only_function<void(util::result<have_bitmap>, bool)> answer) {
+		, move_only_function<void(util::result<have_bitmap>, bool)> answer) {
 		link.call<protocol::upload_data_manifest_reply>(
 			[&](protocol::call_id cid) { return protocol::upload_data_manifest{cid, att.grant.ticket, att.manifest}; }
 			, [answer = std::move(answer), chunks = att.descriptor.chunk_count()](util::result<protocol::upload_data_manifest_reply> reply, bool transport) mutable {
@@ -518,7 +519,7 @@ private:
 
 	/// the opening of a download: the holder's manifest and what it has
 	static void open_download_at(data_link& link, attempt<download_info> const& att
-		, std::move_only_function<void(util::result<download_info>, bool)> answer) {
+		, move_only_function<void(util::result<download_info>, bool)> answer) {
 		link.call<protocol::download_data_open_reply>(
 			[&](protocol::call_id cid) { return protocol::download_data_open{cid, att.grant.ticket}; }
 			, [answer = std::move(answer), chunks = att.descriptor.chunk_count()](util::result<protocol::download_data_open_reply> reply, bool transport) mutable {

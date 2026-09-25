@@ -14,6 +14,7 @@
 #include <filesystem>
 #include <string>
 #include <thread>
+#include <spsync/util/move_only_function.hpp>
 
 namespace securepath::sync {
 namespace {
@@ -105,7 +106,7 @@ struct transfer_progress : sync::progress {
 struct record_side {
 	/// answers a ticket request as a record connection that is not there does (review O2)
 	ticket_source tickets() {
-		return [this](data_descriptor const&, data_right, std::move_only_function<void(util::result<data_grant>)> cb) {
+		return [this](data_descriptor const&, data_right, move_only_function<void(util::result<data_grant>)> cb) {
 			++asked;
 			cb(util::result<data_grant>{make_error(securepath::errc::invalid_state, "not connected to the record server")});
 		};

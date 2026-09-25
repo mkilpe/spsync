@@ -320,7 +320,7 @@ public:
 			return self->acquire_store(sid);
 		};
 		hooks.ticket = [weak = weak_self()](protocol::storage_id const& sid, data_descriptor const& descriptor
-			, std::move_only_function<void(util::result<data_grant>)> answer) {
+			, move_only_function<void(util::result<data_grant>)> answer) {
 			if(auto self = weak.lock()) {
 				self->replica_ticket(sid, descriptor, std::move(answer));
 			} else {
@@ -373,7 +373,7 @@ public:
 	/// the ticket of a pull comes from the record server that asked for the copy: it
 	/// knows the data is committed and who holds it
 	void replica_ticket(protocol::storage_id const& sid, data_descriptor const& descriptor
-		, std::move_only_function<void(util::result<data_grant>)> answer) {
+		, move_only_function<void(util::result<data_grant>)> answer) {
 		bool known{};
 		std::optional<crypto::public_key_id> asked_by;
 		data_server::replica_ticket_source own;

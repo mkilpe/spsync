@@ -10,6 +10,7 @@
 #include <map>
 #include <memory>
 #include <mutex>
+#include <spsync/util/move_only_function.hpp>
 
 namespace securepath::sync {
 
@@ -92,7 +93,7 @@ private:
 	transfers uploads_;
 	transfers downloads_;
 	/// ticket requests without an answer yet
-	std::map<request_handle, std::move_only_function<void(util::result<data_grant>)>> ticket_requests_;
+	std::map<request_handle, move_only_function<void(util::result<data_grant>)>> ticket_requests_;
 	/// the transfers behind upload_data and fetch_data; their ticket source is this object
 	std::unique_ptr<data_transfers> transfers_;
 };

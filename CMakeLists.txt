@@ -78,6 +78,7 @@ add_library(gc_lib STATIC
 	$<TARGET_OBJECTS:spsync_core>
 	$<TARGET_OBJECTS:spsync_engine>
 	$<TARGET_OBJECTS:spsync_protocol>
+	$<TARGET_OBJECTS:spsync_transfer>
 	$<TARGET_OBJECTS:spsync_util>
 
 	$<TARGET_OBJECTS:packet_transport_client>

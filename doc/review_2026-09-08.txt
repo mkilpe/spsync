@@ -1,0 +1,223 @@
+Code review of the modernised spsync, 2026-09-08
+================================================
+
+Scope: everything under spsync/ and groupchat/ (non-test code), reviewed slice by slice for
+correctness, duplication/redundancy and the project style rules. Mechanical rules held
+everywhere: no `continue`, no `const_cast`, no `break` outside a switch, no function over
+50 lines. Markers: + fixed, - open.
+
+Fixed in this pass (all with tests where a test could pin it)
+-------------------------------------------------------------
++ record_storage::set_record deleted the object rows after the tag changed: orphans on
+  every rebase. Delete first.
++ a demoted (acked -> pending_commit) record kept the envelope/origin of the sequence it
+  no longer held. Assignment cleared on demote.
++ rowids were read through the unsigned accessor (offset meant for sequences), giving
+  internal ids of 2^63+rowid. record_internal_id is std::int64_t now; client_sync and
+  contact_list read their rowids signed too.
++ sequence_number operator-(uint64, seq) had its operands swapped.
++ to_string(access_type) indexed past its table for unknown bits (log2/exp2 floats);
+  rewritten with masks, unknown bits printed as a number.
++ request_state name table missed querying_key_failed (static_assert added).
++ spsync/util/hash.hpp did not compile and nothing used it: deleted.
++ s2s request_key/response_key duplicated the base class call id.
++ engine: several commits in flight but one "pushing tag": a rejection marked the wrong
+  record. In-flight commits are tracked by request handle (cleared on disconnect).
++ engine: update_pending_commit threw on a missing/non-authenticating key and the event
+  loop swallowed it silently, stalling every later commit. It uses the D9 candidate key
+  lookup now and an unusable record is set invalid and skipped (rebase_if_needed); the
+  securepath event loop logs swallowed handler exceptions.
++ engine: a LWARN printed its arguments in the wrong order.
++ async_key_query kept the dead server as "in progress" after a disconnect: queued
+  queries cascade-failed instead of reconnecting.
++ client_sync never detached its engine from the network connection: dangling pointer
+  when a client_sync died before its connection. It detaches in its destructor (the
+  connection must outlive it; test client reordered accordingly).
++ client_sync::send_user_change on an existing storage sent no key envelope: a member
+  added that way never got the key.
++ request_handler dialled the default packet port regardless of the configured one, and
+  a banned sender's packet was never marked seen (re-delivered forever).
++ record_util: extract_single_object_meta (inverted null check) and search_data_records
+  had no callers: deleted.
++ storage constructor opened the sqlite file before validating the requested modes, so a
+  refused creation left an empty database that a later load turned into a default mode
+  storage. Modes are validated before opening; a database without persisted modes is
+  no_such_storage.
++ storage_server::release_sync compared the use count against one and never released;
+  unreplicated storages found at start stayed open (is_open() added for tests).
++ own-origin s2s pulls were served by local range, so foreign records committed in
+  between rode along and the puller's progress check never advanced past a batch of
+  them: a permanent stall that also kept the replica "syncing". Every origin is served by
+  its assignments now.
++ peer link backoff never reset after a healthy connection (connected handler resets it).
++ a negative response_key left the signer marked as asked forever (requests keyed by cid).
++ spsync_server::init ignored the base result; server main logged errors without a
+  placeholder; a second client_hello on a connected session is refused and the protocol
+  version is checked.
++ groupchat: join_to_storage returned through an end iterator; the persisted config was
+  never re-attached after a restart (set_config in load_info); a failed chat creation
+  left a phantom chat in the channel list and on disk (recorded only on success, removed
+  on error); the chat sort comparator used >= (undefined behaviour in stable_sort); the
+  cli exited with 255, printed HH.MMSS and appended the whole history on every window
+  switch instead of replacing the screen.
+
+Open: risks worth a decision
+----------------------------
++ (2026-09-09) groupchat json layer drove chat_connection and groupchat from the caller's
+  thread while the loop thread ran the handlers. Every json call is posted onto the
+  manager's event loop now (inline when already there, e.g. from the event callback) and
+  the two bodies that wait for the network (create/join chat) are coroutines that
+  co_await chat_connection::connected() instead of blocking: same single-thread contract
+  as the cli. The json "chat order" test that failed before was this race, it passes now.
+  Pieces: event_loop::in_loop_thread(), securepath::start(task, promise),
+  groupchat/core/loop_executor.hpp (executor over an event handler),
+  chat_connection::when_connected() / connected() (the cli's run_when_connected moved
+  into the core), json_manager::call / call_task.
++ (2026-09-09) the remaining intermittent failure of that test was real: messages sent
+  before the chat's initial membership record was confirmed are rejected, rebased and
+  land in the chain after later messages, so the chain index order is not the send
+  order. The json chat preview orders by sender time now (like the chat list itself)
+  and the stored sender time has microsecond resolution so a tight send loop does not
+  tie. Message index order stays for paging.
++ (2026-09-09) storage_server timer and link handlers captured raw this / &link; a tick
+  already dequeued when close cancelled it could run after the impl was gone. The anti-
+  entropy timer, the reconnect timer and the link's disconnect/connected handlers hold
+  the impl (weak_self) and the link (now shared) weakly and do nothing once either is
+  gone; test "server lifetime under running timers" starts and destroys a server 20
+  times with a 0 s anti-entropy interval and an unreachable peer. The storage push hook
+  still captures this: the storages are owned by the impl and die with it.
++ (2026-09-09) a foreign record that fails for a permanent reason never advanced the
+  origin head: re-pulled every tick and the replica stayed "syncing" for that storage.
+  storage::apply_foreign now splits the errors: invalid_record, record_too_big and
+  conflicting_record are permanent (the origin accepted what our rules refuse), the
+  record is skipped with one warning and the origin head moves past it; everything else
+  (unknown signer or origin key, syncing peer) stays a retry. Test "storage skips a
+  permanently rejected foreign record" (two replicas with different record limits).
+  Skipping means this replica misses that record: a rules disagreement between replicas
+  is an operator problem, the log line is the evidence until 5.4's tables exist.
++ (2026-09-09) an unknown origin key (transitive origin met while bootstrapping) was
+  only logged; peer_connection asks the serving peer for it (request_key) like signer
+  keys, it verified the record so it holds the key.
+- groupchat::create_account and register_my_key block the caller (the cli's event loop)
+  for up to the network timeout; on_create swallows a throwing invitation and then never
+  emits on_create; groupchat::connect drops errors other than already_connected and
+  loads channels only when no connection exists yet.
++ (2026-09-09) commit errors other than out_of_sync/already_committed left the record
+  pending and resent on every incoming record. The engine classifies them: record_too_big,
+  invalid_record and conflicting_record are permanent, the record is set invalid and
+  reported once through the new engine_output::on_record_rejected (client_sync forwards
+  it, the groupchat channel drops the pending message and emits on_message_failed, the
+  cli prints it); everything else (replica syncing, unregistered key, network) is held
+  with mark_rejected until something changes. Test "engine sync drops a permanently
+  rejected record".
++ (2026-09-09) rebase of a record with an object conflict could be skipped by the
+  "already up to date" short circuit in update_pending_commit while notify_conflicts
+  said it was rebuilt. The short circuit now yields to conflicts: a record whose object
+  changed underneath it is rebuilt even when it is based on the head. Not reproducible
+  today (undecrypted and gap records stay pending_sync so the confirmed head never
+  passes a record that could carry a newer object change, and a stacked pending record
+  never carries the confirmed head's id), so this is a guard; the new test "rebases a
+  stacked object change" covers the strict-mode conflict path with stacked pending
+  records.
+- strict mode on a different replica only warns and keeps the old cursor (phase 6).
++ (2026-09-09) config.cpp emitted change notifications while holding its mutex and
+  declared the columns STRING (numeric affinity). The broadcast handler and its
+  observers are gone: config takes an event_system::event_handler* (groupchat passes
+  its callback handler, the one every groupchat event goes through) and emits
+  on_config_changed per changed leaf after the write, outside the lock; the table is
+  TEXT (existing databases keep their declaration, harmless as the wrapper reads text).
+  The mutex stays for now although every caller (groupchat core, json layer, cli) runs
+  on the loop thread. Only user of the config is groupchat (network.timeout and the
+  json get/set of arbitrary keys); nothing subscribes to the changes yet. The one
+  remaining asio broadcast observer, async_key_query, watches the securepath key
+  client's own broadcast handler and belongs to the library.
++ (2026-09-09) record_storage claimed "thread safe": the header now states the real
+  contract, individual calls are (cache and handle fields locked, statements serialised
+  by sqlite) but the compound operations (create, set_record, truncations) run as a
+  savepoint on the shared connection and need the caller's serialisation, in practice
+  the engine's mutex on the loop thread. Comment only, no code change.
+
+Open: duplication and dead code backlog
+---------------------------------------
+- the json layer's connect() asserted without an account (fixed: error json); groupchat::connect
+  still drops errors other than already_connected.
+- the D9 candidate-key decryption loop exists four times (engine find_record_key,
+  client_sync, harness twice) and six sites still use the single-key find(): one helper
+  in engine/record_verifier.hpp returning the authenticating verifier, used everywhere.
+- membership fold input built in client_sync::recompute_members and the harness:
+  derive_membership next to merge_user_changes.
+- groupchat cli and json drivers reimplement chat lookup (seven copies), connect-then-
+  act, sender naming, request decoding, add-contact and the default servers: move into
+  groupchat core (find_channel, run_when_connected, describe_user, decoded_requests).
+- host:port parsing/formatting duplicated between groupchat/core/types.cpp and
+  server_lib/peer_config.cpp; storage db path built in three places; packet-connection
+  boilerplate (send_packet/on_received/terminate) in three classes; the modes triple
+  copied into two config structs; max(seq) query shape repeated; test db helpers.
+- sync_engine.cpp: the signer optional computed six times, the three sync_* bodies and
+  the three update_record prologues are one sequence (signer(), make_creator<>(),
+  store_and_commit()); history_verifier repeats hash-check + verify four times.
+- record_storage.cpp: set_state binds twice, last_block repeats find_last, find_first/
+  find_last(oid) differ by sort direction, create(auth_record<data_change>) duplicates
+  create_impl, data_ref column never used; encryption_key_storage re-implements
+  has_table and orders by key bytes while its header says carrier tag.
+- dead: destroy_storage, get_single_change, protocol/types.hpp, storage_config::peers,
+  cli add_member stub, json per-server connect handlers commented out, empty
+  json_manager::close, msg_state::acked never produced, events::on_create unhandled;
+  test-only APIs in production files (chain_sync::validate/apply, find_divergence,
+  cut_before, storage_heads::remove).
+- style: about a dozen uninitialised built-in members in groupchat structs, structs with
+  members before methods, `using namespace std::chrono_literals` in three headers,
+  storage_server::impl all public.
+
+
+Backlog as of 2026-09-09 (what is still open, in suggested order)
+=================================================================
+Everything above marked + is done; this list is the remaining work, numbered so it can be
+picked one at a time. Markers: - open, * in progress, + done.
+
+Risks
+- R1 groupchat blocking and swallowed errors: groupchat::create_account and
+     register_my_key block the caller (the cli's event loop) for up to the network
+     timeout - make them coroutines on the loop like create/join chat (task<T> body,
+     when_connected/connected()); impl::on_create swallows a throwing invitation and then
+     never emits on_create - emit with the error; groupchat::connect drops errors other
+     than already_connected and loads the channels only when no connection exists yet -
+     return the error, load channels once in load_info.
+- R2 strict mode on a different replica only warns and keeps the old cursor: belongs to
+     phase 6 (doc/distributed_sync.txt), do not fix in isolation.
+
+Duplication and dead code
+- D1 candidate-key helper: the D9 "try every key of the sequence" decryption loop exists
+     four times (engine find_record_key, client_sync, harness twice) and six sites still
+     use the single-key find(); one helper in engine/record_verifier.hpp returning the
+     authenticating verifier, used everywhere. First because it is the one most likely to
+     hide a bug (a site that never learned about colliding rotations).
+- D2 membership fold input built in client_sync::recompute_members and in the harness:
+     derive_membership next to merge_user_changes.
+- D3 groupchat core extractions: cli and json drivers reimplement chat lookup (seven
+     copies), sender naming, request decoding, add-contact and the default servers - move
+     into the core (find_channel, describe_user, decoded_requests, default servers).
+     Connect-then-act is done (when_connected/connected).
+- D4 small shared helpers: host:port parsing/formatting (groupchat/core/types.cpp and
+     server_lib/peer_config.cpp), storage db path built in three places, packet-
+     connection boilerplate (send_packet/on_received/terminate) in three classes, the
+     modes triple copied into two config structs, max(seq) query shape, test db helpers.
+- D5 sync_engine.cpp: signer optional computed six times, the three sync_* bodies and the
+     three update_record prologues are one sequence (signer(), make_creator<>(),
+     store_and_commit()); history_verifier repeats hash-check + verify four times.
+- D6 record_storage.cpp: set_state binds twice, last_block repeats find_last,
+     find_first/find_last(oid) differ by sort direction only, create(auth_record<
+     data_change>) duplicates create_impl, data_ref column never used;
+     encryption_key_storage re-implements has_table and orders by key bytes while its
+     header says carrier tag (fix the header, the order is deliberate - see 4.6).
+- D7 dead code: destroy_storage, get_single_change, protocol/types.hpp,
+     storage_config::peers, cli add_member stub, json per-server connect handlers
+     commented out, empty json_manager::close, msg_state::acked never produced,
+     events::on_create unhandled in the drivers.
+- D8 test-only APIs in production files (chain_sync::validate/apply, find_divergence,
+     cut_before, storage_heads::remove): keep the ones the plan needs (validate/apply is
+     the consensus seam, find_divergence is 5.3), mark them, drop the rest.
+- D9 style: about a dozen uninitialised built-in members in groupchat structs, structs
+     with members before methods, `using namespace std::chrono_literals` in three
+     headers, storage_server::impl all public.
+

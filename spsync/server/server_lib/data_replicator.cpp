@@ -18,7 +18,7 @@ public:
 	: io_(context.io_context())
 	, hooks_(std::move(hooks))
 	, config_(config)
-	, channel_(context, [this](data_descriptor const& d, data_right, std::move_only_function<void(util::result<data_grant>)> answer) {
+	, channel_(context, [this](data_descriptor const& d, data_right, move_only_function<void(util::result<data_grant>)> answer) {
 			ask_ticket(d, std::move(answer));
 		}, timeout)
 	{}
@@ -110,7 +110,7 @@ private:
 	}
 
 	/// the channel opens a download: the ticket comes from the record server that asked for the copy
-	void ask_ticket(data_descriptor const& descriptor, std::move_only_function<void(util::result<data_grant>)> answer) {
+	void ask_ticket(data_descriptor const& descriptor, move_only_function<void(util::result<data_grant>)> answer) {
 		std::optional<wanted> pull;
 		{
 			std::unique_lock lock{mutex_};

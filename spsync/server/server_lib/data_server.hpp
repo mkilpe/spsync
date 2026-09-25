@@ -17,6 +17,7 @@
 #include <string>
 #include <utility>
 #include <vector>
+#include <spsync/util/move_only_function.hpp>
 
 namespace securepath::sync {
 
@@ -114,7 +115,7 @@ public:
 	/// how the pulls this server's own record role asked for get their tickets (an
 	/// all-in-one server, storage_server::attach_data_role); answered once, from any thread
 	using replica_ticket_source = std::function<void(protocol::storage_id const&, data_descriptor const&
-		, std::move_only_function<void(util::result<data_grant>)>)>;
+		, move_only_function<void(util::result<data_grant>)>)>;
 	void set_replica_ticket_source(replica_ticket_source);
 
 	/**
