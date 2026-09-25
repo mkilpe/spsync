@@ -90,7 +90,7 @@ private:
 	void send_packet(auto const& packet);
 	/// answer the ticket requests still out: the link is gone
 	void fail_requests(securepath::error const&);
-	/// look every half limit whether a request is overdue, on the strand
+	/// look every half limit whether a request is overdue
 	void watch();
 	/// an overdue request fails and the link is given up; true while it goes on
 	bool check_overdue();

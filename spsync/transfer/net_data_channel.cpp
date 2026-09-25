@@ -39,9 +39,9 @@ std::string endpoint_name(data_endpoint const& e) {
 /**
  * The connection to one data server: calls answered by their reply packets, by call id.
  * A server that says nothing for the silence limit while calls are out is given up
- * (the calls fail as a transport failure: the next holder). Closed on its own strand,
- * where a close is immediate - from anywhere else it would wait for the strand, which
- * the one io thread of a small client cannot do.
+ * (the calls fail as a transport failure: the next holder). Closed with close_later:
+ * from anywhere, without waiting for the strand, which the one io thread of a small
+ * client cannot do - the calls out fail when on_disconnected comes.
  */
 class data_link : public network::encrypted_connection, public std::enable_shared_from_this<data_link> {
 public:
@@ -72,33 +72,25 @@ public:
 	}
 
 	/// the channel closes: what is out ends here - not "this holder is down, the next
-	/// one" - as soon as the strand gets to it
+	/// one" - when the strand gets to it
 	void close_later() {
-		post_on_strand([self = shared_from_this()] { self->shutdown(); });
+		{
+			std::unique_lock lock{mutex_};
+			closing_ = true;
+			silence_.cancel();
+		}
+		encrypted_connection::close_later(make_error(securepath::errc::invalid_state, "data channel closed"), shared_from_this());
 	}
 
 private:
-	void shutdown() {
-		{
-			std::unique_lock lock{mutex_};
-			silence_.cancel();
-		}
-		encrypted_connection::close();
-		fail_all(make_error(securepath::errc::invalid_state, "data channel closed"), false);
-	}
-
-	/// look every half limit whether the server went silent, on the strand
+	/// look every half limit whether the server went silent
 	void watch() {
 		std::unique_lock lock{mutex_};
 		silence_.expires_after(std::chrono::duration_cast<std::chrono::milliseconds>(silence_limit_) / 2);
 		silence_.async_wait([weak = weak_from_this()](std::error_code const& ec) {
 			auto self = weak.lock();
-			if(self && !ec) {
-				self->post_on_strand([self] {
-					if(self->check_silence()) {
-						self->watch();
-					}
-				});
+			if(self && !ec && self->check_silence()) {
+				self->watch();
 			}
 		});
 	}
@@ -114,8 +106,7 @@ private:
 		}
 		if(silent) {
 			LOG_WARN("data server {} says nothing: given up with {} calls out", endpoint_name(endpoint_), calls_.size());
-			encrypted_connection::close();
-			fail_all(make_error(securepath::errc::timeout, "the data server says nothing"));
+			encrypted_connection::close_later(make_error(securepath::errc::timeout, "the data server says nothing"), shared_from_this());
 		}
 		return !silent && !dead;
 	}
@@ -176,7 +167,13 @@ private:
 
 	void on_disconnected(securepath::error const& err) override {
 		LOG_INFO("data server {} disconnected: {}", endpoint_name(endpoint_), err);
-		fail_all(err ? err : make_error(securepath::errc::invalid_state, "data connection closed"));
+		bool closing{};
+		{
+			std::unique_lock lock{mutex_};
+			closing = closing_;
+		}
+		// the channel's own close is not "this holder is down": nobody tries the next one
+		fail_all(err ? err : make_error(securepath::errc::invalid_state, "data connection closed"), !closing);
 	}
 
 	void heard() {
@@ -256,6 +253,8 @@ private:
 	asio::steady_timer silence_;
 	bool ready_{};
 	bool dead_{};
+	/// the channel closed the link: what is out is over, not failed over
+	bool closing_{};
 };
 
 /// what a holder said to a call: the error it refused with, none when it did not

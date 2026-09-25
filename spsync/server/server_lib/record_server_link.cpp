@@ -42,12 +42,8 @@ void record_server_link::watch() {
 	silence_.expires_after(std::chrono::duration_cast<std::chrono::milliseconds>(silence_limit_) / 2);
 	silence_.async_wait([weak = weak_from_this()](std::error_code const& ec) {
 		auto self = weak.lock();
-		if(self && !ec) {
-			self->post_on_strand([self] {
-				if(self->check_overdue()) {
-					self->watch();
-				}
-			});
+		if(self && !ec && self->check_overdue()) {
+			self->watch();
 		}
 	});
 }
@@ -65,10 +61,10 @@ bool record_server_link::check_overdue() {
 		answer(err);
 	}
 	if(!overdue.empty()) {
-		// a record server that does not answer is one to connect to anew
+		// a record server that does not answer is one to connect to anew: on_disconnected
+		// comes on the strand and tells the owner
 		LOG_WARN("record server {} did not answer {} ticket requests in time, link given up", record_server_, overdue.size());
-		encrypted_connection::close();
-		on_disconnected(err);
+		encrypted_connection::close_later(err, shared_from_this());
 	}
 	return overdue.empty() && ready;
 }
